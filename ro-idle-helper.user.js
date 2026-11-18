@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.3.5
+// @version      3.3.6
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -2199,7 +2199,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.5</span>
+          <span>⚡ RO Idle 便利助手 v3.3.6</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -2263,6 +2263,19 @@
     hud.querySelector('#i-words').value = state.customProtectWords.join(', ');
     state.renderedLootRev = -1;
     document.body.appendChild(hud);
+    // The embedded browser creates its userscript menu outside the game UI.
+    // Keep that menu with the draggable helper window when it is available.
+    function attachBrowserMenu() {
+      const menu = document.getElementById('mgm-userscript-menu');
+      const header = hud.querySelector('#ro-drag');
+      if (!menu || !header || menu.parentElement === header) return;
+      menu.style.cssText = 'position:relative;top:auto;right:auto;z-index:2;font:12px system-ui;color:#eee;margin-left:auto;margin-right:8px;';
+      header.insertBefore(menu, header.querySelector('#ro-min-btn'));
+    }
+    attachBrowserMenu();
+    const browserMenuObserver = new MutationObserver(attachBrowserMenu);
+    browserMenuObserver.observe(document.body, { childList: true, subtree: true });
+
 
     function placeHud(left, top) {
       const { width, height } = hud.getBoundingClientRect();
