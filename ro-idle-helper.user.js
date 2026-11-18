@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.3.6
+// @version      3.3.7
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -225,6 +225,29 @@
     return node;
   }
 
+  // 判斷 DOM 元素是否屬於攤位／拍賣介面
+  function isStallContext(el) {
+    if (!el) return false;
+    if (el.closest('[data-roi-market-browser], table.roi-market-table')) return true;
+    const fs = el.closest('fieldset');
+    if (fs) {
+      const leg = [...fs.children].find((c) => c.tagName === 'LEGEND');
+      if (leg && /的攤位|搜尋所有城鎮的攤位|我的攤位/.test(clean(roiPriceText(leg)))) return true;
+    }
+    return false;
+  }
+
+  // 非攤位介面：針對 +4 ~ +10 精煉裝備套用漸進式變色（+10 最顯眼）
+  function applyRefineLevelColor(el, plus) {
+    if (!el) return;
+    if (plus >= 4) {
+      const tier = String(Math.min(plus, 10));
+      if (el.dataset.roRefTier !== tier) el.dataset.roRefTier = tier;
+    } else if (el.dataset.roRefTier) {
+      delete el.dataset.roRefTier;
+    }
+  }
+
   function currentFiberRoot(node) {
     if (!node) return null;
     const k = Object.keys(node).find((k) => k.startsWith('__reactFiber$'));
@@ -234,7 +257,6 @@
     return f.stateNode?.current;
   }
 
-  // 自動從 React Fiber 記憶體撈取遊戲內建的完整物品/卡片效果字典（若遊戲有載入則一秒學會全裝備數值）
   let gameDictScanned = false;
   function tryLearnFromReactTree(rootEl) {
     if (gameDictScanned) return;
@@ -271,7 +293,7 @@
     }
   }
 
-  // 全域掃描：對所有檢視介面（背包、倉庫、原生攤位、跨城搜尋、原生物品資訊窗）標記精煉附加傷害並綁定懸浮資料
+  // 全域掃描：攤位顯示詳細精煉數值卡片/徽章；人物裝備欄、背包、倉庫等其他地方改用 +4~+10 分級變色
   function annotateAllRefinedEquipment() {
     tryLearnFromReactTree(document.querySelector('main, #root, table.xp-table, fieldset'));
 
@@ -320,33 +342,51 @@
       if (cards.length) row.dataset.roHoverCards = cards.join(',');
       else delete row.dataset.roHoverCards;
 
+      const inStall = isStallContext(row);
       let badge = row.querySelector('[data-ro-ref-annotated]');
-      if (plus > 0) {
-        const bInfo = calcRefineBonus(itemId, plus);
-        if (bInfo) {
-          if (!badge) {
-            badge = element('span');
-            badge.dataset.roRefAnnotated = '';
-            nameEl.after(badge);
+
+      if (inStall) {
+        // 攤位介面：保留數值徽章，清除非攤位專用的標題變色
+        applyRefineLevelColor(nameEl, 0);
+        if (plus > 0) {
+          const bInfo = calcRefineBonus(itemId, plus);
+          if (bInfo) {
+            if (!badge) {
+              badge = element('span');
+              badge.dataset.roRefAnnotated = '';
+              nameEl.after(badge);
+            }
+            const cls = `ro-ref-tag ${bInfo.isWeapon ? 'is-wpn' : 'is-arm'}`;
+            if (badge.className !== cls) badge.className = cls;
+            if (badge.textContent !== bInfo.shortText) badge.textContent = bInfo.shortText;
+            if (badge.title !== bInfo.detailText) badge.title = bInfo.detailText;
           }
-          const cls = `ro-ref-tag ${bInfo.isWeapon ? 'is-wpn' : 'is-arm'}`;
-          if (badge.className !== cls) badge.className = cls;
-          if (badge.textContent !== bInfo.shortText) badge.textContent = bInfo.shortText;
-          if (badge.title !== bInfo.detailText) badge.title = bInfo.detailText;
+        } else if (badge) {
+          badge.remove();
         }
-      } else if (badge) {
-        badge.remove();
+      } else {
+        // 非攤位介面（背包、倉庫等）：移除文字徽章，改用 +4 ~ +10 漸進式變色
+        if (badge) badge.remove();
+        applyRefineLevelColor(nameEl, plus);
       }
     }
 
-    // 掃描原生物品資訊彈窗 (.xp-sunken)：動態學習完整裝備/卡片效果並插入精煉傷害橫幅
+    // 掃描原生物品資訊彈窗與裝備欄格子 (.xp-sunken)：動態學習數值；僅在攤位介面顯示黃底大橫幅，人物裝備欄與其他地方改用 +4~+10 變色
     for (const box of document.querySelectorAll('.xp-sunken')) {
       if (box.closest('#ro-helper-hud,[data-roi-market-browser],[data-roi-refine-helper]')) continue;
       let dBadge = box.querySelector(':scope > [data-ro-detail-ref-badge]');
       const img = box.querySelector('img[src*="/client/item/"]');
-      if (!img || img.closest('.xp-sunken') !== box) { dBadge?.remove(); continue; }
+      if (!img || img.closest('.xp-sunken') !== box) {
+        dBadge?.remove();
+        applyRefineLevelColor(box.querySelector('[data-ro-ref-tier]'), 0);
+        continue;
+      }
       const itemId = Number(img.getAttribute('src')?.match(/\/(\d+)\.png/)?.[1]);
-      if (!itemId) { dBadge?.remove(); continue; }
+      if (!itemId) {
+        dBadge?.remove();
+        applyRefineLevelColor(box.querySelector('[data-ro-ref-tier]'), 0);
+        continue;
+      }
       const lines = (box.innerText || '').split('\n').map((l) => l.trim()).filter((l) => l && !/^(?:裝備|卸下|鎖定|解鎖|存入倉庫|存倉|回城賣|請忽克連|一鍵精煉|武器精練|關閉|⚡)/.test(l));
       const txt = clean(lines.join(' '));
       const atkM = txt.match(/(?:攻擊力?|ATK)\s*[:：]?\s*(\d+)/i);
@@ -366,19 +406,31 @@
 
       const titleM = (lines[0] || '').match(/^\+\s*(\d+)/);
       const plus = titleM ? Number(titleM[1]) : 0;
-      if (plus > 0) {
-        const bInfo = calcRefineBonus(itemId, plus);
-        if (bInfo) {
-          if (!dBadge) {
-            dBadge = element('div', null, 'margin:5px 0;padding:5px 9px;border-radius:6px;background:linear-gradient(90deg,rgba(245,158,11,0.22),rgba(120,53,15,0.18));border-left:3px solid #f59e0b;color:#fde047;font-size:11.5px;font-weight:bold;');
-            dBadge.dataset.roDetailRefBadge = '';
-            box.append(dBadge);
-          }
-          const fullMsg = `⚡ ${bInfo.detailText}`;
-          if (dBadge.textContent !== fullMsg) dBadge.textContent = fullMsg;
-        } else if (dBadge) dBadge.remove();
-      } else if (dBadge) {
-        dBadge.remove();
+      const inStall = isStallContext(box);
+      const titleEl = [...box.querySelectorAll('button, span, div, b, strong, p')].find(
+        (el) => !el.children.length && !el.closest('button[data-ro-lock]') && /^\+\s*\d+/.test(clean(el.textContent))
+      ) || box;
+
+      if (inStall) {
+        applyRefineLevelColor(titleEl, 0);
+        if (plus > 0) {
+          const bInfo = calcRefineBonus(itemId, plus);
+          if (bInfo) {
+            if (!dBadge) {
+              dBadge = element('div', null, 'margin:5px 0;padding:5px 9px;border-radius:6px;background:linear-gradient(90deg,rgba(245,158,11,0.22),rgba(120,53,15,0.18));border-left:3px solid #f59e0b;color:#fde047;font-size:11.5px;font-weight:bold;');
+              dBadge.dataset.roDetailRefBadge = '';
+              box.append(dBadge);
+            }
+            const fullMsg = `⚡ ${bInfo.detailText}`;
+            if (dBadge.textContent !== fullMsg) dBadge.textContent = fullMsg;
+          } else if (dBadge) dBadge.remove();
+        } else if (dBadge) {
+          dBadge.remove();
+        }
+      } else {
+        // 非攤位（含人物裝備欄與物品詳情框）：移除黃底橫幅，改用 +4 ~ +10 漸進變色
+        if (dBadge) dBadge.remove();
+        applyRefineLevelColor(titleEl, plus);
       }
     }
   }
@@ -1677,6 +1729,7 @@
       const img = element('img');
       img.src = `/client/item/${r.st.itemId}.png`; img.width = img.height = 20;
       const name = element('span', `+${r.st.refine || 0} ${r.name}${slots ? ` [${slots}]` : ''} `, `color:${r.st.refine ? '#38bdf8' : '#e2e8f0'}`);
+      applyRefineLevelColor(name, r.st.refine || 0);
       const refBadge = createRefineBadgeNode(r.st.itemId, r.st.refine || 0);
       if (refBadge) name.append(refBadge, document.createTextNode(' '));
       name.append(element('small', `(${SUB_LABELS[r.sub] || r.cat})`, 'color:#64748b'));
@@ -2182,6 +2235,33 @@
       li.ro-wh-locked { background:linear-gradient(90deg,rgba(245,158,11,0.22),transparent 85%)!important; border-left:3px solid #f59e0b!important; padding-left:4px!important; }
       button.ro-badge-lock { background:linear-gradient(135deg,#78350f,#92400e)!important; color:#fde047!important; border:1px solid #f59e0b!important; border-radius:4px!important; padding:0 5px!important; margin:0 4px!important; font-size:11px!important; font-weight:bold!important; cursor:pointer!important; }
       button.ro-badge-unlock { background:transparent!important; color:#64748b!important; border:1px dashed #475569!important; border-radius:4px!important; padding:0 4px!important; margin:0 4px!important; font-size:11px!important; opacity:0.6; cursor:pointer!important; }
+      [data-ro-ref-tier="4"]  { color: #60a5fa !important; font-weight: 600 !important; }
+      [data-ro-ref-tier="5"]  { color: #34d399 !important; font-weight: 600 !important; }
+      [data-ro-ref-tier="6"]  { color: #a3e635 !important; font-weight: 700 !important; }
+      [data-ro-ref-tier="7"]  { color: #facc15 !important; font-weight: 700 !important; text-shadow: 0 0 5px rgba(250,204,21,0.45) !important; }
+      [data-ro-ref-tier="8"]  { color: #fb923c !important; font-weight: 800 !important; text-shadow: 0 0 7px rgba(251,146,60,0.55) !important; }
+      [data-ro-ref-tier="9"]  { color: #f87171 !important; font-weight: 800 !important; text-shadow: 0 0 9px rgba(248,113,113,0.7) !important; }
+      [data-ro-ref-tier="10"] { color: #ff2d55 !important; font-weight: 900 !important; text-shadow: 0 0 8px #ff2d55, 0 0 3px #ffd700 !important; background: linear-gradient(90deg, rgba(255,45,85,0.22), rgba(250,204,21,0.18)) !important; border-radius: 4px !important; padding: 0 5px !important; border: 1px solid rgba(255,215,0,0.65) !important; }
+      .roi-mkt-row:hover { background:rgba(56,189,248,0.12) !important; }
+      table.roi-market-table { width:100% !important; table-layout:fixed !important; }
+      table.roi-market-table tr > [data-roi-market-col] { box-sizing:border-box !important; }
+      table.roi-market-table tr > [data-roi-market-col="item"] { width:auto !important; }
+      table.roi-market-table tr > [data-roi-market-col="price"] { position:relative !important; width:180px !important; padding-right:48px !important; text-align:right !important; white-space:nowrap !important; }
+      table.roi-market-table tr > [data-roi-market-col="stock"] { width:65px !important; text-align:right !important; white-space:nowrap !important; }
+      table.roi-market-table tr > [data-roi-market-col="input"] { width:85px !important; text-align:right !important; white-space:nowrap !important; }
+      table.roi-market-table tr > [data-roi-market-col="input-stock"] { width:150px !important; text-align:right !important; white-space:nowrap !important; }
+      table.roi-market-table tr > [data-roi-market-col^="input"] input[type="number"] { width:64px !important; max-width:100% !important; box-sizing:border-box !important; }
+      table.roi-market-table td[data-roi-market-col="price"] > button[data-roi-price-search] { position:absolute; right:22px; top:50%; transform:translateY(-50%); width:21px; height:21px; padding:0; border:0; background:transparent; color:#38bdf8 !important; font:14px sans-serif; cursor:pointer; }
+      @media(max-width:600px) {
+        table.roi-market-table tr > [data-roi-market-col="price"] { width:135px !important; }
+        table.roi-market-table tr > [data-roi-market-col="stock"] { width:45px !important; }
+        table.roi-market-table tr > [data-roi-market-col="input"] { width:65px !important; }
+        table.roi-market-table tr > [data-roi-market-col="input-stock"] { width:110px !important; }
+        table.roi-market-table tr > [data-roi-market-col^="input"] input[type="number"] { width:52px !important; }
+      }
+      li.ro-wh-locked { background:linear-gradient(90deg,rgba(245,158,11,0.22),transparent 85%)!important; border-left:3px solid #f59e0b!important; padding-left:4px!important; }
+      button.ro-badge-lock { background:linear-gradient(135deg,#78350f,#92400e)!important; color:#fde047!important; border:1px solid #f59e0b!important; border-radius:4px!important; padding:0 5px!important; margin:0 4px!important; font-size:11px!important; font-weight:bold!important; cursor:pointer!important; }
+      button.ro-badge-unlock { background:transparent!important; color:#64748b!important; border:1px dashed #475569!important; border-radius:4px!important; padding:0 4px!important; margin:0 4px!important; font-size:11px!important; opacity:0.6; cursor:pointer!important; }
       #ro-helper-hud { position:fixed; top:48px; right:14px; z-index:2147483646; font-family:system-ui,-apple-system,"Microsoft JhengHei",sans-serif; user-select:none; touch-action:none; }
       #ro-hud-card { background:linear-gradient(165deg,rgba(15,23,42,0.96),rgba(9,13,22,0.98)); backdrop-filter:blur(12px); color:#f8fafc; border:1.5px solid rgba(56,189,248,0.75); border-radius:12px; box-sizing:border-box; width:min(355px,calc(100vw - 8px)); max-height:calc(100vh - 8px); max-height:calc(100dvh - 8px); box-shadow:0 16px 40px rgba(0,0,0,0.88), 0 0 15px rgba(56,189,248,0.15); font-size:12px; overflow:auto; }
       #ro-drag { position:sticky; top:0; z-index:1; }
@@ -2199,7 +2279,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.6</span>
+          <span>⚡ RO Idle 便利助手 v3.3.7</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -2492,3 +2572,4 @@
   }, 1500);
   setInterval(pollChars, 45000);
 })();
+
