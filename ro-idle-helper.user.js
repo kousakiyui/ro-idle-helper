@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.3.7
+// @version      3.3.8
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -1296,15 +1296,23 @@
         b.onclick = fn; monHost.append(b);
       };
       addBtn('🔄 同步本圖怪物', () => {
-        const p = getCommittedProps(monSel, (x) => typeof x.update === 'function' && Array.isArray(x.mapMonsters));
-        if (!p) return;
-        const ids = [...new Set(p.mapMonsters)];
-        const { targets, escape } = p.draft;
-        const monsterRules = readMonsterRules(p.draft);
-        const known = new Set(monsterRules.map((r) => r.monsterId));
-        const add = ids.filter((id) => !known.has(id)).map((monsterId) => ({ monsterId, action: 'attack' }));
-        if (known.size + add.length > 200) return alert('怪物控制最多 200 隻，請先移除不需要的規則再同步。');
-        if (add.length) p.update({ monsterRules: [...monsterRules, ...add], targets: { ...targets, blacklist: [] }, escape: { ...escape, dangerMonsters: [] } });
+        const status = monHost.querySelector('[data-roi-mon-status]') || document.createElement('span');
+        status.dataset.roiMonStatus = '';
+        if (!status.isConnected) monHost.append(status);
+        const p = getCommittedProps(monSel, (x) => typeof x.update === 'function' && x.draft && Array.isArray(x.mapMonsters));
+        if (!p) { status.textContent = '無法讀取目前地圖怪物，請重新開啟掛機設定'; return; }
+        const ids = [...new Set(p.mapMonsters.map((m) => Number(typeof m === 'object' ? m.id ?? m.monsterId : m)))].filter((id) => Number.isSafeInteger(id) && id > 0);
+        if (!ids.length) { status.textContent = '目前地圖沒有可同步的怪物'; return; }
+        const current = readMonsterRules(p.draft);
+        const oldById = new Map(current.map((rule) => [Number(rule.monsterId), rule]));
+        const rules = ids.map((id) => oldById.get(id) || { monsterId: id, action: 'attack' });
+        if (rules.length > 200) { status.textContent = '本圖怪物超過 200 隻，無法同步'; return; }
+        p.update({
+          monsterRules: rules,
+          targets: { ...p.draft.targets, blacklist: [] },
+          escape: { ...p.draft.escape, dangerMonsters: [] }
+        });
+        status.textContent = '已同步本圖 ' + rules.length + ' 隻怪物，請按套用設定';
       });
       addBtn('不逃 ⇄ 看到就逃', () => {
         const p = getCommittedProps(monSel, (x) => typeof x.update === 'function' && x.draft && Array.isArray(x.mapMonsters));
@@ -2279,7 +2287,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.7</span>
+          <span>⚡ RO Idle 便利助手 v3.3.8</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
