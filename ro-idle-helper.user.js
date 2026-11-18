@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.3.4
+// @version      3.3.5
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -2183,7 +2183,8 @@
       button.ro-badge-lock { background:linear-gradient(135deg,#78350f,#92400e)!important; color:#fde047!important; border:1px solid #f59e0b!important; border-radius:4px!important; padding:0 5px!important; margin:0 4px!important; font-size:11px!important; font-weight:bold!important; cursor:pointer!important; }
       button.ro-badge-unlock { background:transparent!important; color:#64748b!important; border:1px dashed #475569!important; border-radius:4px!important; padding:0 4px!important; margin:0 4px!important; font-size:11px!important; opacity:0.6; cursor:pointer!important; }
       #ro-helper-hud { position:fixed; top:48px; right:14px; z-index:2147483646; font-family:system-ui,-apple-system,"Microsoft JhengHei",sans-serif; user-select:none; touch-action:none; }
-      #ro-hud-card { background:linear-gradient(165deg,rgba(15,23,42,0.96),rgba(9,13,22,0.98)); backdrop-filter:blur(12px); color:#f8fafc; border:1.5px solid rgba(56,189,248,0.75); border-radius:12px; width:min(355px,calc(100vw - 24px)); box-shadow:0 16px 40px rgba(0,0,0,0.88), 0 0 15px rgba(56,189,248,0.15); font-size:12px; overflow:hidden; }
+      #ro-hud-card { background:linear-gradient(165deg,rgba(15,23,42,0.96),rgba(9,13,22,0.98)); backdrop-filter:blur(12px); color:#f8fafc; border:1.5px solid rgba(56,189,248,0.75); border-radius:12px; box-sizing:border-box; width:min(355px,calc(100vw - 8px)); max-height:calc(100vh - 8px); max-height:calc(100dvh - 8px); box-shadow:0 16px 40px rgba(0,0,0,0.88), 0 0 15px rgba(56,189,248,0.15); font-size:12px; overflow:auto; }
+      #ro-drag { position:sticky; top:0; z-index:1; }
       .ro-tab { flex:1; text-align:center; padding:8px 2px; cursor:pointer; color:#94a3b8; font-weight:bold; font-size:11px; border-bottom:2px solid transparent; transition:all 0.15s; }
       .ro-tab:hover { color:#e2e8f0; background:rgba(30,41,59,0.5); }
       .ro-tab.active { color:#fbbf24; border-bottom-color:#fbbf24; background:rgba(30,41,59,0.9); }
@@ -2194,16 +2195,11 @@
     document.head.appendChild(st);
 
     const hud = document.createElement('div'); hud.id = 'ro-helper-hud';
-    if (state.hudPos?.left != null && state.hudPos?.top != null) {
-      hud.style.left = Math.max(4, Math.min(window.innerWidth - 60, state.hudPos.left)) + 'px';
-      hud.style.top = Math.max(4, Math.min(window.innerHeight - 60, state.hudPos.top)) + 'px';
-      hud.style.right = 'auto';
-    }
     hud.innerHTML = `
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.4</span>
+          <span>⚡ RO Idle 便利助手 v3.3.5</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -2268,6 +2264,31 @@
     state.renderedLootRev = -1;
     document.body.appendChild(hud);
 
+    function placeHud(left, top) {
+      const { width, height } = hud.getBoundingClientRect();
+      const edge = 4;
+      const maxLeft = innerWidth - width - edge;
+      const maxTop = innerHeight - height - edge;
+      const x = Math.min(Math.max(0, maxLeft), Math.max(edge, left));
+      const y = Math.min(Math.max(0, maxTop), Math.max(edge, top));
+      hud.style.right = 'auto';
+      hud.style.left = x + 'px';
+      hud.style.top = y + 'px';
+      return { left: x, top: y };
+    }
+
+    function fitHud() {
+      if (!hud.isConnected) return;
+      const { width } = hud.getBoundingClientRect();
+      const { left, top } = state.hudPos || {};
+      placeHud(Number.isFinite(left) ? left : innerWidth - width - 14, Number.isFinite(top) ? top : 48);
+    }
+
+    fitHud();
+    const hudSizeObserver = new ResizeObserver(fitHud);
+    hudSizeObserver.observe(hud);
+    window.addEventListener('resize', fitHud);
+
     const bindDrag = (handle, onClick) => {
       let dragging = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0;
       handle.addEventListener('pointerdown', (e) => {
@@ -2282,10 +2303,7 @@
         const dx = e.clientX - sx, dy = e.clientY - sy;
         if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
         if (!moved) return;
-        const nx = Math.max(4, Math.min(window.innerWidth - 50, ox + dx));
-        const ny = Math.max(4, Math.min(window.innerHeight - 50, oy + dy));
-        hud.style.left = nx + 'px'; hud.style.top = ny + 'px'; hud.style.right = 'auto';
-        state.hudPos = { left: nx, top: ny };
+        state.hudPos = placeHud(ox + dx, oy + dy);
       });
       handle.addEventListener('pointerup', (e) => {
         if (!dragging) return;
@@ -2300,6 +2318,7 @@
       state.hudMin = m; savePrefs();
       document.getElementById('ro-hud-card').style.display = m ? 'none' : 'block';
       document.getElementById('ro-fab').style.display = m ? 'flex' : 'none';
+      fitHud();
     };
     bindDrag(document.getElementById('ro-drag'), null);
     bindDrag(document.getElementById('ro-fab'), () => setMin(false));
