@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.3.10
+// @version      3.3.11
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -739,7 +739,7 @@
     const dm = t.match(/造成\s*([\d,]+)\s*點傷害/);
     if (dm) { const v = parseInt(dm[1].replace(/,/g, ''), 10); if (v) { state.dmgSum += v; state.hits++; if (v > state.maxDmg) state.maxDmg = v; } }
     if (t.includes('成功擊敗')) state.kills++;
-    const em = t.match(/獲得\s*Base EXP\s*([\d,]+)\s*\/\s*Job EXP\s*([\d,]+)/);
+    const em = t.match(/獲得\s*Base EXP\s*([\d,]+)(?:\s*\(\s*\d+(?:\.\d+)?\s*%\s*\))?\s*\/\s*Job EXP\s*([\d,]+)/);
     if (em) { state.bexp += parseInt(em[1].replace(/,/g, ''), 10) || 0; state.jexp += parseInt(em[2].replace(/,/g, ''), 10) || 0; }
     const lm = t.match(/撿取物品:(.+?)\s*[×xX*]\s*(\d+)/);
     if (lm) {
@@ -2479,7 +2479,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.10</span>
+          <span>⚡ RO Idle 便利助手 v3.3.11</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
