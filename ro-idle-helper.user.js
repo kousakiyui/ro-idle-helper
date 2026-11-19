@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.3.15
+// @version      3.3.16
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -931,7 +931,7 @@
         f.insertBefore(bar, [...f.children].find((c) => c.tagName === 'UL') || null);
       }
 
-      const reviewToggle = [...bar.querySelectorAll('button')].find((b) => clean(b.textContent).startsWith('出售前核對：'));
+      const reviewToggle = [...bar.querySelectorAll('button')].find((b) => b.textContent.startsWith('出售前核對：'));
       if (reviewToggle) {
         reviewToggle.textContent = `出售前核對：${state.whSaleReview ? '開' : '關'}`;
         reviewToggle.title = state.whSaleReview ? '點擊關閉助手清單提醒；遊戲原生出售確認仍會顯示' : '點擊開啟助手清單提醒';
@@ -2509,7 +2509,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.15</span>
+          <span>⚡ RO Idle 便利助手 v3.3.16</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
