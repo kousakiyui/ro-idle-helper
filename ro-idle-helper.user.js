@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.3.14
+// @version      3.3.15
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -478,7 +478,7 @@
     rares: [], rareRev: 0,
     missed: 0,
     sound: false, notify: false, moneyColor: true,
-    whProtect: true, whAutoEquipCard: true,
+    whProtect: true, whSaleReview: true, whAutoEquipCard: true,
     whMarks: {}, whAutoLocks: {}, customProtectWords: [],
     hudMin: false, hudPos: null, mktUpperFold: false,
     processedLines: new WeakSet(), lastNotifyAt: 0
@@ -498,7 +498,7 @@
       GM_setValue('ro_lean_prefs_v091', {
         sound: state.sound, notify: state.notify,
         moneyColor: state.moneyColor,
-        whProtect: state.whProtect, whAutoEquipCard: state.whAutoEquipCard,
+        whProtect: state.whProtect, whSaleReview: state.whSaleReview, whAutoEquipCard: state.whAutoEquipCard,
         hudMin: state.hudMin, hudPos: state.hudPos, mktUpperFold: state.mktUpperFold
       });
     } catch {}
@@ -864,7 +864,7 @@
     dlg.innerHTML = `
       <div style="font-weight:bold;font-size:15px;color:#fbbf24;border-bottom:1px solid #334155;padding-bottom:8px;margin-bottom:8px;">🛡️ 倉庫待售清單核對（共 ${items.length} 項）</div>
       <div style="max-height:48vh;overflow:auto;margin-bottom:10px;border:1px solid #334155;border-radius:6px;padding:6px 10px;background:#090d16;"></div>
-      <div style="font-size:12px;color:#cbd5e1;margin-bottom:10px;"><span data-sale-caption></span>｜核對無誤後請點「清單無誤」，接著按「確認出售」，遊戲仍會顯示原生販售確認。</div>
+      <div style="font-size:12px;color:#cbd5e1;margin-bottom:10px;"><span data-sale-caption></span>｜核對無誤後按「確認出售」，遊戲仍會顯示原生販售確認。</div>
       <div style="display:flex;justify-content:flex-end;gap:8px;">
         <button type="button" class="xp-btn small" id="wh-rev-cancel">取消</button>
         <button type="button" class="xp-btn small" id="wh-rev-ok" style="background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;font-weight:bold;border:none;">確認出售</button>
@@ -925,11 +925,18 @@
           }, 'linear-gradient(135deg,#d97706,#b45309)'),
           mkBtn('🔒 本頁全鎖', () => bulkWhLock(f, true)),
           mkBtn('🔓 本頁全解', () => bulkWhLock(f, false)),
+          mkBtn('出售前核對：開', () => { state.whSaleReview = !state.whSaleReview; savePrefs(); refreshWarehouse(); }),
           stSpan
         );
         f.insertBefore(bar, [...f.children].find((c) => c.tagName === 'UL') || null);
       }
 
+      const reviewToggle = [...bar.querySelectorAll('button')].find((b) => clean(b.textContent).startsWith('出售前核對：'));
+      if (reviewToggle) {
+        reviewToggle.textContent = `出售前核對：${state.whSaleReview ? '開' : '關'}`;
+        reviewToggle.title = state.whSaleReview ? '點擊關閉助手清單提醒；遊戲原生出售確認仍會顯示' : '點擊開啟助手清單提醒';
+        reviewToggle.setAttribute('aria-pressed', String(state.whSaleReview));
+      }
       let dirty = false;
       for (const li of f.querySelectorAll('li')) {
         const cb = li.querySelector('input[type="checkbox"]'), nameBtn = li.querySelector('button[aria-label$="的物品資訊"]'), img = li.querySelector('img[src*="/client/item/"]');
@@ -999,6 +1006,7 @@
         const approval = whSaleApproval;
         whSaleApproval = null;
         if (approval?.saleBtn === btn && Date.now() <= approval.until && approval.sig === review.sig) return;
+        if (!state.whSaleReview) return;
         e.preventDefault(); e.stopImmediatePropagation();
         showWarehouseSaleReview(f, btn, review.items, review.sig);
         return;
@@ -2501,7 +2509,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.14</span>
+          <span>⚡ RO Idle 便利助手 v3.3.15</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
