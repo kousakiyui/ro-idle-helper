@@ -1,0 +1,18 @@
+name: 'Gemini PR Review Trigger'
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: '${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}'
+  cancel-in-progress: true
+
+jobs:
+  call-review:
+    if: ${{ github.event.pull_request.draft == false && github.event.pull_request.head.repo.fork == false }}
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/gemini-review.yml
+    secrets: inherit
