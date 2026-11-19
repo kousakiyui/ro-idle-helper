@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.3.12
+// @version      3.3.13
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -477,7 +477,7 @@
     loot: {}, lootRev: 0, renderedLootRev: -1,
     rares: [], rareRev: 0,
     missed: 0,
-    sound: false, notify: false, autoResume: false, pruneLogs: true, moneyColor: true,
+    sound: false, notify: false, moneyColor: true,
     whProtect: true, whAutoEquipCard: true,
     whMarks: {}, whAutoLocks: {}, customProtectWords: [],
     hudMin: false, hudPos: null, mktUpperFold: false,
@@ -496,15 +496,13 @@
   function savePrefs() {
     try {
       GM_setValue('ro_lean_prefs_v091', {
-        sound: state.sound, notify: state.notify, autoResume: state.autoResume,
-        pruneLogs: state.pruneLogs, moneyColor: state.moneyColor,
+        sound: state.sound, notify: state.notify,
+        moneyColor: state.moneyColor,
         whProtect: state.whProtect, whAutoEquipCard: state.whAutoEquipCard,
         hudMin: state.hudMin, hudPos: state.hudPos, mktUpperFold: state.mktUpperFold
       });
-      document.documentElement.classList.toggle('ro-css-prune-logs', Boolean(state.pruneLogs));
     } catch {}
   }
-  document.documentElement.classList.toggle('ro-css-prune-logs', Boolean(state.pruneLogs));
 
   function findTownSearchUI() {
     for (const f of document.querySelectorAll('fieldset')) {
@@ -1360,7 +1358,6 @@
         syncAutomatically();
       };
 
-      const KEYS_ALL = ['hpPotion','spPotion','buffPotion','cureItems','recovery','sit','autoLoot','lootFilter','lootPriority','rarePickup','autoStorage','restock','townBuy','autoSell','supplyWeightPercent','autoRepair','autoBuy','autoIdentify'];
       box.append(
         mk('📦 戰利品全存倉 (給商人賣)', () => {
           const p = getProps();
@@ -1373,30 +1370,6 @@
         }, 'linear-gradient(135deg,#d97706,#b45309)'),
         mk('同步本圖戰利品存倉', () => syncMapLoot('store')),
         autoLabel,
-        mk('📋 複製本角草稿', () => {
-          const p = getProps();
-          GM_setValue('roi_lean_clip', JSON.stringify({ from: p.snap.character.name, data: Object.fromEntries(KEYS_ALL.map((k) => [k, p.draft[k]])) }));
-          status.textContent = `已複製【${p.snap.character.name}】的設定`;
-        }),
-        mk('📥 貼上草稿', () => {
-          const clip = JSON.parse(GM_getValue('roi_lean_clip', 'null'));
-          if (!clip) throw Error('請先複製設定');
-          if (!clip.data || typeof clip.data !== 'object' || Array.isArray(clip.data)) throw Error('無法讀取複製的道具設定');
-          const p = getProps();
-          const data = Object.fromEntries(KEYS_ALL.filter((key) => Object.hasOwn(clip.data, key)).map((key) => [key, clip.data[key]]));
-          for (const key of ['hpPotion', 'spPotion', 'buffPotion']) {
-            if (!Object.hasOwn(data, key)) continue;
-            const rule = data[key];
-            data[key] = rule && !Array.isArray(rule) && Array.isArray(rule.items) ? rule : {
-              ...p.draft[key], items: [...new Set([...listItems(rule), ...itemIds([rule?.itemId])])].slice(0, 20)
-            };
-          }
-          if (Object.hasOwn(data, 'autoStorage')) data.autoStorage = storageRule(data.autoStorage);
-          if (Array.isArray(data.lootPriority)) data.lootPriority = { items: itemIds(data.lootPriority).slice(0, 500) };
-          if (Object.hasOwn(data, 'autoSell')) data.autoSell = itemIds(data.autoSell);
-          p.update(data);
-          status.textContent = `已貼上【${clip.from}】的設定，請按「套用設定」`;
-        }),
         status
       );
       itemGroup.append(box);
@@ -2432,7 +2405,6 @@
     const st = document.createElement('style');
     st.textContent = `
       [data-roi-browse-hidden], [data-roi-native-fold] { display: none !important; }
-      html.ro-css-prune-logs .log-window .log-line:nth-last-child(n+250) { display: none !important; }
       .roi-mc-text { color: var(--roi-mc) !important; font-weight: bold !important; font-variant-numeric: tabular-nums; }
       html.night .roi-mc-text, html[data-info-night] .roi-mc-text, #roi-mkt-rows .roi-mc-text { color: var(--roi-mn) !important; -webkit-text-fill-color: currentColor !important; }
       /* 全裝備精煉傷害與防禦加成標記徽章 */
@@ -2503,7 +2475,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.12</span>
+          <span>⚡ RO Idle 便利助手 v3.3.13</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -2530,7 +2502,6 @@
           <div style="display:flex;gap:10px;margin-bottom:8px;font-size:11px;color:#cbd5e1;">
             <label style="cursor:pointer;"><input type="checkbox" id="c-snd" ${state.sound ? 'checked' : ''}> 🔊音效</label>
             <label style="cursor:pointer;"><input type="checkbox" id="c-ntf" ${state.notify ? 'checked' : ''}> 🔔通知</label>
-            <label style="color:#4ade80;cursor:pointer;"><input type="checkbox" id="c-res" ${state.autoResume ? 'checked' : ''}> 🤖自動復機</label>
           </div>
           <div style="display:flex;gap:6px;">
             <button id="b-pause" style="flex:1;background:linear-gradient(135deg,#d97706,#b45309);color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">⏸️ 暫停監測</button>
@@ -2554,7 +2525,6 @@
           <div class="ro-box" style="display:flex;flex-direction:column;gap:5px;font-size:11px;margin-bottom:8px;">
             <label style="cursor:pointer;"><input type="checkbox" id="c-wheq" ${state.whAutoEquipCard ? 'checked' : ''}> ✨ 自動保護卡片 / +精煉 / 有洞裝備</label>
             <label style="cursor:pointer;"><input type="checkbox" id="c-mcol" ${state.moneyColor ? 'checked' : ''}> 🎨 啟用拍賣與表格價位 10 階分色</label>
-            <label style="cursor:pointer;"><input type="checkbox" id="c-prn" ${state.pruneLogs ? 'checked' : ''}> 🧹 自動隱藏過舊戰鬥日誌 (純CSS零崩潰)</label>
           </div>
           <div style="display:flex;gap:6px;">
             <button id="b-exp-json" style="flex:1;background:linear-gradient(135deg,#0284c7,#0369a1);color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">📤 匯出備份</button>
@@ -2648,10 +2618,8 @@
 
     document.getElementById('c-snd').onchange = (e) => { state.sound = e.target.checked; savePrefs(); };
     document.getElementById('c-ntf').onchange = (e) => { state.notify = e.target.checked; savePrefs(); };
-    document.getElementById('c-res').onchange = (e) => { state.autoResume = e.target.checked; savePrefs(); };
     document.getElementById('c-wheq').onchange = (e) => { state.whAutoEquipCard = e.target.checked; savePrefs(); refreshWarehouse(true); };
     document.getElementById('c-mcol').onchange = (e) => { state.moneyColor = e.target.checked; savePrefs(); alignAndColorizeNativeMarkets(); renderMkt(); };
-    document.getElementById('c-prn').onchange = (e) => { state.pruneLogs = e.target.checked; savePrefs(); };
 
     document.getElementById('b-save-words').onclick = () => {
       state.customProtectWords = document.getElementById('i-words').value.split(/[,，、\n]/).map((s) => s.trim()).filter(Boolean);
@@ -2791,10 +2759,7 @@
     ensureHUD(); updateHUD();
     const itemGroup = document.querySelector('[role="group"][aria-label="道具設定的複製與匯出匯入"]');
     lootSyncPanels.get(itemGroup)?.();
-    if (state.autoResume && !refBusy) {
-      const b = [...document.querySelectorAll('button.xp-btn.primary')].find((x) => x.textContent.includes('開始掛機'));
-      if (b && !b.disabled) b.click();
-    }
+
   }, 1500);
   setInterval(pollChars, 45000);
 })();
