@@ -108,13 +108,20 @@
 
   // 動態裝備與卡片完整數值學習庫 (持久化記憶 ATK/MATK/DEF/重量/武器等級/卡片與裝備效果說明)
   const ITEM_DETAIL_DB = new Map();
+  const isPollutedDesc = (s) => typeof s === 'string' && /(?:\bZeny\b|🔍|剩\s*\d+|購買\s*\()/.test(s);
   try {
     const savedDb = GM_getValue('roi_learned_item_db_v1', {});
+    let cleanedPolluted = false;
     for (const [k, v] of Object.entries(savedDb)) {
       const numId = Number(k);
+      if (v && isPollutedDesc(v.desc)) {
+        delete v.desc;
+        cleanedPolluted = true;
+      }
       ITEM_DETAIL_DB.set(numId, v);
       if (v?.name) ITEM_NAME_CACHE.set(numId, v.name);
     }
+    if (cleanedPolluted) GM_setValue('roi_learned_item_db_v1', Object.fromEntries(ITEM_DETAIL_DB));
   } catch {}
   let dbSaveTimer = null;
   function recordItemDetail(id, info) {
@@ -342,8 +349,11 @@
     for (const box of document.querySelectorAll('.xp-sunken')) {
       if (box.closest('#ro-helper-hud,[data-roi-market-browser],[data-roi-refine-helper]')) continue;
       box.querySelector(':scope > [data-ro-detail-ref-badge]')?.remove();
-      const img = box.querySelector('img[src*="/client/item/"]');
-      if (!img || img.closest('.xp-sunken') !== box) {
+      // 跳過整張攤位/背包/倉庫表格或清單容器，避免把整個攤位的商品列當成單一物品說明抓進去
+      if (box.querySelector('table, ul, ol, input[type="number"], [data-roi-price-search]')) continue;
+      const imgs = box.querySelectorAll('img[src*="/client/item/"]');
+      const img = imgs[0];
+      if (!img || imgs.length > 5 || img.closest('.xp-sunken') !== box) {
         applyRefineLevelColor(box.querySelector('[data-ro-ref-tier]'), 0);
         continue;
       }
@@ -357,7 +367,7 @@
       let lines;
       if (box.dataset.roBoxSig !== boxSig) {
         box.dataset.roBoxSig = boxSig;
-        lines = (box.innerText || '').split('\n').map((l) => l.trim()).filter((l) => l && !/^(?:裝備|卸下|鎖定|解鎖|存入倉庫|存倉|回城賣|請忽克連|一鍵精煉|武器精練|關閉|⚡)/.test(l));
+        lines = (box.innerText || '').split('\n').map((l) => l.trim()).filter((l) => l && !/^(?:裝備|卸下|鎖定|解鎖|存入倉庫|存倉|回城賣|請忽克連|一鍵精煉|武器精練|關閉|⚡|🔍|剩\s*\d+|購買)/.test(l) && !/\bZeny\b/i.test(l));
         const txt = clean(lines.join(' '));
         const atkM = txt.match(/(?:攻擊力?|ATK)\s*[:：]?\s*(\d+)/i);
         const matkM = txt.match(/(?:魔攻|MATK)\s*[:：]?\s*(\d+)/i);
@@ -371,7 +381,7 @@
           ...(defM ? { def: Number(defM[1]) } : {}),
           ...(wLvM ? { wLv: Number(wLvM[1]) } : {}),
           ...(wtM ? { weight: Number(wtM[1]) } : {}),
-          ...(desc ? { desc } : {})
+          ...(desc && !/(?:Zeny|🔍|剩\s*\d+)/i.test(desc) ? { desc } : {})
         });
       } else {
         lines = rawBoxText.split('\n').map((l) => l.trim()).filter(Boolean);
@@ -2213,7 +2223,7 @@
       weight: dbInfo.weight ?? (packItem.weight != null ? Number(packItem.weight) : undefined),
       reqLv: dbInfo.reqLv ?? (packItem.equipLevel ?? packItem.requiredLevel),
       cardSlots: slotCount,
-      desc: dbInfo.desc || descText || undefined
+      desc: descText || (!isPollutedDesc(dbInfo.desc) ? dbInfo.desc : undefined)
     };
   }
 
