@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.3.8
+// @version      3.3.9
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -1205,6 +1205,87 @@
     return rules;
   }
 
+  const itemIds = (list) => Array.isArray(list)
+    ? [...new Set(list.map((item) => Number(item?.itemId ?? item?.id ?? item)).filter((id) => Number.isSafeInteger(id) && id > 0))]
+    : [];
+  const listItems = (rule) => itemIds(Array.isArray(rule) ? rule : rule?.items);
+  const storageRule = (rule) => ({
+    enabled: false, abovePercent: 70, ...(Array.isArray(rule) ? {} : rule), items: listItems(rule)
+  });
+
+  function buildLootPatch(draft, ids, mode) {
+    const supplies = new Set([
+      ...itemIds(draft.restock), ...itemIds(draft.townBuy), ...itemIds(draft.cureItems),
+      ...itemIds(draft.autoBuy?.potions), ...itemIds(draft.autoBuy?.gems), ...itemIds([draft.autoBuy?.arrows?.itemId]),
+      ...[draft.hpPotion, draft.spPotion, draft.buffPotion].flatMap((rule) => [...listItems(rule), ...itemIds([rule?.itemId])])
+    ]);
+    const selected = itemIds(ids).filter((id) => !supplies.has(id));
+    if (!selected.length) return null;
+
+    const autoStorage = storageRule(draft.autoStorage);
+    const storageItems = [...new Set([...autoStorage.items, ...selected])];
+    const priority = draft.lootPriority;
+    const priorityItems = [...new Set([...listItems(priority), ...selected])];
+    if (storageItems.length > 2000 || (mode === 'valuable' && priorityItems.length > 500)) {
+      throw Error('同步會超過存倉或優先撿取的清單上限，請先移除不需要的項目');
+    }
+
+    const autoSell = itemIds(draft.autoSell);
+    const stored = new Set(selected);
+    const patch = {
+      autoLoot: true,
+      autoStorage: { ...autoStorage, enabled: true, items: storageItems },
+      autoSell: autoSell.filter((id) => !stored.has(id))
+    };
+    if (mode === 'valuable') {
+      patch.lootPriority = { ...(priority?.rare ? { rare: true } : {}), items: priorityItems };
+    }
+    return { patch, count: selected.length };
+  }
+
+  let lootPack;
+  function loadLootPack() {
+    const link = document.querySelector('link[rel="modulepreload"][href^="/assets/pack-"]');
+    if (!link) throw Error('找不到遊戲的地圖資料');
+    lootPack ??= import(link.href).then((module) => {
+      const pack = Object.values(module).find((value) => Array.isArray(value?.maps) && Array.isArray(value.monsters) && Array.isArray(value.items));
+      if (!pack) throw Error('無法辨識遊戲的地圖資料');
+      return {
+        maps: new Map(pack.maps.map((map) => [map.id, map])),
+        monsters: new Map([...(pack.summons ?? []), ...pack.monsters].map((monster) => [monster.id, monster])),
+        items: new Map(pack.items.map((item) => [item.id, item]))
+      };
+    }).catch((error) => { lootPack = null; throw error; });
+    return lootPack;
+  }
+
+  function getMapLoot(pack, mapId) {
+    const map = pack.maps.get(mapId);
+    if (!map || !Array.isArray(map.spawns)) throw Error('找不到目前掛機地圖的掉落資料');
+    const pending = [...map.spawns, ...(map.timed ?? [])].map((spawn) => spawn.monsterId);
+    const seen = new Set(), loot = new Map();
+    for (const id of pending) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const monster = pack.monsters.get(id);
+      if (!monster) continue;
+      for (const skill of monster.skills ?? []) {
+        if (skill.skill === 'NPC_METAMORPHOSIS') pending.push(...(skill.vals ?? []));
+      }
+      for (const drop of [...(monster.drops ?? []), monster.card, ...(monster.mvpDrops ?? [])]) {
+        const item = pack.items.get(drop?.itemId);
+        if (item) loot.set(item.id, item.name);
+      }
+    }
+    return loot;
+  }
+
+  const lootSyncPanels = new WeakMap();
+  const lootModes = ['off', 'store', 'valuable'];
+  const lootOres = new Set([984, 985, 756, 757, 1010, 1011]);
+  const isValuableLoot = (id, name = '') => classifyItem(id, name).cat === 'card' || lootOres.has(id)
+    || state.whMarks[id] === 'lock' || state.customProtectWords.some((word) => word && name.includes(word));
+
   function mountSettingsTools() {
     refreshRareHelper();
     const itemGroup = document.querySelector('[role="group"][aria-label="道具設定的複製與匯出匯入"]');
@@ -1225,53 +1306,72 @@
         return p;
       };
 
-      const storeAllForMerchant = () => {
-        const p = getProps(), d = p.draft;
-        const supplyIds = new Set([
-          ...(d.restock || []).map((x) => x.itemId || x.id),
-          ...(d.townBuy || []).map((x) => x.itemId || x.id),
-          d.hpPotion?.itemId, d.spPotion?.itemId, ...(d.buffPotion || []).map((x) => x.itemId)
-        ].filter(Boolean));
-        const allKnownIds = new Set([
-          ...Object.keys(d.lootFilter || {}).map(Number),
-          ...(Array.isArray(d.autoStorage) ? d.autoStorage : []),
-          ...(Array.isArray(d.autoSell) ? d.autoSell : []),
-          ...(p.snap.inventory || []).filter((i) => !i.equipped && classifyItem(i.itemId).cat !== 'consumable').map((i) => i.itemId)
-        ].filter((id) => Number.isSafeInteger(id) && id > 0 && !supplyIds.has(id)));
-        const nextStorage = [...new Set([...(Array.isArray(d.autoStorage) ? d.autoStorage : []), ...allKnownIds])];
-        p.update({ autoLoot: true, autoStorage: nextStorage, autoSell: [] });
-        status.textContent = `📦 已將 ${nextStorage.length} 種戰利品設為「自動存倉、不回城賣」（請按套用設定）`;
+      const applyLoot = (p, ids, mode) => {
+        const result = buildLootPatch(p.draft, ids, mode);
+        if (!result) { status.textContent = '沒有符合條件的戰利品'; return; }
+        p.update(result.patch);
+        const action = mode === 'valuable' ? '優先撿取＋存倉' : '自動存倉';
+        status.textContent = `已設定 ${result.count} 種道具為「${action}」，請按「套用設定」`;
       };
+      const configuredIds = (d) => [
+        ...listItems(d.lootFilter), ...listItems(d.lootPriority), ...listItems(d.autoStorage), ...itemIds(d.autoSell)
+      ];
+      const inventoryIds = (snap) => {
+        const equipped = new Set(Object.values(snap.equipment ?? {}));
+        return itemIds((snap.inventory ?? []).filter((i) => !i.equipped && !equipped.has(i.uid)));
+      };
+      const auto = element('select');
+      auto.className = 'xp-input';
+      for (const [value, label] of [['off', '關閉'], ['store', '本圖戰利品存倉'], ['valuable', '本圖貴重物優先撿＋存倉']]) {
+        const option = element('option', label);
+        option.value = value;
+        auto.append(option);
+      }
+      const savedMode = GM_getValue('roi-loot-auto-map', 'off');
+      auto.value = lootModes.includes(savedMode) ? savedMode : 'off';
+      const autoLabel = element('label', '隨地圖同步 ');
+      autoLabel.append(auto);
 
-      const prioritizeValuables = () => {
-        const p = getProps(), d = p.draft;
-        const coreOres = [984, 985, 756, 757, 1010, 1011];
-        const candidateIds = new Set([
-          ...coreOres,
-          ...Object.keys(d.lootFilter || {}).map(Number),
-          ...(Array.isArray(d.autoStorage) ? d.autoStorage : []),
-          ...(p.snap.inventory || []).map((i) => i.itemId),
-          ...Object.keys(state.whMarks).filter((k) => state.whMarks[k] === 'lock').map(Number)
-        ].filter((id) => Number.isSafeInteger(id) && id > 0));
-
-        const valuableIds = [...candidateIds].filter((id) => {
-          if (id >= 4001 && id <= 4999) return true;
-          if (coreOres.includes(id) || state.whMarks[id] === 'lock') return true;
-          const name = ITEM_NAME_CACHE.get(id) || '';
-          return name && state.customProtectWords.some((w) => w && name.includes(w));
-        });
-
-        const nextPrio = [...new Set([...(Array.isArray(d.lootPriority) ? d.lootPriority : []), ...valuableIds])];
-        const nextStor = [...new Set([...(Array.isArray(d.autoStorage) ? d.autoStorage : []), ...valuableIds])];
-        const nextSell = (Array.isArray(d.autoSell) ? d.autoSell : []).filter((id) => !valuableIds.includes(id));
-        p.update({ autoLoot: true, lootPriority: nextPrio, autoStorage: nextStor, autoSell: nextSell });
-        status.textContent = `💎 已將 ${valuableIds.length} 種卡片/神金鋁/貴重詞道具設為「優先撿取＋存倉」（請按套用設定）`;
+      const getMapKey = (p) => JSON.stringify([p.snap.character.id ?? p.snap.character.name, p.draft.lockMap]);
+      let lastAutoKey;
+      const syncMapLoot = async (mode, automatic = false) => {
+        try {
+          const p = getProps(), mapKey = getMapKey(p);
+          const key = JSON.stringify([mode, mapKey]);
+          if (automatic) {
+            if (key === lastAutoKey) return;
+            lastAutoKey = key;
+          }
+          const pack = await loadLootPack();
+          if (!itemGroup.isConnected || (automatic && (auto.value !== mode || lastAutoKey !== key))) return;
+          const current = getProps();
+          if (mapKey !== getMapKey(current)) return;
+          const loot = getMapLoot(pack, current.draft.lockMap);
+          const ids = [...loot].filter(([id, name]) => mode === 'store' || isValuableLoot(id, name)).map(([id]) => id);
+          applyLoot(current, ids, mode);
+        } catch (e) { status.textContent = '⚠️ ' + e.message; }
+      };
+      const syncAutomatically = () => { if (auto.value !== 'off') void syncMapLoot(auto.value, true); };
+      lootSyncPanels.set(itemGroup, syncAutomatically);
+      auto.onchange = () => {
+        GM_setValue('roi-loot-auto-map', auto.value);
+        lastAutoKey = undefined;
+        syncAutomatically();
       };
 
       const KEYS_ALL = ['hpPotion','spPotion','buffPotion','cureItems','recovery','sit','autoLoot','lootFilter','lootPriority','rarePickup','autoStorage','restock','townBuy','autoSell','supplyWeightPercent','autoRepair','autoBuy','autoIdentify'];
       box.append(
-        mk('📦 戰利品全存倉 (給商人賣)', storeAllForMerchant, 'linear-gradient(135deg,#e11d48,#be123c)'),
-        mk('💎 卡片/神金鋁/貴重詞 ➔ 優先撿+存倉', prioritizeValuables, 'linear-gradient(135deg,#d97706,#b45309)'),
+        mk('📦 戰利品全存倉 (給商人賣)', () => {
+          const p = getProps();
+          applyLoot(p, [...configuredIds(p.draft), ...inventoryIds(p.snap).filter((id) => classifyItem(id).cat !== 'consumable')], 'store');
+        }, 'linear-gradient(135deg,#e11d48,#be123c)'),
+        mk('💎 卡片/神金鋁/貴重詞 ➔ 優先撿+存倉', () => {
+          const p = getProps();
+          const candidates = [...configuredIds(p.draft), ...inventoryIds(p.snap), ...lootOres, ...Object.keys(state.whMarks).map(Number)];
+          applyLoot(p, candidates.filter((id) => isValuableLoot(id, ITEM_NAME_CACHE.get(id))), 'valuable');
+        }, 'linear-gradient(135deg,#d97706,#b45309)'),
+        mk('同步本圖戰利品存倉', () => syncMapLoot('store')),
+        autoLabel,
         mk('📋 複製本角草稿', () => {
           const p = getProps();
           GM_setValue('roi_lean_clip', JSON.stringify({ from: p.snap.character.name, data: Object.fromEntries(KEYS_ALL.map((k) => [k, p.draft[k]])) }));
@@ -1280,13 +1380,27 @@
         mk('📥 貼上草稿', () => {
           const clip = JSON.parse(GM_getValue('roi_lean_clip', 'null'));
           if (!clip) throw Error('請先複製設定');
-          getProps().update(clip.data);
+          if (!clip.data || typeof clip.data !== 'object' || Array.isArray(clip.data)) throw Error('無法讀取複製的道具設定');
+          const p = getProps();
+          const data = Object.fromEntries(KEYS_ALL.filter((key) => Object.hasOwn(clip.data, key)).map((key) => [key, clip.data[key]]));
+          for (const key of ['hpPotion', 'spPotion', 'buffPotion']) {
+            if (!Object.hasOwn(data, key)) continue;
+            const rule = data[key];
+            data[key] = rule && !Array.isArray(rule) && Array.isArray(rule.items) ? rule : {
+              ...p.draft[key], items: [...new Set([...listItems(rule), ...itemIds([rule?.itemId])])].slice(0, 20)
+            };
+          }
+          if (Object.hasOwn(data, 'autoStorage')) data.autoStorage = storageRule(data.autoStorage);
+          if (Array.isArray(data.lootPriority)) data.lootPriority = { items: itemIds(data.lootPriority).slice(0, 500) };
+          if (Object.hasOwn(data, 'autoSell')) data.autoSell = itemIds(data.autoSell);
+          p.update(data);
           status.textContent = `已貼上【${clip.from}】的設定，請按「套用設定」`;
         }),
         status
       );
       itemGroup.append(box);
     }
+    lootSyncPanels.get(itemGroup)?.();
 
     const monSel = document.querySelector('select[aria-label="怪物控制：加入怪物"]');
     const monHost = monSel?.parentElement;
@@ -1337,6 +1451,13 @@
   }
 
   const refSelected = new Set();
+  const refineCategories = {
+    all: '全部', weapon: '武器', armor: '鎧甲', shield: '盾牌',
+    head: '頭飾', garment: '披肩', shoes: '鞋子', accessory: '飾品', other: '其他'
+  };
+  let refCategory = 'all';
+  const refineCategory = (row) => row.cat === 'weapon' ? 'weapon'
+    : row.sub.startsWith('head') ? 'head' : Object.hasOwn(refineCategories, row.sub) ? row.sub : 'other';
   let refPanel = null, refOpen = false, refBusy = false, refStop = false, refTargetPlus = 6, refMode = 'round_robin', refSkipConfirm = true, refAutoWh = true;
   let bagMemo = null;
   let visitingWarehouse = false;
@@ -1388,6 +1509,9 @@
   }
 
   const isEligibleEquip = (r) => r.st && (r.cat === 'weapon' || r.cat === 'armor') && !r.st.locked && !r.st.broken && !r.st.unidentified;
+
+  const refineRowsForPage = (rows) => rows.filter((row) =>
+    isEligibleEquip(row) && (refCategory === 'all' || refineCategory(row) === refCategory));
 
   function findNativeDetailBtn(table, uid, matcher) {
     const tree = currentFiberRoot(table);
@@ -1692,13 +1816,29 @@
           <label style="cursor:pointer;"><input type="checkbox" id="ref-skip-cfm" ${refSkipConfirm ? 'checked' : ''}> ⚡ 免跳確認窗(自動點確定)</label>
           <label style="cursor:pointer;color:#fde047;"><input type="checkbox" id="ref-auto-wh" ${refAutoWh ? 'checked' : ''}> 📦 倉庫連動：缺礦或裝備衝完時自動從倉庫領取同名胚子/神金鋁</label>
         </div>
+        <div data-ref-categories role="group" aria-label="精煉裝備分類" style="display:none;gap:6px;flex-wrap:wrap;"></div>
         <div data-ref-list style="display:none;max-height:210px;overflow:auto;gap:4px;padding:6px;background:#090d16;border-radius:6px;border:1px solid #1e293b;"></div>
         <div data-ref-status style="font-size:11.5px;color:#4ade80;">💡 支援 Ctrl / ⌘ 點擊勾選全部同名裝備；安全值後神工匠用技能，一般職業自動穿戴找忽克連並在結束後穿回原裝。</div>
       `;
       b.host.insertBefore(refPanel, b.table.closest('.xp-sunken') || b.table);
 
       refPanel.querySelector('#ref-toggle').onclick = () => { refOpen = !refOpen; refreshRefinePanel(); };
-      refPanel.querySelector('#ref-sel-all').onclick = () => { if (!refBusy) { readBackpackContext(true)?.rows.filter(isEligibleEquip).forEach((r) => refSelected.add(r.uid)); refOpen = true; refreshRefinePanel(); } };
+      const categories = refPanel.querySelector('[data-ref-categories]');
+      for (const [category, label] of Object.entries(refineCategories)) {
+        const button = element('button', label, '');
+        button.type = 'button';
+        button.className = 'xp-btn small';
+        button.dataset.refCategory = category;
+        button.onclick = () => { refCategory = category; refreshRefinePanel(); };
+        categories.append(button);
+      }
+      refPanel.querySelector('#ref-sel-all').onclick = () => {
+        if (refBusy) return;
+        const backpack = readBackpackContext(true);
+        if (backpack) refineRowsForPage(backpack.rows).forEach((r) => refSelected.add(r.uid));
+        refOpen = true;
+        refreshRefinePanel();
+      };
       refPanel.querySelector('#ref-sel-clr').onclick = () => { if (!refBusy) { refSelected.clear(); refreshRefinePanel(); } };
       refPanel.querySelector('#ref-mode').value = refMode;
       refPanel.querySelector('#ref-mode').onchange = (e) => { refMode = e.target.value; };
@@ -1710,18 +1850,27 @@
       refPanel.querySelector('#ref-stop').onclick = () => { refStop = true; };
     }
 
-    refPanel.querySelector('#ref-toggle').textContent = refOpen ? '🔼 收合精煉清單' : `🔨 展開精煉清單 (已選 ${refSelected.size} 件)`;
+    refPanel.querySelector('#ref-toggle').textContent =
+      `${refOpen ? '🔼 收合精煉清單' : '🔨 展開精煉清單'} (共選 ${refSelected.size} 件)`;
     for (const el of refPanel.querySelectorAll('#ref-mode,#ref-target,#ref-auto-wh,#ref-skip-cfm')) el.disabled = refBusy;
     refPanel.querySelector('#ref-stop').style.display = refBusy ? 'inline-block' : 'none';
     const listEl = refPanel.querySelector('[data-ref-list]');
     listEl.style.display = refOpen ? 'grid' : 'none';
+    refPanel.querySelector('[data-ref-categories]').style.display = refOpen ? 'flex' : 'none';
     if (!refOpen) return;
 
-    const eqRows = b.rows.filter(isEligibleEquip);
-    const sig = JSON.stringify([refBusy, [...refSelected], eqRows.map((r) => [r.uid, r.st.refine])]);
+    for (const button of refPanel.querySelectorAll('[data-ref-category]')) {
+      const active = button.dataset.refCategory === refCategory;
+      button.setAttribute('aria-pressed', String(active));
+      button.style.color = active ? '#fbbf24' : '';
+      button.style.borderColor = active ? '#fbbf24' : '';
+    }
+    const eqRows = refineRowsForPage(b.rows);
+    const sig = JSON.stringify([refCategory, refBusy, [...refSelected], eqRows.map((r) => [r.uid, r.st.refine])]);
     if (listEl.dataset.sig === sig) return;
     listEl.dataset.sig = sig;
-    listEl.innerHTML = '';
+    listEl.replaceChildren();
+    if (!eqRows.length) listEl.append(element('span', '這個分類沒有可精煉的裝備', 'color:#94a3b8'));
     eqRows.forEach((r) => {
       const lbl = document.createElement('label');
       lbl.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 6px;cursor:pointer;border-bottom:1px dashed #1e293b;';
@@ -2287,7 +2436,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.8</span>
+          <span>⚡ RO Idle 便利助手 v3.3.9</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -2573,6 +2722,8 @@
   ensureHUD(); pollChars(); runPageRouter();
   setInterval(() => {
     ensureHUD(); updateHUD();
+    const itemGroup = document.querySelector('[role="group"][aria-label="道具設定的複製與匯出匯入"]');
+    lootSyncPanels.get(itemGroup)?.();
     if (state.autoResume && !refBusy) {
       const b = [...document.querySelectorAll('button.xp-btn.primary')].find((x) => x.textContent.includes('開始掛機'));
       if (b && !b.disabled) b.click();
