@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.3.20.3
+// @version      3.3.21.1
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -1179,17 +1179,10 @@
   function refreshRareHelper() {
     for (const root of findRareRoots()) {
       let panel = rarePanels.get(root);
-      if (!panel?.isConnected) {
+      if (!panel?.isConnected || !root.contains(panel)) {
         panel = document.createElement('div');
         panel.dataset.roRareHelper = '';
         panel.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:6px 0;padding:6px 10px;background:linear-gradient(90deg,rgba(30,41,59,0.9),rgba(15,23,42,0.75));border-left:3px solid #38bdf8;border-radius:6px;font-size:11.5px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
-        for (const [text, group, next] of [['此地圖全選', 'here', true], ['非此地圖全取消', 'away', false], ['✨ 此地圖全選＋其他取消', 'sync', true]]) {
-          const b = document.createElement('button');
-          b.type = 'button'; b.className = 'xp-btn small'; b.textContent = text;
-          if (group === 'sync') b.style.cssText = 'color:#fde047;font-weight:bold;';
-          b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); fastSelectRare(root, group, next); };
-          panel.append(b);
-        }
         const autoBtn = document.createElement('button');
         autoBtn.type = 'button'; autoBtn.className = 'xp-btn small'; autoBtn.dataset.roiRareAuto = '';
         autoBtn.onclick = (e) => {
@@ -1331,7 +1324,6 @@
     || state.whMarks[id] === 'lock' || state.customProtectWords.some((word) => word && name.includes(word));
 
   function mountSettingsTools() {
-    refreshRareHelper();
     const itemGroup = document.querySelector('[role="group"][aria-label="道具設定的複製與匯出匯入"]');
     if (itemGroup && !itemGroup.querySelector('[data-roi-settings-tools]')) {
       const box = document.createElement('div');
@@ -2858,7 +2850,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.20.3 測試版</span>
+          <span>⚡ RO Idle 便利助手 v3.3.21.1 測試版</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -3138,6 +3130,7 @@
   }
 
   function runPageRouter() {
+    refreshRareHelper();
     if (document.querySelector('table.xp-table')) alignAndColorizeNativeMarkets();
     if (document.querySelector('input[aria-label="搜尋物品"]') || refPanel) refreshRefinePanel();
     const legends = [...document.querySelectorAll('fieldset > legend')].map((l) => clean(l.textContent));
@@ -3183,6 +3176,7 @@
   setInterval(() => {
     if (document.hidden) return;
     ensureHUD(); updateHUD();
+    refreshRareHelper();
     const itemGroup = document.querySelector('[role="group"][aria-label="道具設定的複製與匯出匯入"]');
     if (itemGroup) lootSyncPanels.get(itemGroup)?.();
   }, 1500);
