@@ -1,0 +1,29 @@
+name: PR userscript checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  userscript-check:
+    name: Userscript syntax and metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check JavaScript syntax
+        run: node --check ro-idle-helper.user.js
+      - name: Verify UserScript metadata
+        run: node scripts/check-userscript.cjs
