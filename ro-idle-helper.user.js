@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.3.9
+// @version      3.3.10
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -1253,7 +1253,8 @@
       return {
         maps: new Map(pack.maps.map((map) => [map.id, map])),
         monsters: new Map([...(pack.summons ?? []), ...pack.monsters].map((monster) => [monster.id, monster])),
-        items: new Map(pack.items.map((item) => [item.id, item]))
+        items: new Map(pack.items.map((item) => [item.id, item])),
+        refine: pack.refine
       };
     }).catch((error) => { lootPack = null; throw error; });
     return lootPack;
@@ -1453,11 +1454,27 @@
   const refSelected = new Set();
   const refineCategories = {
     all: '全部', weapon: '武器', armor: '鎧甲', shield: '盾牌',
-    head: '頭飾', garment: '披肩', shoes: '鞋子', accessory: '飾品', other: '其他'
+    head: '頭飾', garment: '披肩', shoes: '鞋子'
   };
   let refCategory = 'all';
-  const refineCategory = (row) => row.cat === 'weapon' ? 'weapon'
-    : row.sub.startsWith('head') ? 'head' : Object.hasOwn(refineCategories, row.sub) ? row.sub : 'other';
+  let refinePack;
+
+  function refineCategory(item) {
+    const slots = item?.slots ?? [];
+    return ['weapon', 'armor', 'shield', 'head', 'garment', 'shoes'].find((category) =>
+      category === 'head' ? slots.some((slot) => slot.startsWith('head')) : slots.includes(category));
+  }
+
+  function canRefine(stack) {
+    if (!stack || stack.locked || stack.broken || stack.unidentified) return false;
+    const item = refinePack?.items.get(stack.itemId);
+    if (item?.category !== 'equipment' || !item.refineable) return false;
+    const category = refineCategory(item);
+    const level = Math.min(4, Math.max(1, item.weaponLevel ?? 1));
+    const steps = category === 'weapon' ? refinePack.refine?.weapon?.[level] : refinePack.refine?.armor;
+    const plus = stack.refine ?? 0;
+    return Boolean(category && plus < 10 && steps?.[plus]);
+  }
   let refPanel = null, refOpen = false, refBusy = false, refStop = false, refTargetPlus = 6, refMode = 'round_robin', refSkipConfirm = true, refAutoWh = true;
   let bagMemo = null;
   let visitingWarehouse = false;
@@ -1508,10 +1525,10 @@
     return val;
   }
 
-  const isEligibleEquip = (r) => r.st && (r.cat === 'weapon' || r.cat === 'armor') && !r.st.locked && !r.st.broken && !r.st.unidentified;
+  const isEligibleEquip = (r) => canRefine(r.st);
 
   const refineRowsForPage = (rows) => rows.filter((row) =>
-    isEligibleEquip(row) && (refCategory === 'all' || refineCategory(row) === refCategory));
+    isEligibleEquip(row) && (refCategory === 'all' || refineCategory(refinePack.items.get(row.st.itemId)) === refCategory));
 
   function findNativeDetailBtn(table, uid, matcher) {
     const tree = currentFiberRoot(table);
@@ -1635,7 +1652,7 @@
         if (!b || document.hidden) throw Error('已離開背包頁面');
 
         let pool = b.rows.filter((r) => isEligibleEquip(r) && runUids.has(r.uid) && refSelected.has(r.uid));
-        const limitPlus = modeType === 'safe_only' ? Infinity : refTargetPlus;
+        const limitPlus = modeType === 'safe_only' ? 10 : refTargetPlus;
         pool = pool.filter((r) => !skipped.has(r.uid) && (r.st.refine || 0) < limitPlus);
 
         if (!pool.length && refAutoWh) {
@@ -1648,7 +1665,7 @@
               b = readBackpackContext(true);
               const added = b?.s.inventory.filter((x) => !before.has(x.uid) && trackedItemIds.has(x.itemId)) || [];
               if (added.map((x) => x.itemId).sort((a, b) => a - b).join(',') === expected) {
-                for (const x of added) { runUids.add(x.uid); refSelected.add(x.uid); }
+                for (const x of added.filter(canRefine)) { runUids.add(x.uid); refSelected.add(x.uid); }
                 received = true;
                 break;
               }
@@ -1807,7 +1824,7 @@
             <option value="round_robin">🔄 輪流齊頭衝 (+1輪流)</option>
             <option value="single_focus">🎯 單件直衝到底</option>
           </select></label>
-          <label style="color:#fbbf24;font-weight:bold;">目標 +<input type="number" id="ref-target" class="xp-input" value="${refTargetPlus}" min="1" max="20" style="width:48px;"></label>
+          <label style="color:#fbbf24;font-weight:bold;">目標 +<input type="number" id="ref-target" class="xp-input" value="${refTargetPlus}" min="1" max="10" style="width:48px;"></label>
           <button type="button" class="xp-btn small" id="ref-run-safe" style="background:linear-gradient(135deg,#0284c7,#0369a1);color:#fff;border:none;">🛡️ 所選衝到安全值</button>
           <button type="button" class="xp-btn small" id="ref-run-target" style="background:linear-gradient(135deg,#d97706,#b45309);color:#fff;font-weight:bold;border:none;">🚀 啟動衝到目標 +N</button>
           <button type="button" class="xp-btn small" id="ref-stop" style="background:#dc2626;color:#fff;display:none;border:none;">⏹ 停止</button>
@@ -1822,7 +1839,26 @@
       `;
       b.host.insertBefore(refPanel, b.table.closest('.xp-sunken') || b.table);
 
-      refPanel.querySelector('#ref-toggle').onclick = () => { refOpen = !refOpen; refreshRefinePanel(); };
+      const loadRefineData = async () => {
+        if (refinePack) return;
+        const status = refPanel.querySelector('[data-ref-status]');
+        status.textContent = '正在讀取遊戲精煉資料…';
+        try {
+          const pack = await loadLootPack();
+          if (!pack.refine) throw Error('找不到精煉規則');
+          refinePack = pack;
+          status.textContent = '支援 Ctrl / ⌘ 點擊勾選全部同名裝備。';
+          refreshRefinePanel();
+        } catch {
+          status.textContent = '無法讀取遊戲精煉資料，請重新展開清單重試。';
+        }
+      };
+      void loadRefineData();
+      refPanel.querySelector('#ref-toggle').onclick = () => {
+        refOpen = !refOpen;
+        if (refOpen) void loadRefineData();
+        refreshRefinePanel();
+      };
       const categories = refPanel.querySelector('[data-ref-categories]');
       for (const [category, label] of Object.entries(refineCategories)) {
         const button = element('button', label, '');
@@ -1842,7 +1878,7 @@
       refPanel.querySelector('#ref-sel-clr').onclick = () => { if (!refBusy) { refSelected.clear(); refreshRefinePanel(); } };
       refPanel.querySelector('#ref-mode').value = refMode;
       refPanel.querySelector('#ref-mode').onchange = (e) => { refMode = e.target.value; };
-      refPanel.querySelector('#ref-target').onchange = (e) => { refTargetPlus = Math.min(20, Math.max(1, parseInt(e.target.value, 10) || 6)); e.target.value = refTargetPlus; };
+      refPanel.querySelector('#ref-target').onchange = (e) => { refTargetPlus = Math.min(10, Math.max(1, parseInt(e.target.value, 10) || 6)); e.target.value = refTargetPlus; };
       refPanel.querySelector('#ref-skip-cfm').onchange = (e) => { refSkipConfirm = e.target.checked; };
       refPanel.querySelector('#ref-auto-wh').onchange = (e) => { refAutoWh = e.target.checked; };
       refPanel.querySelector('#ref-run-safe').onclick = () => runHybridRefine('safe_only');
@@ -1850,6 +1886,10 @@
       refPanel.querySelector('#ref-stop').onclick = () => { refStop = true; };
     }
 
+    if (refinePack && refSelected.size) {
+      const eligible = new Set(b.s.inventory.filter(canRefine).map((stack) => stack.uid));
+      for (const uid of refSelected) if (!eligible.has(uid)) refSelected.delete(uid);
+    }
     refPanel.querySelector('#ref-toggle').textContent =
       `${refOpen ? '🔼 收合精煉清單' : '🔨 展開精煉清單'} (共選 ${refSelected.size} 件)`;
     for (const el of refPanel.querySelectorAll('#ref-mode,#ref-target,#ref-auto-wh,#ref-skip-cfm')) el.disabled = refBusy;
@@ -1859,18 +1899,21 @@
     refPanel.querySelector('[data-ref-categories]').style.display = refOpen ? 'flex' : 'none';
     if (!refOpen) return;
 
+    const available = new Set(b.rows.filter(isEligibleEquip).map((row) => refineCategory(refinePack.items.get(row.st.itemId))));
+    if (!available.has(refCategory)) refCategory = 'all';
     for (const button of refPanel.querySelectorAll('[data-ref-category]')) {
+      button.hidden = button.dataset.refCategory !== 'all' && !available.has(button.dataset.refCategory);
       const active = button.dataset.refCategory === refCategory;
       button.setAttribute('aria-pressed', String(active));
       button.style.color = active ? '#fbbf24' : '';
       button.style.borderColor = active ? '#fbbf24' : '';
     }
     const eqRows = refineRowsForPage(b.rows);
-    const sig = JSON.stringify([refCategory, refBusy, [...refSelected], eqRows.map((r) => [r.uid, r.st.refine])]);
+    const sig = JSON.stringify([!!refinePack, refCategory, refBusy, [...refSelected], eqRows.map((r) => [r.uid, r.st.refine])]);
     if (listEl.dataset.sig === sig) return;
     listEl.dataset.sig = sig;
     listEl.replaceChildren();
-    if (!eqRows.length) listEl.append(element('span', '這個分類沒有可精煉的裝備', 'color:#94a3b8'));
+    if (refinePack && !eqRows.length) listEl.append(element('span', '沒有可精煉的裝備', 'color:#94a3b8'));
     eqRows.forEach((r) => {
       const lbl = document.createElement('label');
       lbl.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 6px;cursor:pointer;border-bottom:1px dashed #1e293b;';
@@ -2436,7 +2479,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.9</span>
+          <span>⚡ RO Idle 便利助手 v3.3.10</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
