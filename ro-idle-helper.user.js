@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.3.13
+// @version      3.3.14
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -864,10 +864,10 @@
     dlg.innerHTML = `
       <div style="font-weight:bold;font-size:15px;color:#fbbf24;border-bottom:1px solid #334155;padding-bottom:8px;margin-bottom:8px;">🛡️ 倉庫待售清單核對（共 ${items.length} 項）</div>
       <div style="max-height:48vh;overflow:auto;margin-bottom:10px;border:1px solid #334155;border-radius:6px;padding:6px 10px;background:#090d16;"></div>
-      <div style="font-size:12px;color:#cbd5e1;margin-bottom:10px;"><span data-sale-caption></span>｜核對無誤後請點「清單無誤」，接著<b>再親自點一次「直接賣掉」</b>即可售出。</div>
+      <div style="font-size:12px;color:#cbd5e1;margin-bottom:10px;"><span data-sale-caption></span>｜核對無誤後請點「清單無誤」，接著按「確認出售」，遊戲仍會顯示原生販售確認。</div>
       <div style="display:flex;justify-content:flex-end;gap:8px;">
         <button type="button" class="xp-btn small" id="wh-rev-cancel">取消</button>
-        <button type="button" class="xp-btn small" id="wh-rev-ok" style="background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;font-weight:bold;border:none;">✅ 清單無誤 (放行 2 分鐘)</button>
+        <button type="button" class="xp-btn small" id="wh-rev-ok" style="background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;font-weight:bold;border:none;">確認出售</button>
       </div>
     `;
     const itemsBox = dlg.children[1];
@@ -880,11 +880,11 @@
     document.body.appendChild(dlg);
     dlg.querySelector('#wh-rev-cancel').onclick = () => { whSaleApproval = null; dlg.close(); dlg.remove(); };
     dlg.querySelector('#wh-rev-ok').onclick = () => {
-      whSaleApproval = { sig, saleBtn, until: Date.now() + 120000 };
+      whSaleApproval = { sig, saleBtn, until: Date.now() + 15000 };
+      saleBtn.click();
       dlg.close(); dlg.remove();
       const st = f.querySelector('[data-ro-wh-status]');
-      if (st) st.textContent = '✅ 已核對放行！請再點一次「直接賣掉」完成販售';
-      saleBtn.focus();
+      if (st) st.textContent = '已送出遊戲原生販售確認';
     };
     dlg.showModal();
   }
@@ -998,7 +998,7 @@
         }
         const approval = whSaleApproval;
         whSaleApproval = null;
-        if (e.isTrusted && approval?.saleBtn === btn && Date.now() <= approval.until && approval.sig === review.sig) return;
+        if (approval?.saleBtn === btn && Date.now() <= approval.until && approval.sig === review.sig) return;
         e.preventDefault(); e.stopImmediatePropagation();
         showWarehouseSaleReview(f, btn, review.items, review.sig);
         return;
@@ -1548,7 +1548,7 @@
     throw Error('穿戴裝備逾時');
   }
 
-  async function tryWithdrawFromWarehouse(wantedItemIds, targetPlusLimit, setStatus, limitsById) {
+  async function tryWithdrawFromWarehouse(wantedItemIds, targetPlusLimit, setStatus, limitsById, maxItems = 15) {
     const findWhField = () => [...document.querySelectorAll('fieldset')].find((f) => /^倉庫(?:\s*[（(]|$)/.test(clean([...f.children].find((c) => c.tagName === 'LEGEND')?.textContent)) && visible(f));
     let switchedTab = null;
     const selected = new Map();
@@ -1579,7 +1579,23 @@
         cb.click();
         selected.set(cb, id);
         await sleep(25);
-        if (selected.size >= 15) break;
+        if (maxItems === 1) {
+          const amount = li.querySelector('input[type="number"]');
+          const stackText = clean(li.textContent).match(/×\s*([\d,]+)/)?.[1];
+          const stack = stackText ? Number(stackText.replace(/,/g, '')) : NaN;
+          if (amount) {
+            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+            if (!setter) throw Error('無法設定領料數量，已停止');
+            setter.call(amount, '1');
+            amount.dispatchEvent(new Event('input', { bubbles: true }));
+            amount.dispatchEvent(new Event('change', { bubbles: true }));
+            await sleep(100);
+            if (!amount.isConnected || Number(amount.value) !== 1) throw Error('遊戲未接受單件領料數量，已停止');
+          } else if (stack !== 1) {
+            throw Error('無法確認單件領料數量，已停止以避免取出整疊');
+          }
+        }
+        if (selected.size >= maxItems) break;
       }
       if (!selected.size) return [];
       const boxes = checked();
@@ -1681,8 +1697,18 @@
             setStatus(`⚡ 一鍵安全值：【${target.name}】+${curPlus} ➔ +${safeTarget}...`);
             if (refStop || document.hidden) throw Error('已中止精煉');
             let confirmed = false;
-            const origConfirm = page.confirm;
-            try { page.confirm = () => true; safeBtn.click(); } finally { page.confirm = origConfirm; }
+            const originalConfirm = page.confirm;
+            let accepted = true;
+            try {
+              page.confirm = (message) => {
+                accepted = originalConfirm.call(page, message);
+                return accepted;
+              };
+              safeBtn.click();
+            } finally {
+              page.confirm = originalConfirm;
+            }
+            if (!accepted) throw Error('已取消原生安全精煉');
             for (let i = 0; i < 60; i++) {
               await sleep(100);
               b = readBackpackContext(true);
@@ -1716,7 +1742,7 @@
           const level = Math.min(4, Math.max(1, item.weaponLevel ?? 1));
           const steps = item.slots.includes('weapon') ? refinePack.refine.weapon[level] : refinePack.refine.armor;
           const material = steps?.[curPlus]?.material;
-          const pulledOres = material ? await tryWithdrawFromWarehouse(new Set([material]), limitPlus, setStatus) : [];
+          const pulledOres = material ? await tryWithdrawFromWarehouse(new Set([material]), limitPlus, setStatus, null, 1) : [];
           if (pulledOres.length) {
             b = await selectBagItemRow(uid);
             if (!b || refStop || document.hidden) throw Error('已離開背包或中止精煉');
@@ -2353,7 +2379,7 @@
 
   const mktSwitch = document.createElement('span'); mktSwitch.dataset.roiBrowseSwitch = ''; mktSwitch.style.cssText = 'display:inline-flex;gap:4px;margin-left:8px;';
   const bNat = document.createElement('button'); bNat.className = 'xp-btn small'; bNat.textContent = '原生攤位'; bNat.onclick = () => { mktView = false; stopMktAuto(); syncMktMount(); };
-  const bCat = document.createElement('button'); bCat.className = 'xp-btn small'; bCat.textContent = '📊 商品分類'; bCat.onclick = () => { mktView = true; syncMktMount(); startMktAuto(); };
+  const bCat = document.createElement('button'); bCat.className = 'xp-btn small'; bCat.textContent = '📊 商品分類'; bCat.onclick = () => { mktView = true; syncMktMount(); };
   mktSwitch.append(bNat, bCat);
 
   function findCityVendingFieldset() {
@@ -2475,7 +2501,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.13</span>
+          <span>⚡ RO Idle 便利助手 v3.3.14</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
