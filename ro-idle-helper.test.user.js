@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.3.20.1
+// @version      3.3.20.2
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -1277,12 +1277,14 @@
   }
 
   let lootPack;
+  let resolvedLootPack = null;
   let PACK_ITEMS_MAP = null;
   function ensurePackItemsLoaded() {
     if (PACK_ITEMS_MAP) return;
     try { void loadLootPack().catch(() => {}); } catch {}
   }
   function loadLootPack() {
+    if (resolvedLootPack) return Promise.resolve(resolvedLootPack);
     const link = document.querySelector('link[rel="modulepreload"][href^="/assets/pack-"]');
     if (!link) throw Error('找不到遊戲的地圖資料');
     lootPack ??= import(link.href).then((module) => {
@@ -1293,13 +1295,14 @@
       for (const it of pack.items) {
         if (it?.id && it.name && !ITEM_NAME_CACHE.has(it.id)) ITEM_NAME_CACHE.set(it.id, clean(it.name));
       }
-      return {
+      resolvedLootPack = {
         maps: new Map(pack.maps.map((map) => [map.id, map])),
         monsters: new Map([...(pack.summons ?? []), ...pack.monsters].map((monster) => [monster.id, monster])),
         items: itemsMap,
         refine: pack.refine
       };
-    }).catch((error) => { lootPack = null; throw error; });
+      return resolvedLootPack;
+    }).catch((error) => { lootPack = null; resolvedLootPack = null; throw error; });
     return lootPack;
   }
 
@@ -1455,24 +1458,59 @@
 
     const monSel = document.querySelector('select[aria-label="怪物控制：加入怪物"]');
     const monHost = monSel?.parentElement;
-    const monsterDraft = () => getCommittedProps(monSel, (x) => typeof x.update === 'function' && x.draft?.targets && x.draft?.escape);
-    const mapMonsterIds = () => {
-      const fromProps = getCommittedProps(monSel, (x) => Array.isArray(x.mapMonsters) || Array.isArray(x.monsterIds));
-      const raw = fromProps?.mapMonsters || fromProps?.monsterIds
-        || findRareRoots().map((root) => getRareContext(root)?.p.monsterIds).find(Array.isArray);
-      return raw && [...new Set(raw.map((m) => Number(typeof m === 'object' ? m.id ?? m.monsterId : m)))]
-        .filter((id) => Number.isSafeInteger(id) && id > 0);
+    const findMonsterProps = (predicate) => {
+      if (!monSel?.isConnected) return null;
+      const direct = getCommittedProps(monSel, predicate);
+      if (direct) return direct;
+      const key = Object.keys(monSel).find((name) => name.startsWith('__reactFiber$'));
+      let fiber = key && monSel[key];
+      if (!fiber) return null;
+      let root = fiber;
+      while (root.return) root = root.return;
+      if (root.stateNode?.current !== root) fiber = fiber.alternate;
+      for (let depth = 0; fiber && depth < 40; depth++, fiber = fiber.return) {
+        if (predicate(fiber.memoizedProps)) return fiber.memoizedProps;
+        if (typeof fiber.type !== 'function') continue;
+        let hook = fiber.memoizedState;
+        for (let count = 0; hook && count < 200; count++, hook = hook.next) {
+          if (predicate(hook.memoizedState)) return hook.memoizedState;
+        }
+      }
+      return null;
+    };
+    const monsterDraft = () => findMonsterProps((x) => Boolean(x && typeof x.update === 'function' &&
+      (x.draft?.targets || x.draft?.escape || Array.isArray(x.draft?.monsterRules))));
+    const mapMonsterIds = (draft) => {
+      const map = resolvedLootPack?.maps.get(draft?.lockMap);
+      let raw = map ? [...(map.spawns ?? []), ...(map.timed ?? [])].map((spawn) => spawn.monsterId) : null;
+      if (!raw) {
+        const props = findMonsterProps((x) => Array.isArray(x?.mapMonsters) || Array.isArray(x?.monsterIds) ||
+          Array.isArray(x?.draft?.mapMonsters) || Array.isArray(x?.draft?.monsterIds));
+        raw = props?.mapMonsters ?? props?.monsterIds ?? props?.draft?.mapMonsters ?? props?.draft?.monsterIds;
+      }
+      return Array.isArray(raw) ? [...new Set(raw.map((m) => Number(typeof m === 'object' ? m?.id ?? m?.monsterId : m)))]
+        .filter((id) => Number.isSafeInteger(id) && id > 0) : null;
     };
     if (monHost && !monHost.querySelector('[data-roi-mon-btn]')) {
       const addBtn = (txt, fn) => {
         const b = document.createElement('button'); b.type = 'button'; b.className = 'xp-btn small'; b.dataset.roiMonBtn = ''; b.textContent = txt;
         b.onclick = fn; monHost.append(b);
       };
-      addBtn('🔄 同步本圖怪物', () => {
+      addBtn('🔄 同步本圖怪物', async () => {
         const status = monHost.querySelector('[data-roi-mon-status]') || document.createElement('span');
         status.dataset.roiMonStatus = '';
         if (!status.isConnected) monHost.append(status);
-        const p = monsterDraft(), ids = mapMonsterIds();
+        const initial = monsterDraft();
+        if (!initial) { status.textContent = '無法讀取設定草稿，請重新開啟掛機設定'; return; }
+        const mapId = initial.draft.lockMap;
+        try { await loadLootPack(); }
+        catch (error) {
+          if (mapId) { status.textContent = '無法載入地圖資料：' + error.message; return; }
+        }
+        if (!monSel.isConnected) return;
+        const p = monsterDraft();
+        if (!p || p.draft.lockMap !== mapId) { status.textContent = '地圖或設定已變動，請重試'; return; }
+        const ids = mapMonsterIds(p.draft);
         if (!p || !ids) { status.textContent = '無法讀取本圖怪物清單或設定草稿，請重新開啟掛機設定'; return; }
         if (!ids.length) { status.textContent = '目前地圖沒有可同步的怪物'; return; }
         const current = readMonsterRules(p.draft);
@@ -2105,40 +2143,77 @@
 
   const tooltip = document.createElement('div');
   tooltip.id = 'roi-item-hover-tooltip';
-  tooltip.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;display:none;width:320px;background:linear-gradient(160deg,rgba(15,23,42,0.98),rgba(23,37,84,0.96));color:#f8fafc;border:1.5px solid #38bdf8;border-radius:10px;padding:11px 13px;box-shadow:0 14px 34px rgba(0,0,0,0.92);font-size:12px;backdrop-filter:blur(10px);line-height:1.45;';
+  tooltip.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;display:none;width:320px;box-sizing:border-box;max-width:calc(100vw - 12px);max-height:calc(100vh - 12px);overflow:auto;overscroll-behavior:contain;overflow-wrap:anywhere;background:linear-gradient(160deg,#0f172a,#172554);color:#f8fafc;border:1.5px solid #38bdf8;border-radius:10px;padding:11px 13px;box-shadow:0 12px 28px rgba(0,0,0,0.88);font-size:12px;line-height:1.45;contain:layout style;will-change:transform;';
   document.body.appendChild(tooltip);
-  let hoverPoint;
-  function positionTooltip() {
-    if (!hoverPoint || tooltip.style.display !== 'block') return;
-    const {x,y} = hoverPoint;
-    const {width,height} = tooltip.getBoundingClientRect();
+  let hoverPoint = null;
+  let tooltipVisible = false;
+  let tooltipSize = null;
+  let tooltipScrollable = false;
+  let isScrollingPage = false;
+  let scrollIdleTimer = null;
+  let hoverRafId = 0;
+  let pendingHoverEvent = null;
+
+  function hideTooltip() {
+    if (!tooltipVisible) return;
+    tooltipVisible = false;
+    tooltip.style.display = 'none';
+    lastHoveredTarget = null;
+  }
+
+  function positionTooltip(recalcSize = false) {
+    if (!hoverPoint || !tooltipVisible) return;
+    if (recalcSize || !tooltipSize) {
+      const rect = tooltip.getBoundingClientRect();
+      tooltipSize = { width: rect.width, height: rect.height };
+      tooltipScrollable = tooltip.scrollHeight > tooltip.clientHeight + 1;
+      tooltip.style.pointerEvents = tooltipScrollable ? 'auto' : 'none';
+    }
+    const { x, y } = hoverPoint;
+    const { width, height } = tooltipSize;
     const edge = 6;
-    const place = (point,size,space) => {
+    const place = (point, size, space) => {
       const after = point + 12;
-      const preferred = after + size <= space-edge ? after : point-12-size;
-      return Math.max(edge, Math.min(space-edge-size, preferred));
+      const preferred = after + size <= space - edge ? after : point - 12 - size;
+      return Math.max(edge, Math.min(space - edge - size, preferred));
     };
-    tooltip.style.left = place(x,width,innerWidth)+'px';
-    tooltip.style.top = place(y,height,innerHeight)+'px';
-    tooltip.style.pointerEvents = tooltip.scrollHeight > tooltip.clientHeight ? 'auto' : 'none';
+    const left = Math.round(place(x, width, innerWidth));
+    const top = Math.round(place(y, height, innerHeight));
+    tooltip.style.transform = `translate3d(${left}px,${top}px,0)`;
   }
+
   function showTooltip(e) {
-    hoverPoint = {x:e.clientX,y:e.clientY};
-    tooltip.style.display = 'block';
-    tooltip.scrollTop = 0;
-    positionTooltip();
+    hoverPoint = { x: e.clientX, y: e.clientY };
+    if (!tooltipVisible) {
+      tooltipVisible = true;
+      tooltip.style.display = 'block';
+    }
+    if (tooltipScrollable) tooltip.scrollTop = 0;
+    positionTooltip(true);
   }
-  tooltip.style.cssText += ';box-sizing:border-box;max-width:calc(100vw - 12px);max-height:calc(100vh - 12px);overflow:auto;overscroll-behavior:contain;overflow-wrap:anywhere';
-  window.addEventListener('resize', positionTooltip);
-  window.addEventListener('scroll', e => {
-    if (!tooltip.contains(e.target instanceof Node ? e.target : null)) tooltip.style.display = 'none';
-  }, true);
+
+  window.addEventListener('resize', () => {
+    tooltipSize = null;
+    positionTooltip(true);
+  }, { passive: true });
+  window.addEventListener('scroll', (e) => {
+    if (tooltip.contains(e.target instanceof Node ? e.target : null)) return;
+    isScrollingPage = true;
+    clearTimeout(scrollIdleTimer);
+    scrollIdleTimer = setTimeout(() => { isScrollingPage = false; }, 110);
+    if (hoverRafId) { cancelAnimationFrame(hoverRafId); hoverRafId = 0; pendingHoverEvent = null; }
+    hideTooltip();
+  }, { capture: true, passive: true });
 
   const CAT_TABS = { all: '全部', favorites: '★ 收藏', card: '🃏 卡片', weapon: '🗡️ 武器', armor: '🛡️ 防具/飾品', consumable: '🧪 消耗品', material: '🪨 材料' };
 
   // ==================== 【核心升級 2】使用安全 element() 建構露天裝備完整數值、精煉加成與插卡功能懸浮卡 ====================
+  const descLinesCache = new Map();
   function formatItemDescLines(rawDesc, currentRefine = 0) {
     if (!rawDesc) return [];
+    const cacheKey = `${currentRefine}|${Array.isArray(rawDesc) ? rawDesc.join('\n') : rawDesc}`;
+    const cached = descLinesCache.get(cacheKey);
+    if (cached) return cached;
     const chunks = Array.isArray(rawDesc)
       ? rawDesc.map((x) => clean(x))
       : String(rawDesc).split(/\r?\n|\s*｜\s*/).map((x) => clean(x));
@@ -2174,6 +2249,8 @@
         lines.push({ text: part, type: 'effect' });
       }
     }
+    if (descLinesCache.size > 600) descLinesCache.clear();
+    descLinesCache.set(cacheKey, lines);
     return lines;
   }
 
@@ -2580,14 +2657,37 @@
 
   // 全域懸浮監聽：同時支援「商品分類 ([data-rkey])」與「原生露天攤位/背包/倉庫 ([data-ro-hover-id])」
   let lastHoveredTarget = null;
-  document.addEventListener('mouseover', (e) => {
-    if (!(e.target instanceof Element)) return;
-    if (tooltip.contains(e.target)) return;
-    const mktRow = e.target.closest('[data-rkey]');
+  let marketLookupCache = null;
+  let marketLookupRef = null;
+  function getMarketLookup() {
+    if (marketLookupCache && marketLookupRef?.listings === mktListings && marketLookupRef?.crossSize === mktCrossMap.size) {
+      return marketLookupCache;
+    }
+    const map = new Map();
+    const pushItem = (item) => {
+      const k = `${item.id}|${item.refine}|${Number(item.price)}`;
+      let arr = map.get(k);
+      if (!arr) { arr = []; map.set(k, arr); }
+      arr.push(item);
+    };
+    for (const item of mktListings) pushItem(item);
+    for (const item of mktCrossMap.values()) pushItem(item);
+    marketLookupCache = map;
+    marketLookupRef = { listings: mktListings, crossSize: mktCrossMap.size };
+    return map;
+  }
+
+  function processHoverEvent(e) {
+    if (isScrollingPage) return;
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+    if (tooltip.contains(target)) return;
+
+    const mktRow = target.closest('[data-rkey]');
     if (mktRow) {
-      if (lastHoveredTarget === mktRow && tooltip.style.display === 'block') {
+      if (lastHoveredTarget === mktRow && tooltipVisible) {
         hoverPoint = { x: e.clientX, y: e.clientY };
-        positionTooltip();
+        positionTooltip(false);
         return;
       }
       const r = mktKeyMap.get(mktRow.dataset.rkey);
@@ -2598,17 +2698,18 @@
         return;
       }
     }
-    const natRow = e.target.closest('[data-ro-hover-id]');
-    if (natRow && (e.target.closest('img, button[aria-label$="的物品資訊"], a, td') || natRow.closest('table.roi-market-table'))) {
-      if (lastHoveredTarget === natRow && tooltip.style.display === 'block') {
+
+    const natRow = target.closest('[data-ro-hover-id]');
+    if (natRow && (target.closest('img, button[aria-label$="的物品資訊"], a, td') || natRow.closest('table.roi-market-table'))) {
+      if (lastHoveredTarget === natRow && tooltipVisible) {
         hoverPoint = { x: e.clientX, y: e.clientY };
-        positionTooltip();
+        positionTooltip(false);
         return;
       }
       lastHoveredTarget = natRow;
       const id = Number(natRow.dataset.roHoverId);
       const refine = Number(natRow.dataset.roHoverRefine) || 0;
-      const cards = (natRow.dataset.roHoverCards || '').split(',').map(Number).filter(Boolean);
+      const cards = natRow.dataset.roHoverCards ? natRow.dataset.roHoverCards.split(',').map(Number).filter(Boolean) : [];
       const rawName = natRow.dataset.roHoverName || ITEM_NAME_CACHE.get(id) || `道具 #${id}`;
       const priceCell = natRow.querySelector('[data-roi-market-col="price"]');
       const priceText = priceCell ? clean(roiPriceText(priceCell)) : '';
@@ -2620,20 +2721,24 @@
       const stack = readNearbyItemStack(natRow, id, refine);
       const stackCards = Array.isArray(stack?.cards) ? stack.cards.filter(Boolean) : null;
 
-      // 其次比對本地攤位與跨城補查快取
-      const inMarket = Boolean(natRow.closest('table.roi-market-table') || isStallContext(natRow));
-      const allPool = inMarket ? [...mktListings, ...mktCrossMap.values()] : [];
-      const candidates = price !== undefined && allPool.length
-        ? allPool.filter((item) => item.id === id && item.refine === refine && Number(item.price) === price)
-        : [];
-      const names = candidates.filter((item) => clean(item.name) === rawName || clean(item.base) === rawName.replace(/^\+\s*\d+\s*/, '').replace(/\s*\[\d+\].*$/, '').trim());
-      const matches = names.length ? names : candidates;
+      // 其次比對 O(1) 索引後的本地攤位與跨城補查快取
+      let matches = [];
+      if (price !== undefined && (natRow.closest('table.roi-market-table') || isStallContext(natRow))) {
+        const candidates = getMarketLookup().get(`${id}|${refine}|${price}`) || [];
+        if (candidates.length > 1) {
+          const stripped = rawName.replace(/^\+\s*\d+\s*/, '').replace(/\s*\[\d+\].*$/, '').trim();
+          const names = candidates.filter((item) => clean(item.name) === rawName || clean(item.base) === stripped);
+          matches = names.length ? names : candidates;
+        } else {
+          matches = candidates;
+        }
+      }
       const listing = matches[0];
-      const consistent = Boolean(listing && matches.every((item) => item.specKey === listing.specKey));
+      const consistent = Boolean(listing && (matches.length === 1 || matches.every((item) => item.specKey === listing.specKey)));
 
       const finalCards = stackCards ?? (cardsKnown ? cards : consistent ? listing.cards : []);
       const finalCardsKnown = stackCards !== null || cardsKnown || consistent;
-      const finalSlots = stack?.slots ?? (matches.length && matches.every((item) => item.slots === listing.slots) ? listing.slots : undefined);
+      const finalSlots = stack?.slots ?? (matches.length && (matches.length === 1 || matches.every((item) => item.slots === listing.slots)) ? listing.slots : undefined);
       const extraTags = stack ? [
         stack.forged ? '鍛造武器' : '',
         stack.element ? `屬性:${stack.element}` : '',
@@ -2658,8 +2763,20 @@
       showTooltip(e);
       return;
     }
-    if (tooltip.style.display === 'block') { tooltip.style.display = 'none'; lastHoveredTarget = null; }
-  });
+    hideTooltip();
+  }
+
+  document.addEventListener('mouseover', (e) => {
+    if (isScrollingPage) return;
+    pendingHoverEvent = e;
+    if (hoverRafId) return;
+    hoverRafId = requestAnimationFrame(() => {
+      hoverRafId = 0;
+      const ev = pendingHoverEvent;
+      pendingHoverEvent = null;
+      if (ev) processHoverEvent(ev);
+    });
+  }, { passive: true });
 
   mktRowsBox.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-act]'); if (!btn) return;
@@ -2774,7 +2891,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.20 測試版</span>
+          <span>⚡ RO Idle 便利助手 v3.3.20.2 測試版</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
