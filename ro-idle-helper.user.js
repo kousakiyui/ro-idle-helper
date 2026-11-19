@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.3.19
+// @version      3.3.20
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -313,18 +313,27 @@
 
       let plus = refM ? Number(refM[1]) : 0;
       let cards = [];
+      let cardsKnown = false;
       let extraStats = null;
       if (row.tagName === 'TR' && bagMemo?.val) {
         const bRow = bagMemo.val.rows.find((x) => x.row === row);
         if (bRow?.st) {
           plus = bRow.st.refine || plus;
           cards = (bRow.st.cards || []).filter(Boolean);
+          cardsKnown = true;
           extraStats = bRow.st;
         }
       }
-      if (!cards.length) {
-        const matchedMkt = mktListings.find((x) => x.id === itemId && x.refine === plus);
-        if (matchedMkt?.cards?.length) cards = matchedMkt.cards;
+      const inStall = isStallContext(row);
+      if (inStall || (row.tagName === 'LI' && row.closest('fieldset > ul'))) {
+        const { cat } = classifyItem(itemId);
+        if (cat === 'weapon' || cat === 'armor') {
+          const stack = readNearbyItemStack(row, itemId, plus);
+          if (stack) {
+            cards = stack.cards.filter(Boolean);
+            cardsKnown = true;
+          }
+        }
       }
       if (extraStats && (extraStats.atk || extraStats.def || extraStats.matk || extraStats.weaponLevel || extraStats.description)) {
         recordItemDetail(itemId, {
@@ -339,10 +348,9 @@
       row.dataset.roHoverId = String(itemId);
       row.dataset.roHoverRefine = String(plus);
       row.dataset.roHoverName = rawTxt;
-      if (cards.length) row.dataset.roHoverCards = cards.join(',');
+      if (cardsKnown) row.dataset.roHoverCards = cards.join(',');
       else delete row.dataset.roHoverCards;
 
-      const inStall = isStallContext(row);
       let badge = row.querySelector('[data-ro-ref-annotated]');
 
       if (inStall) {
@@ -438,6 +446,22 @@
     }
   }
 
+  function readNearbyItemStack(row, id, refine) {
+    const key = Object.keys(row).find((name) => name.startsWith('__reactFiber$'));
+    let fiber = key && row[key];
+    if (!fiber) return null;
+    let root = fiber;
+    while (root.return) root = root.return;
+    if (root.stateNode?.current !== root) fiber = fiber.alternate;
+    for (let depth = 0; fiber && depth < 8; depth++, fiber = fiber.return) {
+      const props = fiber.memoizedProps;
+      const stack = [props?.item, props?.stack, props].find((item) =>
+        Number(item?.itemId) === id && Number(item.refine ?? 0) === refine && Array.isArray(item.cards));
+      if (stack) return stack;
+    }
+    return null;
+  }
+
   const fiberRouteMap = new WeakMap();
   function getCommittedProps(el, matcher) {
     const root = currentFiberRoot(el);
@@ -526,7 +550,7 @@
   }
 
   async function triggerNativeTownSearch(rawName) {
-    const baseName = clean(rawName).replace(/^\+\s*\d+\s*/, '').replace(/\s*\[\d+\]\s*$/, '').replace(/（.*?）|\(.*?\)/g, '').trim();
+    const baseName = clean(rawName).replace(/（.*?）|\(.*?\)/g, '').replace(/^\+\s*\d+\s*/, '').replace(/\s*\[\d+\]\s*$/, '').trim();
     if (!baseName) return;
     if (mktView) { mktView = false; syncMktMount(); await sleep(50); }
 
@@ -672,11 +696,17 @@
           if (stopped.length) alertUser('🚨 分身停機警告', `${stopped.map((c) => c.name).join('、')} 已停止掛機`, true);
         }
         state.chars = d.characters;
-        state.myCharIds = new Set(d.characters.map((c) => c.id));
+        state.myCharIds = new Set(d.characters.map((c) => Number(c.id)));
+        state.charRosterLoaded = true;
+        for (const cache of [state.charZenyMap, state.initZenyMap]) {
+          for (const id of Object.keys(cache)) {
+            if (!state.myCharIds.has(Number(id))) delete cache[id];
+          }
+        }
         renderChars();
       } else if (d.characterId && d.snapshot?.character) {
         const cid = Number(d.characterId);
-        if (state.myCharIds.size && !state.myCharIds.has(cid)) return;
+        if (state.charRosterLoaded && !state.myCharIds.has(cid)) return;
         const ch = d.snapshot.character;
         if (foreground) {
           state.activeCharId = cid;
@@ -735,7 +765,7 @@
     if (!t || state.processedLines.get(el) === t) return;
     state.processedLines.set(el, t);
     if (/(?:卡片|稀有)!/.test(t)) {
-      state.rares.unshift(`[${new Date().toLocaleTimeString()}] ✨ ${t.slice(0, 42)}`);
+      state.rares.unshift(`[${new Date().toLocaleTimeString()}] ✨ ${t}`);
       if (state.rares.length > rareLimit) state.rares.pop();
       state.rareRev++;
       alertUser('✨ 稀有掉落', t, false);
@@ -821,14 +851,15 @@
     savePriceOptions({ ...priceOptions, enabled: !priceOptions.enabled });
     alert(priceOptions.enabled ? '已啟用掛牌價保護' : '已停止新增掛牌價保護，既有鎖定仍保留');
   });
+  const instanceLockReasons = new Set(['自動保護：精煉裝備', '自動保護：有洞裝備', '自動保護：特殊/插卡']);
   function getLockReason(id, name, text) {
     if (state.whMarks[id] === 'lock') return '手動上鎖';
     if (state.whMarks[id] === 'neutral') return '';
-    if (state.whAutoLocks[id]) return state.whAutoLocks[id];
+    if (state.whAutoLocks[id] && !instanceLockReasons.has(state.whAutoLocks[id])) return state.whAutoLocks[id];
     if (state.whAutoEquipCard) {
       if (/卡片$/.test(name)) return '自動保護：卡片';
-      if (/^\+\s*\d+/.test(name)) return '自動保護：精煉裝備';
-      if (/\[\d+\]/.test(name)) return '自動保護：有洞裝備';
+      if (Number(name.match(/^\+\s*(\d+)/)?.[1]) > 0) return '自動保護：精煉裝備';
+      if (/\[[1-9]\d*\]/.test(name)) return '自動保護：有洞裝備';
       if (/(?:已插卡|鍛造|寵物蛋|神秘紫箱|老舊收集冊)/.test(text)) return '自動保護：特殊/插卡';
     }
     const kw = state.customProtectWords.find((w) => w && name.includes(w));
@@ -942,20 +973,21 @@
       const reviewToggle = [...bar.querySelectorAll('button')].find((b) => b.textContent.startsWith('出售前核對：'));
       if (reviewToggle) {
         reviewToggle.textContent = `出售前核對：${state.whSaleReview ? '開' : '關'}`;
-        reviewToggle.title = state.whSaleReview ? '點擊關閉助手清單提醒；遊戲原生出售確認仍會顯示' : '點擊開啟助手清單提醒';
+        reviewToggle.title = state.whSaleReview ? '目前啟用清單核對，點擊關閉' : '目前略過助手清單核對，點擊啟用';
         reviewToggle.setAttribute('aria-pressed', String(state.whSaleReview));
       }
       let dirty = false;
       for (const li of f.querySelectorAll('li')) {
-        const cb = li.querySelector('input[type="checkbox"]'), nameBtn = li.querySelector('button[aria-label$="的物品資訊"]'), img = li.querySelector('img[src*="/client/item/"]');
-        if (!cb || !nameBtn || !img) continue;
-        const id = img.getAttribute('src').match(/\/(\d+)\.png/)?.[1];
+        const cb = li.querySelector('input[type="checkbox"]'), nameBtn = li.querySelector('button[aria-label$="的物品資訊"]');
+        if (!cb || !nameBtn) continue;
+        const id = warehouseItemId(li);
         if (!id) continue;
         const name = clean(nameBtn.textContent), txt = clean(li.textContent);
         ITEM_NAME_CACHE.set(Number(id), name.replace(/^\+\d+\s*/, ''));
         if (rescanCustom && !String(state.whAutoLocks[id] || '').startsWith('已載入攤位普通同規格掛牌') && state.whMarks[id] !== 'lock') delete state.whAutoLocks[id];
+        if (instanceLockReasons.has(state.whAutoLocks[id])) { delete state.whAutoLocks[id]; dirty = true; }
         const reason = getLockReason(id, name, txt);
-        if (reason && !state.whMarks[id] && !state.whAutoLocks[id]) { state.whAutoLocks[id] = reason; dirty = true; }
+        if (reason && !instanceLockReasons.has(reason) && !state.whMarks[id] && !state.whAutoLocks[id]) { state.whAutoLocks[id] = reason; dirty = true; }
         const locked = Boolean(reason);
         if (locked && clean(cb.getAttribute('aria-label')).startsWith('賣掉 ') && cb.checked) cb.click();
         li.classList.toggle('ro-wh-locked', locked);
@@ -1011,7 +1043,10 @@
         let review;
         try { review = readSaleItems(f, btn); }
         catch (err) {
-          e.preventDefault(); e.stopImmediatePropagation(); whSaleApproval = null; alert(err.message); return;
+          e.preventDefault(); e.stopImmediatePropagation(); whSaleApproval = null;
+          const status = f.querySelector('[data-ro-wh-status]');
+          if (status) status.textContent = err.message;
+          return;
         }
         const approval = whSaleApproval;
         whSaleApproval = null;
@@ -1144,30 +1179,35 @@
     const rs = scanRareItems(root);
     const statusSpan = rarePanels.get(root)?.querySelector('[data-ro-rare-status]');
     if (!rs) { if (statusSpan) statusSpan.textContent = '⚠️ 無法辨識本圖與其他地圖的掉落'; return false; }
-    const order = group === 'sync'
-      ? [...rs.keys()].sort((a, b) => Number(rs[a].group === 'here') - Number(rs[b].group === 'here'))
-      : [...rs.keys()].filter((i) => rs[i].group === group);
     let changed = 0;
-    for (const index of order) {
-      const current = scanRareItems(root)?.[index];
-      const desired = group === 'sync' ? rs[index].group === 'here' : next;
-      if (!current || current.group !== rs[index].group || !current.box.isConnected) {
+    let rows = rs;
+    while (rows) {
+      const current = group === 'sync'
+        ? rows.find((r) => r.group !== 'here' && r.box.checked) ?? rows.find((r) => r.group === 'here' && !r.box.checked)
+        : rows.find((r) => r.group === group && r.box.checked !== next);
+      if (!current) break;
+      const desired = group === 'sync' ? current.group === 'here' : next;
+      if (changed >= rs.length + 5 || !current.box.isConnected) {
         if (statusSpan) statusSpan.textContent = '⚠️ 遊戲清單已變動，請重試';
         return false;
       }
-      if (current.box.checked === desired) continue;
       if (current.box.disabled) {
         if (statusSpan) statusSpan.textContent = '⚠️ 有無法勾選的道具，請檢查清單';
         return false;
       }
       current.box.click();
-      if (current.box.checked !== desired) {
+      if (current.box.isConnected && current.box.checked !== desired) {
         if (statusSpan) statusSpan.textContent = '⚠️ 遊戲未接受勾選，請檢查清單';
         return false;
       }
       changed++;
+      rows = scanRareItems(root);
     }
-    const selected = scanRareItems(root)?.filter((r) => r.box.checked).length ?? 0;
+    if (!rows) {
+      if (statusSpan) statusSpan.textContent = '⚠️ 無法辨識更新後的掉落清單';
+      return false;
+    }
+    const selected = rows.filter((r) => r.box.checked).length;
     if (statusSpan) statusSpan.textContent = `✅ 已調整 ${changed} 項，目前勾選 ${selected} 項；請按「套用設定」`;
     return true;
   }
@@ -1336,12 +1376,40 @@
         return p;
       };
 
-      const applyLoot = (p, ids, mode) => {
-        const result = buildLootPatch(p.draft, ids, mode);
-        if (!result) { status.textContent = '沒有符合條件的戰利品'; return; }
+      const applyLoot = (p, ids, mode, previous) => {
+        const draft = p.draft;
+        const storage = storageRule(draft.autoStorage);
+        const priority = listItems(draft.lootPriority);
+        const storageBase = storage.items.filter((id) => !previous?.storage.has(id));
+        const priorityBase = priority.filter((id) => !previous?.priority.has(id));
+        const nextPriority = { ...(draft.lootPriority?.rare ? { rare: true } : {}), items: priorityBase };
+        const result = buildLootPatch(previous ? {
+          ...draft,
+          autoStorage: { ...storage, items: storageBase },
+          lootPriority: nextPriority
+        } : draft, ids, mode);
+        if (!result) {
+          const patch = {};
+          if (storageBase.length !== storage.items.length) patch.autoStorage = { ...storage, items: storageBase };
+          if (priorityBase.length !== priority.length) patch.lootPriority = nextPriority;
+          if (Object.keys(patch).length) {
+            p.update(patch);
+            status.textContent = '已移除前次同步項目，請按「套用設定」';
+          } else {
+            status.textContent = '沒有符合條件的戰利品';
+          }
+          return { storage: new Set(), priority: new Set() };
+        }
+        if (mode === 'store' && previous?.priority.size) {
+          result.patch.lootPriority = nextPriority;
+        }
         p.update(result.patch);
         const action = mode === 'valuable' ? '優先撿取＋存倉' : '自動存倉';
         status.textContent = `已設定 ${result.count} 種道具為「${action}」，請按「套用設定」`;
+        return {
+          storage: new Set(result.patch.autoStorage.items.filter((id) => !storageBase.includes(id))),
+          priority: new Set(listItems(result.patch.lootPriority).filter((id) => !priorityBase.includes(id)))
+        };
       };
       const configuredIds = (d) => [
         ...listItems(d.lootFilter), ...listItems(d.lootPriority), ...listItems(d.autoStorage), ...itemIds(d.autoSell)
@@ -1364,6 +1432,7 @@
 
       const getMapKey = (p) => JSON.stringify([p.snap.character.id ?? p.snap.character.name, p.draft.lockMap]);
       let lastAutoKey;
+      const syncedByCharacter = new Map();
       const syncMapLoot = async (mode, automatic = false) => {
         try {
           const p = getProps(), mapKey = getMapKey(p);
@@ -1378,7 +1447,10 @@
           if (mapKey !== getMapKey(current)) return;
           const loot = getMapLoot(pack, current.draft.lockMap);
           const ids = [...loot].filter(([id, name]) => mode === 'store' || isValuableLoot(id, name)).map(([id]) => id);
-          applyLoot(current, ids, mode);
+          const character = current.snap.character;
+          const characterKey = character.id ?? character.name;
+          const next = applyLoot(current, ids, mode, syncedByCharacter.get(characterKey));
+          if (next) syncedByCharacter.set(characterKey, next);
         } catch (e) { status.textContent = '⚠️ ' + e.message; }
       };
       const syncAutomatically = () => { if (auto.value !== 'off') void syncMapLoot(auto.value, true); };
@@ -1559,22 +1631,29 @@
   function findNativeDetailBtn(table, uid, matcher) {
     const tree = currentFiberRoot(table);
     if (!tree) return null;
-    const stack = [tree];
-    while (stack.length) {
-      const f = stack.pop(); if (!f) continue;
-      const p = f.memoizedProps;
-      if (p?.uid === uid && (p.s?.inventory || typeof p.onClose === 'function')) {
-        const todo = [f];
-        while (todo.length) {
-          const n = todo.pop(), el = n.stateNode;
-          if (el?.tagName === 'BUTTON' && visible(el) && matcher(clean(el.textContent))) return el;
-          for (let c = n.child; c; c = c.sibling) todo.push(c);
-        }
+    const search = (root, limit) => {
+      const stack = [{ fiber: root, matching: false }];
+      while (stack.length && limit-- > 0) {
+        const { fiber, matching } = stack.pop();
+        const props = fiber.memoizedProps;
+        const inDetail = matching || (props?.uid === uid &&
+          (props.s?.inventory || typeof props.onClose === 'function'));
+        const el = fiber.stateNode;
+        if (inDetail && el?.tagName === 'BUTTON' && visible(el) && matcher(clean(el.textContent))) return el;
+        if (fiber.child) stack.push({ fiber: fiber.child, matching: inDetail });
+        if (fiber !== root && fiber.sibling) stack.push({ fiber: fiber.sibling, matching });
       }
-      if (f.sibling) stack.push(f.sibling);
-      if (f.child) stack.push(f.child);
+      return null;
+    };
+    const host = bagMemo?.table === table ? bagMemo.val.host : table;
+    const key = Object.keys(host).find((name) => name.startsWith('__reactFiber$'));
+    let local = key && host[key];
+    if (local) {
+      let root = local;
+      while (root.return) root = root.return;
+      if (root !== tree) local = local.alternate;
     }
-    return null;
+    return (local && search(local, 10000)) || search(tree, 80000);
   }
 
   async function selectBagItemRow(uid) {
@@ -1770,9 +1849,16 @@
               page.confirm = originalConfirm;
             }
             if (!accepted) throw Error('已取消原生安全精煉');
+            let missingContext = 0;
             for (let i = 0; i < 60; i++) {
               await sleep(100);
+              if (refStop || document.hidden) throw Error('已中止精煉');
               b = readBackpackContext(true);
+              if (!b) {
+                if (++missingContext >= 5) throw Error('背包介面持續無法讀取，請確認精煉結果');
+                continue;
+              }
+              missingContext = 0;
               const nowSt = b?.s.inventory.find((x) => x.uid === uid);
               if (nowSt && (nowSt.refine || 0) >= safeTarget) { confirmed = true; successCnt++; break; }
             }
@@ -1840,11 +1926,16 @@
         }
         if (!userAccepted) throw Error('玩家手動取消精煉');
 
-        let resolved = false;
+        let resolved = false, missingContext = 0;
         for (let i = 0; i < 80; i++) {
           await sleep(100);
           b = readBackpackContext(true);
-          if (!b) throw Error('離開背包頁面');
+          if (refStop || document.hidden) throw Error('已中止精煉');
+          if (!b) {
+            if (++missingContext >= 5) throw Error('背包介面持續無法讀取，請確認精煉結果');
+            continue;
+          }
+          missingContext = 0;
           const nowSt = b.s.inventory.find((x) => x.uid === uid);
           const paid = activeBtn === skillBtn ? (b.s.character.sp <= beforeSp - 5) : (b.s.character.zeny < beforeZeny);
           if (nowSt && (nowSt.refine || 0) === curPlus + 1) {
@@ -1873,14 +1964,17 @@
       setStatus(`🛑 已停止：${e.message} (成功:${successCnt} 爆:${brokenCnt})`);
     } finally {
       if (changedEquip) {
-        try {
-          for (const uid of new Set(Object.values(origEquip).filter(Boolean))) {
+        const restoreOrder = [origEquip.weapon, ...Object.values(origEquip)];
+        const failed = [];
+        for (const uid of new Set(restoreOrder.filter(Boolean))) {
+          try {
             b = readBackpackContext(true);
             if (b?.s.inventory.some((x) => x.uid === uid) && !Object.values(b.s.equipment || {}).includes(uid)) {
               await equipItemByUid(uid);
             }
-          }
-        } catch {}
+          } catch { failed.push(uid); }
+        }
+        if (failed.length) setStatus('⚠️ 有裝備未能穿回，請檢查人物裝備欄');
       }
       refBusy = false;
       refreshRefinePanel();
@@ -2126,7 +2220,10 @@
 
     // 4. 插卡槽位與每張卡片的部位與功能說明
     const maxSlots = Math.max(slots, cards.length);
-    if (maxSlots > 0) {
+    if (maxSlots > 0 && data.cardsKnown === false) {
+      nodes.push(element('div', `插槽 ${maxSlots} 洞｜插卡資料尚無法確認`, 'font-size:11px;color:#93c5fd;'));
+    }
+    if (maxSlots > 0 && data.cardsKnown !== false) {
       const cardBox = element('div', null, 'background:rgba(9,13,22,0.85);padding:6px 8px;border-radius:6px;border:1px dashed #475569;margin-bottom:6px;');
       cardBox.append(element('div', `💎 插卡槽位 (${cards.length} / ${maxSlots} 洞)：`, 'font-size:11px;color:#93c5fd;margin-bottom:4px;font-weight:bold;'));
       for (let idx = 0; idx < maxSlots; idx++) {
@@ -2428,8 +2525,24 @@
       const refine = Number(natRow.dataset.roHoverRefine) || 0;
       const cards = (natRow.dataset.roHoverCards || '').split(',').map(Number).filter(Boolean);
       const rawName = natRow.dataset.roHoverName || ITEM_NAME_CACHE.get(id) || `道具 #${id}`;
-      const matched = mktListings.find((x) => x.id === id && x.refine === refine);
-      populateRichTooltip(matched || { id, refine, cards, name: rawName, base: rawName.replace(/^\+\s*\d+\s*/, '') });
+      const priceCell = natRow.querySelector('[data-roi-market-col="price"]');
+      const priceText = priceCell ? clean(roiPriceText(priceCell)) : '';
+      const priceMatch = priceText.match(amtRx);
+      const price = priceMatch ? Number(priceMatch[1].replace(/,/g, '')) : undefined;
+      const cardsKnown = natRow.dataset.roHoverCards !== undefined;
+      const candidates = price !== undefined && natRow.closest('table.roi-market-table')
+        ? mktListings.filter((item) => item.id === id && item.refine === refine && Number(item.price) === price)
+        : [];
+      const names = candidates.filter((item) => clean(item.name) === rawName);
+      const matches = names.length ? names : candidates;
+      const listing = matches[0];
+      const consistent = Boolean(listing && matches.every((item) => item.specKey === listing.specKey));
+      populateRichTooltip({
+        id, refine, price, name: rawName, base: rawName.replace(/^\+\s*\d+\s*/, ''),
+        slots: matches.length && matches.every((item) => item.slots === listing.slots) ? listing.slots : undefined,
+        cards: cardsKnown ? cards : consistent ? listing.cards : [],
+        cardsKnown: cardsKnown || consistent
+      });
       showTooltip(e);
       return;
     }
@@ -2572,7 +2685,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.19</span>
+          <span>⚡ RO Idle 便利助手 v3.3.20</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -2812,7 +2925,7 @@
 
   function renderChars() {
     const box = document.getElementById('u-clist'); if (!box) return;
-    const sum = Object.values(state.charZenyMap).reduce((a, b) => a + (b || 0), 0);
+    const sum = [...state.myCharIds].reduce((total, id) => total + (state.charZenyMap[id] || 0), 0);
     document.getElementById('u-tzeny').textContent = sum.toLocaleString() + ' Z';
     box.replaceChildren(...state.chars.map((c) => {
       const row = element('div', null, `display:flex;justify-content:space-between;align-items:center;background:rgba(30,41,59,0.8);padding:6px 10px;border-radius:6px;margin-bottom:5px;border-left:3px solid ${c.running ? '#22c55e' : '#ef4444'}`);
@@ -2871,4 +2984,3 @@
   }, 1500);
   setInterval(pollChars, 45000);
 })();
-
