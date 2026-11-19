@@ -27,8 +27,13 @@
   }
 
   const rareLimit = 100;
-  const clean = (s) => String(s || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
-  const visible = (el) => el && el.isConnected && !el.closest('[hidden],[inert],[aria-hidden="true"]') && el.getClientRects().length > 0;
+  const nonAsciiRx = /[^\x20-\x7E]/;
+  const clean = (s) => {
+    const str = String(s || '');
+    if (!str) return '';
+    return (nonAsciiRx.test(str) ? str.normalize('NFKC') : str).replace(/\s+/g, ' ').trim();
+  };
+  const visible = (el) => Boolean(el && el.isConnected && !el.closest('[hidden],[inert],[aria-hidden="true"]') && el.getClientRects().length > 0);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const zhCollator = new Intl.Collator('zh-Hant');
 
@@ -52,11 +57,11 @@
   };
 
   function roiPriceText(el) {
-    if (!el.querySelector('[data-roi-price-search],[data-roi-browse-switch],[data-roi-upper-fold],[data-ro-ref-annotated]')) return el.textContent;
+    if (!el.querySelector('[data-roi-price-search],[data-roi-browse-switch],[data-roi-upper-fold]')) return el.textContent;
     const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
     let n, txt = '';
     while ((n = w.nextNode())) {
-      if (!n.parentElement.closest('[data-roi-price-search],[data-roi-browse-switch],[data-roi-upper-fold],[data-ro-ref-annotated]')) txt += n.textContent;
+      if (!n.parentElement.closest('[data-roi-price-search],[data-roi-browse-switch],[data-roi-upper-fold]')) txt += n.textContent;
     }
     return txt;
   }
@@ -114,18 +119,26 @@
   let dbSaveTimer = null;
   function recordItemDetail(id, info) {
     const numId = Number(id);
-    if (!numId) return;
-    const old = ITEM_DETAIL_DB.get(numId) || {};
-    const merged = { ...old, ...info };
-    if (JSON.stringify(old) === JSON.stringify(merged)) return;
+    if (!numId || !info) return;
+    const old = ITEM_DETAIL_DB.get(numId);
+    let changed = !old;
+    if (old) {
+      for (const k of Object.keys(info)) {
+        if (old[k] !== info[k]) { changed = true; break; }
+      }
+    }
+    if (!changed) return;
+    const merged = old ? { ...old, ...info } : { ...info };
     ITEM_DETAIL_DB.set(numId, merged);
     if (info.name) ITEM_NAME_CACHE.set(numId, info.name);
-    clearTimeout(dbSaveTimer);
-    dbSaveTimer = setTimeout(() => {
-      try {
-        if (ITEM_DETAIL_DB.size <= 3500) GM_setValue('roi_learned_item_db_v1', Object.fromEntries(ITEM_DETAIL_DB));
-      } catch {}
-    }, 1500);
+    if (!dbSaveTimer) {
+      dbSaveTimer = setTimeout(() => {
+        dbSaveTimer = null;
+        try {
+          if (ITEM_DETAIL_DB.size <= 3500) GM_setValue('roi_learned_item_db_v1', Object.fromEntries(ITEM_DETAIL_DB));
+        } catch {}
+      }, 2000);
+    }
   }
 
   const TOWN_NAMES = {
@@ -183,48 +196,6 @@
     return { cat: 'material', sub: 'other' };
   }
 
-  // ==================== 【核心升級 1】全裝備精煉傷害 / 防禦加成計算與 DOM 徽章產生器 ====================
-  function calcRefineBonus(itemId, refine) {
-    const plus = Number(refine) || 0;
-    if (plus <= 0) return null;
-    const numId = Number(itemId);
-    const { cat, sub } = classifyItem(numId);
-    if (cat === 'weapon') {
-      const learnedLv = ITEM_DETAIL_DB.get(numId)?.wLv;
-      const wLv = learnedLv || WLV_MAP.get(numId) || 3;
-      const perAtk = [0, 2, 3, 5, 7][wLv] || 5;
-      const safeLimit = [0, 7, 6, 5, 4][wLv] || 5;
-      const overMax = [0, 3, 5, 8, 14][wLv] || 8;
-      const baseBonus = plus * perAtk;
-      const overSteps = Math.max(0, plus - safeLimit);
-      const overMin = overSteps > 0 ? overSteps : 0;
-      const overBonusMax = overSteps * overMax;
-      const isStaff = sub === 'staff' || sub === '2hStaff' || sub === 'book';
-      const statLabel = isStaff ? 'ATK/MATK' : 'ATK';
-      const shortText = `🔥+${baseBonus} ${statLabel}${overSteps > 0 ? ` (超限+${overMin}~${overBonusMax})` : ''}`;
-      const detailText = `Lv.${wLv}武器精煉 +${plus}：附加 +${baseBonus} ${statLabel}` + (overSteps > 0 ? ` ｜ 過安全(+${safeLimit})額外追加 +${overMin}~+${overBonusMax} 高傷` : ` (安全上限 +${safeLimit})`);
-      return { isWeapon: true, wLv, safeLimit, baseBonus, overMin, overBonusMax, statLabel, shortText, detailText };
-    }
-    if (cat === 'armor') {
-      const defBonus = plus;
-      const hardDef = Math.floor((3 + plus) / 4);
-      const shortText = `🛡️精煉DEF +${defBonus}`;
-      const detailText = `防具精煉 +${plus}：精煉DEF +${defBonus} (約減傷 +${hardDef}~${defBonus}) ｜ 安全上限 +4`;
-      return { isWeapon: false, safeLimit: 4, baseBonus: defBonus, statLabel: 'DEF', shortText, detailText };
-    }
-    return null;
-  }
-
-  function createRefineBadgeNode(itemId, refine) {
-    const b = calcRefineBonus(itemId, refine);
-    if (!b) return null;
-    const node = element('span', b.shortText);
-    node.className = `ro-ref-tag ${b.isWeapon ? 'is-wpn' : 'is-arm'}`;
-    node.dataset.roRefAnnotated = '';
-    node.title = b.detailText;
-    return node;
-  }
-
   // 判斷 DOM 元素是否屬於攤位／拍賣介面
   function isStallContext(el) {
     if (!el) return false;
@@ -248,18 +219,29 @@
     }
   }
 
-  function currentFiberRoot(node) {
+  let cachedFiberKey = null;
+  function getReactFiber(node) {
     if (!node) return null;
-    const k = Object.keys(node).find((k) => k.startsWith('__reactFiber$'));
-    let f = k && node[k];
+    if (cachedFiberKey && node[cachedFiberKey]) return node[cachedFiberKey];
+    const k = Object.keys(node).find((key) => key.startsWith('__reactFiber$'));
+    if (k) cachedFiberKey = k;
+    return k ? node[k] : null;
+  }
+
+  function currentFiberRoot(node) {
+    let f = getReactFiber(node);
     if (!f) return null;
     while (f.return) f = f.return;
     return f.stateNode?.current;
   }
 
   let gameDictScanned = false;
+  let lastDictScanAt = 0;
   function tryLearnFromReactTree(rootEl) {
     if (gameDictScanned) return;
+    const now = Date.now();
+    if (now - lastDictScanAt < 5000) return;
+    lastDictScanAt = now;
     const root = currentFiberRoot(rootEl || document.body.firstElementChild);
     if (!root) return;
     const stack = [root];
@@ -297,10 +279,10 @@
   function annotateAllRefinedEquipment() {
     tryLearnFromReactTree(document.querySelector('main, #root, table.xp-table, fieldset'));
 
-    for (const row of document.querySelectorAll('li, table.xp-table tr')) {
-      if (row.closest('#ro-helper-hud,[data-roi-market-browser],[data-roi-refine-helper]')) continue;
-      const img = row.querySelector('img[src*="/client/item/"]');
-      if (!img) continue;
+    const bagRowMap = bagMemo?.val ? new Map(bagMemo.val.rows.map((x) => [x.row, x])) : null;
+    for (const img of document.querySelectorAll('li img[src*="/client/item/"], table.xp-table tr img[src*="/client/item/"]')) {
+      const row = img.closest('li, table.xp-table tr');
+      if (!row || row.closest('#ro-helper-hud,[data-roi-market-browser],[data-roi-refine-helper]')) continue;
       const itemId = Number(img.getAttribute('src')?.match(/\/(\d+)\.png/)?.[1]);
       if (!itemId) continue;
 
@@ -315,8 +297,8 @@
       let cards = [];
       let cardsKnown = false;
       let extraStats = null;
-      if (row.tagName === 'TR' && bagMemo?.val) {
-        const bRow = bagMemo.val.rows.find((x) => x.row === row);
+      if (row.tagName === 'TR' && bagRowMap) {
+        const bRow = bagRowMap.get(row);
         if (bRow?.st) {
           plus = bRow.st.refine || plus;
           cards = (bRow.st.cards || []).filter(Boolean);
@@ -325,13 +307,14 @@
         }
       }
       const inStall = isStallContext(row);
-      if (inStall || (row.tagName === 'LI' && row.closest('fieldset > ul'))) {
+      if (!cardsKnown && (inStall || row.tagName === 'LI' || row.tagName === 'TR')) {
         const { cat } = classifyItem(itemId);
         if (cat === 'weapon' || cat === 'armor') {
           const stack = readNearbyItemStack(row, itemId, plus);
           if (stack) {
             cards = stack.cards.filter(Boolean);
             cardsKnown = true;
+            if (!extraStats) extraStats = stack;
           }
         }
       }
@@ -351,66 +334,48 @@
       if (cardsKnown) row.dataset.roHoverCards = cards.join(',');
       else delete row.dataset.roHoverCards;
 
-      let badge = row.querySelector('[data-ro-ref-annotated]');
-
-      if (inStall) {
-        // 攤位介面：保留數值徽章，清除非攤位專用的標題變色
-        applyRefineLevelColor(nameEl, 0);
-        if (plus > 0) {
-          const bInfo = calcRefineBonus(itemId, plus);
-          if (bInfo) {
-            if (!badge) {
-              badge = element('span');
-              badge.dataset.roRefAnnotated = '';
-              nameEl.after(badge);
-            }
-            const cls = `ro-ref-tag ${bInfo.isWeapon ? 'is-wpn' : 'is-arm'}`;
-            if (badge.className !== cls) badge.className = cls;
-            if (badge.textContent !== bInfo.shortText) badge.textContent = bInfo.shortText;
-            if (badge.title !== bInfo.detailText) badge.title = bInfo.detailText;
-          }
-        } else if (badge) {
-          badge.remove();
-        }
-      } else {
-        // 非攤位介面（背包、倉庫等）：移除文字徽章，改用 +4 ~ +10 漸進式變色
-        if (badge) badge.remove();
-        applyRefineLevelColor(nameEl, plus);
-      }
+      row.querySelector('[data-ro-ref-annotated]')?.remove();
+      applyRefineLevelColor(nameEl, inStall ? 0 : plus);
     }
 
-    // 掃描原生物品資訊彈窗與裝備欄格子 (.xp-sunken)：動態學習數值；僅在攤位介面顯示黃底大橫幅，人物裝備欄與其他地方改用 +4~+10 變色
+    // 掃描原生物品資訊彈窗與裝備欄格子 (.xp-sunken)：動態學習數值；非攤位套用 +4~+10 變色
     for (const box of document.querySelectorAll('.xp-sunken')) {
       if (box.closest('#ro-helper-hud,[data-roi-market-browser],[data-roi-refine-helper]')) continue;
-      let dBadge = box.querySelector(':scope > [data-ro-detail-ref-badge]');
+      box.querySelector(':scope > [data-ro-detail-ref-badge]')?.remove();
       const img = box.querySelector('img[src*="/client/item/"]');
       if (!img || img.closest('.xp-sunken') !== box) {
-        dBadge?.remove();
         applyRefineLevelColor(box.querySelector('[data-ro-ref-tier]'), 0);
         continue;
       }
       const itemId = Number(img.getAttribute('src')?.match(/\/(\d+)\.png/)?.[1]);
       if (!itemId) {
-        dBadge?.remove();
         applyRefineLevelColor(box.querySelector('[data-ro-ref-tier]'), 0);
         continue;
       }
-      const lines = (box.innerText || '').split('\n').map((l) => l.trim()).filter((l) => l && !/^(?:裝備|卸下|鎖定|解鎖|存入倉庫|存倉|回城賣|請忽克連|一鍵精煉|武器精練|關閉|⚡)/.test(l));
-      const txt = clean(lines.join(' '));
-      const atkM = txt.match(/(?:攻擊力?|ATK)\s*[:：]?\s*(\d+)/i);
-      const matkM = txt.match(/(?:魔攻|MATK)\s*[:：]?\s*(\d+)/i);
-      const defM = txt.match(/(?:防禦力?|DEF)\s*[:：]?\s*(\d+)/i);
-      const wLvM = txt.match(/武器等級\s*[:：]?\s*(\d)/);
-      const wtM = txt.match(/重量\s*[:：]?\s*(\d+(?:\.\d+)?)/);
-      const desc = lines.slice(1, 7).join(' ｜ ').slice(0, 240);
-      recordItemDetail(itemId, {
-        ...(atkM ? { atk: Number(atkM[1]) } : {}),
-        ...(matkM ? { matk: Number(matkM[1]) } : {}),
-        ...(defM ? { def: Number(defM[1]) } : {}),
-        ...(wLvM ? { wLv: Number(wLvM[1]) } : {}),
-        ...(wtM ? { weight: Number(wtM[1]) } : {}),
-        ...(desc ? { desc } : {})
-      });
+      const rawBoxText = box.textContent || '';
+      const boxSig = `${itemId}|${rawBoxText.length}|${rawBoxText.slice(0, 48)}`;
+      let lines;
+      if (box.dataset.roBoxSig !== boxSig) {
+        box.dataset.roBoxSig = boxSig;
+        lines = (box.innerText || '').split('\n').map((l) => l.trim()).filter((l) => l && !/^(?:裝備|卸下|鎖定|解鎖|存入倉庫|存倉|回城賣|請忽克連|一鍵精煉|武器精練|關閉|⚡)/.test(l));
+        const txt = clean(lines.join(' '));
+        const atkM = txt.match(/(?:攻擊力?|ATK)\s*[:：]?\s*(\d+)/i);
+        const matkM = txt.match(/(?:魔攻|MATK)\s*[:：]?\s*(\d+)/i);
+        const defM = txt.match(/(?:防禦力?|DEF)\s*[:：]?\s*(\d+)/i);
+        const wLvM = txt.match(/武器等級\s*[:：]?\s*(\d)/);
+        const wtM = txt.match(/重量\s*[:：]?\s*(\d+(?:\.\d+)?)/);
+        const desc = lines.slice(1, 7).join(' ｜ ').slice(0, 240);
+        recordItemDetail(itemId, {
+          ...(atkM ? { atk: Number(atkM[1]) } : {}),
+          ...(matkM ? { matk: Number(matkM[1]) } : {}),
+          ...(defM ? { def: Number(defM[1]) } : {}),
+          ...(wLvM ? { wLv: Number(wLvM[1]) } : {}),
+          ...(wtM ? { weight: Number(wtM[1]) } : {}),
+          ...(desc ? { desc } : {})
+        });
+      } else {
+        lines = rawBoxText.split('\n').map((l) => l.trim()).filter(Boolean);
+      }
 
       const titleM = (lines[0] || '').match(/^\+\s*(\d+)/);
       const plus = titleM ? Number(titleM[1]) : 0;
@@ -421,34 +386,12 @@
         !el.closest('button[data-ro-lock]') && [...el.childNodes].some((node) =>
           node.nodeType === Node.TEXT_NODE && /^\+\s*\d+/.test(clean(node.textContent))));
       applyRefineLevelColor(box, 0);
-
-      if (inStall) {
-        applyRefineLevelColor(titleEl, 0);
-        if (plus > 0) {
-          const bInfo = calcRefineBonus(itemId, plus);
-          if (bInfo) {
-            if (!dBadge) {
-              dBadge = element('div', null, 'margin:5px 0;padding:5px 9px;border-radius:6px;background:linear-gradient(90deg,rgba(245,158,11,0.22),rgba(120,53,15,0.18));border-left:3px solid #f59e0b;color:#fde047;font-size:11.5px;font-weight:bold;');
-              dBadge.dataset.roDetailRefBadge = '';
-              box.append(dBadge);
-            }
-            const fullMsg = `⚡ ${bInfo.detailText}`;
-            if (dBadge.textContent !== fullMsg) dBadge.textContent = fullMsg;
-          } else if (dBadge) dBadge.remove();
-        } else if (dBadge) {
-          dBadge.remove();
-        }
-      } else {
-        // 非攤位（含人物裝備欄與物品詳情框）：移除黃底橫幅，改用 +4 ~ +10 漸進變色
-        if (dBadge) dBadge.remove();
-        applyRefineLevelColor(titleEl, plus);
-      }
+      applyRefineLevelColor(titleEl, inStall ? 0 : plus);
     }
   }
 
   function readNearbyItemStack(row, id, refine) {
-    const key = Object.keys(row).find((name) => name.startsWith('__reactFiber$'));
-    let fiber = key && row[key];
+    let fiber = getReactFiber(row);
     if (!fiber) return null;
     let root = fiber;
     while (root.return) root = root.return;
@@ -620,8 +563,9 @@
       }
     }
 
-    const hasTownSearch = Boolean(findTownSearchUI());
-    for (const tbl of document.querySelectorAll('table.xp-table')) {
+    const tables = [...document.querySelectorAll('table.xp-table')];
+    const hasTownSearch = tables.length ? Boolean(findTownSearchUI()) : false;
+    for (const tbl of tables) {
       const hdr = [...tbl.rows].find((r) => r.cells.length && [...r.cells].every((c) => c.tagName === 'TH'));
       const pCols = new Set(hdr ? [...hdr.cells].flatMap((c, i) => (headRx.test(clean(c.textContent)) ? [i] : [])) : []);
 
@@ -654,7 +598,7 @@
       for (const leg of document.querySelectorAll('fieldset > legend')) {
         if (clean(roiPriceText(leg)) !== '搜尋所有城鎮的攤位') continue;
         for (const el of leg.parentElement.querySelectorAll('table.xp-table td :is(div,span,p,b,strong,small)')) {
-          if (el.children.length || el.closest('button,a,input,select,[data-roi-price-search],[data-ro-ref-annotated]')) continue;
+          if (el.children.length || el.closest('button,a,input,select,[data-roi-price-search]')) continue;
           const v = clean(el.textContent).match(amtRx);
           if (v?.[2]) applyMoneyColor(el, v[1]);
         }
@@ -662,10 +606,15 @@
     }
   }
 
+  let sharedAudioCtx = null;
   const playTone = (freq, type, dur, delay = 0) => {
     if (!state.sound) return;
     try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      if (!sharedAudioCtx || sharedAudioCtx.state === 'closed') sharedAudioCtx = new AudioCtx();
+      if (sharedAudioCtx.state === 'suspended') sharedAudioCtx.resume().catch(() => {});
+      const ctx = sharedAudioCtx;
       const osc = ctx.createOscillator(), g = ctx.createGain();
       osc.type = type; osc.frequency.setValueAtTime(freq, ctx.currentTime + delay);
       g.gain.setValueAtTime(0.12, ctx.currentTime + delay);
@@ -759,25 +708,30 @@
     } catch {}
   }
 
+  const rxRareDrop = /(?:卡片|稀有)!/;
+  const rxDangerLog = /戰鬥不能|已經死亡|超過負重.*停止/;
+  const rxDmgLog = /造成\s*([\d,]+)\s*點傷害/;
+  const rxExpLog = /獲得\s*Base EXP\s*([\d,]+)(?:\s*\(\s*\d+(?:\.\d+)?\s*%\s*\))?\s*\/\s*Job EXP\s*([\d,]+)/;
+  const rxLootLog = /撿取物品\s*[:：]\s*(.+?)\s*[×xX*]\s*(\d+)/;
   function parseLog(el) {
     if (!el) return;
     const t = clean(el.textContent);
     if (!t || state.processedLines.get(el) === t) return;
     state.processedLines.set(el, t);
-    if (/(?:卡片|稀有)!/.test(t)) {
+    if (rxRareDrop.test(t)) {
       state.rares.unshift(`[${new Date().toLocaleTimeString()}] ✨ ${t}`);
       if (state.rares.length > rareLimit) state.rares.pop();
       state.rareRev++;
       alertUser('✨ 稀有掉落', t, false);
     }
-    if (/戰鬥不能|已經死亡|超過負重.*停止/.test(t)) alertUser('⚠️ 掛機異常', t, true);
+    if (rxDangerLog.test(t)) alertUser('⚠️ 掛機異常', t, true);
     if (state.paused) return;
-    const dm = t.match(/造成\s*([\d,]+)\s*點傷害/);
+    const dm = t.match(rxDmgLog);
     if (dm) { const v = parseInt(dm[1].replace(/,/g, ''), 10); if (v) { state.dmgSum += v; state.hits++; if (v > state.maxDmg) state.maxDmg = v; } }
     if (t.includes('成功擊敗')) state.kills++;
-    const em = t.match(/獲得\s*Base EXP\s*([\d,]+)(?:\s*\(\s*\d+(?:\.\d+)?\s*%\s*\))?\s*\/\s*Job EXP\s*([\d,]+)/);
+    const em = t.match(rxExpLog);
     if (em) { state.bexp += parseInt(em[1].replace(/,/g, ''), 10) || 0; state.jexp += parseInt(em[2].replace(/,/g, ''), 10) || 0; }
-    const lm = t.match(/撿取物品\s*[:：]\s*(.+?)\s*[×xX*]\s*(\d+)/);
+    const lm = t.match(rxLootLog);
     if (lm) {
       const name = lm[1].trim(), q = parseInt(lm[2], 10) || 1;
       state.loot[name] = (state.loot[name] || 0) + q;
@@ -1313,16 +1267,26 @@
   }
 
   let lootPack;
+  let PACK_ITEMS_MAP = null;
+  function ensurePackItemsLoaded() {
+    if (PACK_ITEMS_MAP) return;
+    try { void loadLootPack().catch(() => {}); } catch {}
+  }
   function loadLootPack() {
     const link = document.querySelector('link[rel="modulepreload"][href^="/assets/pack-"]');
     if (!link) throw Error('找不到遊戲的地圖資料');
     lootPack ??= import(link.href).then((module) => {
       const pack = Object.values(module).find((value) => Array.isArray(value?.maps) && Array.isArray(value.monsters) && Array.isArray(value.items));
       if (!pack) throw Error('無法辨識遊戲的地圖資料');
+      const itemsMap = new Map(pack.items.map((item) => [item.id, item]));
+      PACK_ITEMS_MAP = itemsMap;
+      for (const it of pack.items) {
+        if (it?.id && it.name && !ITEM_NAME_CACHE.has(it.id)) ITEM_NAME_CACHE.set(it.id, clean(it.name));
+      }
       return {
         maps: new Map(pack.maps.map((map) => [map.id, map])),
         monsters: new Map([...(pack.summons ?? []), ...pack.monsters].map((monster) => [monster.id, monster])),
-        items: new Map(pack.items.map((item) => [item.id, item])),
+        items: itemsMap,
         refine: pack.refine
       };
     }).catch((error) => { lootPack = null; throw error; });
@@ -1581,8 +1545,7 @@
     const localSnap = props?.s || props?.snap;
     if (validSnap(localSnap)) {
       const localRows = [...rowNodes].map((row) => {
-        const key = Object.keys(row).find((k) => k.startsWith('__reactFiber$'));
-        const fiber = key && row[key];
+        const fiber = getReactFiber(row);
         return /^\d+$/.test(fiber?.key || '') ? { uid: Number(fiber.key), row } : null;
       });
       if (localRows.every(Boolean)) { snaps.push(localSnap); rows.push(...localRows); }
@@ -1646,8 +1609,7 @@
       return null;
     };
     const host = bagMemo?.table === table ? bagMemo.val.host : table;
-    const key = Object.keys(host).find((name) => name.startsWith('__reactFiber$'));
-    let local = key && host[key];
+    let local = getReactFiber(host);
     if (local) {
       let root = local;
       while (root.return) root = root.return;
@@ -2114,8 +2076,6 @@
       img.src = `/client/item/${r.st.itemId}.png`; img.width = img.height = 20;
       const name = element('span', `+${r.st.refine || 0} ${r.name}${slots ? ` [${slots}]` : ''} `, `color:${r.st.refine ? '#38bdf8' : '#e2e8f0'}`);
       applyRefineLevelColor(name, r.st.refine || 0);
-      const refBadge = createRefineBadgeNode(r.st.itemId, r.st.refine || 0);
-      if (refBadge) name.append(refBadge, document.createTextNode(' '));
       name.append(element('small', `(${SUB_LABELS[r.sub] || r.cat})`, 'color:#64748b'));
       lbl.append(img, name);
       lbl.prepend(cb);
@@ -2167,93 +2127,128 @@
   const CAT_TABS = { all: '全部', favorites: '★ 收藏', card: '🃏 卡片', weapon: '🗡️ 武器', armor: '🛡️ 防具/飾品', consumable: '🧪 消耗品', material: '🪨 材料' };
 
   // ==================== 【核心升級 2】使用安全 element() 建構露天裝備完整數值、精煉加成與插卡功能懸浮卡 ====================
+  function resolveItemMeta(numId) {
+    const dbInfo = ITEM_DETAIL_DB.get(numId) || {};
+    const packItem = PACK_ITEMS_MAP?.get(numId);
+    if (!packItem) return dbInfo;
+    const rawDesc = packItem.description ?? packItem.effect ?? packItem.desc ?? '';
+    const descText = Array.isArray(rawDesc) ? rawDesc.map(clean).filter(Boolean).join(' ｜ ') : clean(rawDesc);
+    const slotCount = Array.isArray(packItem.slots)
+      ? (typeof packItem.cardSlots === 'number' ? packItem.cardSlots : undefined)
+      : (typeof packItem.slots === 'number' ? packItem.slots : packItem.cardSlots);
+    return {
+      name: dbInfo.name || (packItem.name ? clean(packItem.name) : undefined),
+      atk: dbInfo.atk ?? (packItem.atk != null ? Number(packItem.atk) : undefined),
+      matk: dbInfo.matk ?? (packItem.matk != null ? Number(packItem.matk) : undefined),
+      def: dbInfo.def ?? (packItem.def != null ? Number(packItem.def) : undefined),
+      mdef: dbInfo.mdef ?? (packItem.mdef != null ? Number(packItem.mdef) : undefined),
+      wLv: dbInfo.wLv ?? (packItem.weaponLevel != null ? Number(packItem.weaponLevel) : undefined),
+      weight: dbInfo.weight ?? (packItem.weight != null ? Number(packItem.weight) : undefined),
+      reqLv: dbInfo.reqLv ?? (packItem.equipLevel ?? packItem.requiredLevel),
+      cardSlots: slotCount,
+      desc: dbInfo.desc || descText || undefined
+    };
+  }
+
   function populateRichTooltip(data) {
+    ensurePackItemsLoaded();
     const numId = Number(data.id);
     const { cat, sub } = classifyItem(numId, data.base || '');
-    const dbInfo = ITEM_DETAIL_DB.get(numId) || {};
-    const slots = data.slots ?? SLOTS_MAP.get(numId) ?? 0;
+    const dbInfo = resolveItemMeta(numId);
+    const slots = data.slots ?? dbInfo.cardSlots ?? SLOTS_MAP.get(numId) ?? 0;
     const cards = (data.cards || []).filter(Boolean);
-    const refBonus = calcRefineBonus(numId, data.refine || 0);
     const nodes = [];
 
-    // 1. 頂部圖示與標題區
-    const header = element('div', null, 'display:flex;align-items:center;gap:8px;border-bottom:1px solid rgba(148,163,184,0.25);padding-bottom:7px;margin-bottom:7px;');
-    const icon = element('img', null, 'width:28px;height:28px;object-fit:contain;background:rgba(15,23,42,0.85);padding:3px;border-radius:6px;border:1px solid #334155;');
+    // 1. 頂部圖示與標題區（精煉/插卡強化邊框與標籤）
+    const hasCards = cards.length > 0;
+    const isRefined = (data.refine || 0) > 0;
+    tooltip.style.borderColor = hasCards ? '#facc15' : isRefined ? '#38bdf8' : 'rgba(56,189,248,0.75)';
+    const header = element('div', null, 'display:flex;align-items:center;gap:9px;border-bottom:1px solid rgba(148,163,184,0.28);padding-bottom:8px;margin-bottom:8px;');
+    const iconWrap = element('div', null, `position:relative;width:34px;height:34px;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 30% 30%,rgba(56,189,248,0.2),rgba(15,23,42,0.95));border-radius:8px;border:1px solid ${hasCards ? '#facc15' : isRefined ? '#38bdf8' : '#334155'};flex-shrink:0;`);
+    const icon = element('img', null, 'width:26px;height:26px;object-fit:contain;');
     icon.src = `/client/item/${numId}.png`;
+    iconWrap.append(icon);
     const titleBox = element('div', null, 'min-width:0;flex:1;');
-    const titleLine = element('div', data.name || data.base || `道具 #${numId}`, `font-weight:bold;font-size:13.5px;color:${cards.length ? '#fde047' : data.refine ? '#38bdf8' : '#f8fafc'};`);
+    const titleLine = element('div', data.name || data.base || dbInfo.name || `道具 #${numId}`, `font-weight:bold;font-size:13.5px;color:${hasCards ? '#fde047' : isRefined ? '#38bdf8' : '#f8fafc'};line-height:1.3;`);
     titleLine.append(element('small', ` #${numId}`, 'color:#64748b;font-weight:normal;'));
-    const subLine = element('div', '部位/類型：', 'font-size:11px;color:#94a3b8;');
-    subLine.append(element('b', SUB_LABELS[sub] || CAT_TABS[cat] || cat, 'color:#fbbf24;'));
+    const subLine = element('div', null, 'display:flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:11px;color:#94a3b8;margin-top:2px;');
+    const typePill = element('span', SUB_LABELS[sub] || CAT_TABS[cat] || cat, 'background:rgba(245,158,11,0.16);color:#fbbf24;border:1px solid rgba(245,158,11,0.35);padding:0 5px;border-radius:4px;font-weight:bold;');
+    subLine.append(typePill);
     const wLv = dbInfo.wLv || (cat === 'weapon' ? WLV_MAP.get(numId) : null);
-    if (wLv) subLine.append(document.createTextNode(` (Lv.${wLv} 武器)`));
-    if (dbInfo.weight) subLine.append(document.createTextNode(` ｜ 重量 ${dbInfo.weight}`));
+    if (wLv) subLine.append(element('span', `Lv.${wLv}武器`, 'color:#cbd5e1;'));
+    if (dbInfo.reqLv) subLine.append(element('span', `需求Lv.${dbInfo.reqLv}`, 'color:#94a3b8;'));
+    if (dbInfo.weight != null) subLine.append(element('span', `重量 ${dbInfo.weight}`, 'color:#94a3b8;'));
     titleBox.append(titleLine, subLine);
-    header.append(icon, titleBox);
+    header.append(iconWrap, titleBox);
     nodes.push(header);
 
-    // 2. 原始數值與裝備效果說明區
-    if (dbInfo.atk || dbInfo.matk || dbInfo.def || dbInfo.desc || data.rawSpecText) {
-      const statBox = element('div', null, 'background:rgba(9,13,22,0.75);padding:6px 8px;border-radius:6px;margin-bottom:6px;border:1px solid #1e293b;font-size:11.5px;');
+    // 2. 原始數值與裝備/卡片效果說明區
+    if (dbInfo.atk || dbInfo.matk || dbInfo.def || dbInfo.mdef || dbInfo.desc || data.rawSpecText) {
+      const statBox = element('div', null, 'background:rgba(9,13,22,0.78);padding:7px 9px;border-radius:7px;margin-bottom:7px;border:1px solid #1e293b;font-size:11.5px;');
       const statParts = [
-        dbInfo.atk ? `⚔️ 原始 ATK: ${dbInfo.atk}` : '',
-        dbInfo.matk ? `🔮 原始 MATK: ${dbInfo.matk}` : '',
-        dbInfo.def ? `🛡️ 原始 DEF: ${dbInfo.def}` : ''
+        dbInfo.atk ? `⚔️ ATK ${dbInfo.atk}` : '',
+        dbInfo.matk ? `🔮 MATK ${dbInfo.matk}` : '',
+        dbInfo.def ? `🛡️ DEF ${dbInfo.def}` : '',
+        dbInfo.mdef ? `✨ MDEF ${dbInfo.mdef}` : ''
       ].filter(Boolean);
-      if (statParts.length) statBox.append(element('div', statParts.join(' ｜ '), 'color:#e2e8f0;font-weight:bold;margin-bottom:3px;'));
-      if (dbInfo.desc) statBox.append(element('div', `📜 ${dbInfo.desc}`, 'color:#cbd5e1;font-size:11px;'));
-      if (data.rawSpecText) statBox.append(element('div', `✨ ${data.rawSpecText}`, 'color:#a7f3d0;font-size:11px;margin-top:2px;'));
+      if (statParts.length) statBox.append(element('div', statParts.join(' ｜ '), 'color:#e2e8f0;font-weight:bold;margin-bottom:4px;'));
+      if (dbInfo.desc) statBox.append(element('div', `📜 ${dbInfo.desc}`, 'color:#cbd5e1;font-size:11px;line-height:1.45;'));
+      if (data.rawSpecText) statBox.append(element('div', `✨ ${data.rawSpecText}`, 'color:#a7f3d0;font-size:11px;margin-top:3px;'));
       nodes.push(statBox);
     }
 
-    // 3. 精煉傷害 / 防禦加成完整公式剖析
-    if (refBonus) {
-      const refBox = element('div', null, 'background:linear-gradient(90deg,rgba(245,158,11,0.24),rgba(120,53,15,0.2));border-left:3px solid #f59e0b;padding:6px 8px;border-radius:5px;margin-bottom:6px;color:#fde047;font-size:11.5px;');
-      refBox.append(element('div', `🔥 ${refBonus.detailText}`, 'font-weight:bold;'));
-      if (refBonus.isWeapon && dbInfo.atk) {
-        const minTot = dbInfo.atk + refBonus.baseBonus + refBonus.overMin;
-        const maxTot = dbInfo.atk + refBonus.baseBonus + refBonus.overBonusMax;
-        refBox.append(element('div', `💥 合計總武器 ATK：${minTot}${maxTot > minTot ? ` ~ ${maxTot}` : ''}`, 'color:#4ade80;margin-top:2px;font-weight:bold;'));
-      }
-      nodes.push(refBox);
-    }
-
-    // 4. 插卡槽位與每張卡片的部位與功能說明
+    // 4. 插卡槽位與每張卡片的圖示、部位與功能說明
     const maxSlots = Math.max(slots, cards.length);
     if (maxSlots > 0 && data.cardsKnown === false) {
-      nodes.push(element('div', `插槽 ${maxSlots} 洞｜插卡資料尚無法確認`, 'font-size:11px;color:#93c5fd;'));
+      nodes.push(element('div', `💎 插槽 ${maxSlots} 洞（目前清單未提供插卡明細）`, 'font-size:11px;color:#93c5fd;margin-bottom:6px;'));
     }
     if (maxSlots > 0 && data.cardsKnown !== false) {
-      const cardBox = element('div', null, 'background:rgba(9,13,22,0.85);padding:6px 8px;border-radius:6px;border:1px dashed #475569;margin-bottom:6px;');
-      cardBox.append(element('div', `💎 插卡槽位 (${cards.length} / ${maxSlots} 洞)：`, 'font-size:11px;color:#93c5fd;margin-bottom:4px;font-weight:bold;'));
+      const cardBox = element('div', null, 'background:linear-gradient(180deg,rgba(15,23,42,0.92),rgba(9,13,22,0.92));padding:7px 9px;border-radius:7px;border:1px solid rgba(250,204,21,0.35);margin-bottom:7px;');
+      const cardHeader = element('div', null, 'display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#fde047;margin-bottom:5px;font-weight:bold;');
+      cardHeader.append(
+        element('span', `💎 卡片插槽 (${cards.length} / ${maxSlots})`),
+        element('span', cards.length ? '已插卡強化' : '尚未插卡', `font-size:10px;padding:1px 5px;border-radius:4px;background:${cards.length ? 'rgba(250,204,21,0.18)' : 'rgba(100,116,139,0.2)'};color:${cards.length ? '#fde047' : '#94a3b8'};`)
+      );
+      cardBox.append(cardHeader);
       for (let idx = 0; idx < maxSlots; idx++) {
         const cid = cards[idx];
         if (cid) {
-          const cName = ITEM_NAME_CACHE.get(cid) || `卡片 #${cid}`;
-          const cInfo = ITEM_DETAIL_DB.get(cid);
+          const cInfo = resolveItemMeta(cid);
+          const cName = cInfo.name || ITEM_NAME_CACHE.get(cid) || `卡片 #${cid}`;
           const cSub = SUB_LABELS[CARD_SUB_MAP.get(cid) || 'c_weapon'];
-          const cRow = element('div', null, `display:flex;align-items:flex-start;gap:5px;padding:3px 0;${idx ? 'border-top:1px solid #1e293b;' : ''}`);
-          cRow.append(element('span', '◈', 'color:#facc15;'));
-          const cDetail = element('div', null, 'flex:1;');
-          const cTitle = element('b', cName, 'color:#fde047;');
-          cTitle.append(element('small', ` (${cSub})`, 'color:#94a3b8;font-weight:normal;'));
+          const cRow = element('div', null, `display:flex;align-items:flex-start;gap:6px;padding:4px 0;${idx ? 'border-top:1px dashed #334155;' : ''}`);
+          const cIcon = element('img', null, 'width:18px;height:18px;object-fit:contain;margin-top:1px;flex-shrink:0;');
+          cIcon.src = `/client/item/${cid}.png`;
+          const cDetail = element('div', null, 'flex:1;min-width:0;');
+          const cTitle = element('div', null, 'font-weight:bold;color:#fde047;font-size:11.5px;');
+          cTitle.append(document.createTextNode(cName), element('small', ` (${cSub})`, 'color:#94a3b8;font-weight:normal;'));
           cDetail.append(cTitle);
-          if (cInfo?.desc) cDetail.append(element('div', cInfo.desc, 'color:#a7f3d0;font-size:10.5px;margin-top:1px;'));
-          cRow.append(cDetail);
+          if (cInfo.desc) {
+            cDetail.append(element('div', cInfo.desc, 'color:#a7f3d0;font-size:10.5px;margin-top:2px;line-height:1.4;'));
+          } else {
+            cDetail.append(element('div', '（卡片效果說明尚未載入）', 'color:#64748b;font-size:10px;margin-top:1px;'));
+          }
+          cRow.append(cIcon, cDetail);
           cardBox.append(cRow);
         } else {
-          cardBox.append(element('div', `◇ 空插槽 [${idx + 1}] (未插卡)`, 'color:#64748b;font-size:11px;padding:2px 0;'));
+          const emptyRow = element('div', null, `display:flex;align-items:center;gap:6px;padding:3px 0;color:#64748b;font-size:11px;${idx ? 'border-top:1px dashed #1e293b;' : ''}`);
+          emptyRow.append(element('span', '◇', 'color:#475569;'), element('span', `空插槽 [${idx + 1}]（未插卡）`));
+          cardBox.append(emptyRow);
         }
       }
       nodes.push(cardBox);
     }
 
-    // 5. 攤位價格與賣家底部列
+    // 5. 攤位價格、數量與賣家底部列
     if (data.price) {
-      const foot = element('div', null, 'display:flex;justify-content:space-between;align-items:center;padding-top:5px;border-top:1px solid rgba(148,163,184,0.2);font-size:11px;color:#94a3b8;');
+      const foot = element('div', null, 'display:flex;justify-content:space-between;align-items:center;gap:8px;padding-top:6px;border-top:1px solid rgba(148,163,184,0.22);font-size:11px;color:#94a3b8;');
+      const sellerText = `🏪 ${data.seller || '露天攤位'}${data.city ? ` (${TOWN_NAMES[data.city] || data.city})` : ''}`;
+      const priceText = data.qty && data.qty > 1
+        ? `單價 ${data.price.toLocaleString()} Z × ${data.qty} = ${(data.price * data.qty).toLocaleString()} Z`
+        : `售價 ${data.price.toLocaleString()} Z`;
       foot.append(
-        element('span', `🏪 ${data.seller || '露天攤位'} (${TOWN_NAMES[data.city] || data.city || '本城'})`),
-        element('b', `總價 ${(data.price * (data.qty || 1)).toLocaleString()} Z`, 'color:#4ade80;')
+        element('span', sellerText, 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'),
+        element('b', priceText, 'color:#4ade80;white-space:nowrap;')
       );
       nodes.push(foot);
     }
@@ -2489,8 +2484,6 @@
       const clip = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
       const name = element('span', r.name, `${clip};font-weight:${r.refine || r.cards.length ? 'bold' : 'normal'};color:${r.cards.length ? '#fde047' : r.refine ? '#38bdf8' : 'inherit'}`);
       item.append(fav, img, name);
-      const refBadge = createRefineBadgeNode(r.id, r.refine);
-      if (refBadge) item.append(refBadge);
       if (r.changeTag) item.append(element('small', r.changeTag, 'color:#fb923c'));
       const price = element('span', null, 'text-align:right;white-space:nowrap');
       const money = element('span', r.price.toLocaleString() + ' Z', getMoneyColorVars(r.price));
@@ -2507,20 +2500,33 @@
   }
 
   // 全域懸浮監聽：同時支援「商品分類 ([data-rkey])」與「原生露天攤位/背包/倉庫 ([data-ro-hover-id])」
+  let lastHoveredTarget = null;
   document.addEventListener('mouseover', (e) => {
     if (!(e.target instanceof Element)) return;
     if (tooltip.contains(e.target)) return;
     const mktRow = e.target.closest('[data-rkey]');
     if (mktRow) {
+      if (lastHoveredTarget === mktRow && tooltip.style.display === 'block') {
+        hoverPoint = { x: e.clientX, y: e.clientY };
+        positionTooltip();
+        return;
+      }
       const r = mktKeyMap.get(mktRow.dataset.rkey);
       if (r) {
+        lastHoveredTarget = mktRow;
         populateRichTooltip(r);
         showTooltip(e);
         return;
       }
     }
     const natRow = e.target.closest('[data-ro-hover-id]');
-    if (natRow && (e.target.closest('img, button[aria-label$="的物品資訊"], a, [data-ro-ref-annotated]') || natRow.closest('table.roi-market-table'))) {
+    if (natRow && (e.target.closest('img, button[aria-label$="的物品資訊"], a, td') || natRow.closest('table.roi-market-table'))) {
+      if (lastHoveredTarget === natRow && tooltip.style.display === 'block') {
+        hoverPoint = { x: e.clientX, y: e.clientY };
+        positionTooltip();
+        return;
+      }
+      lastHoveredTarget = natRow;
       const id = Number(natRow.dataset.roHoverId);
       const refine = Number(natRow.dataset.roHoverRefine) || 0;
       const cards = (natRow.dataset.roHoverCards || '').split(',').map(Number).filter(Boolean);
@@ -2530,23 +2536,50 @@
       const priceMatch = priceText.match(amtRx);
       const price = priceMatch ? Number(priceMatch[1].replace(/,/g, '')) : undefined;
       const cardsKnown = natRow.dataset.roHoverCards !== undefined;
-      const candidates = price !== undefined && natRow.closest('table.roi-market-table')
-        ? mktListings.filter((item) => item.id === id && item.refine === refine && Number(item.price) === price)
+
+      // 優先從 React Fiber 讀取該列直接綁定的物品實例（包含完整 cards、slots、鍛造/附魔）
+      const stack = readNearbyItemStack(natRow, id, refine);
+      const stackCards = Array.isArray(stack?.cards) ? stack.cards.filter(Boolean) : null;
+
+      // 其次比對本地攤位與跨城補查快取
+      const inMarket = Boolean(natRow.closest('table.roi-market-table') || isStallContext(natRow));
+      const allPool = inMarket ? [...mktListings, ...mktCrossMap.values()] : [];
+      const candidates = price !== undefined && allPool.length
+        ? allPool.filter((item) => item.id === id && item.refine === refine && Number(item.price) === price)
         : [];
-      const names = candidates.filter((item) => clean(item.name) === rawName);
+      const names = candidates.filter((item) => clean(item.name) === rawName || clean(item.base) === rawName.replace(/^\+\s*\d+\s*/, '').replace(/\s*\[\d+\].*$/, '').trim());
       const matches = names.length ? names : candidates;
       const listing = matches[0];
       const consistent = Boolean(listing && matches.every((item) => item.specKey === listing.specKey));
+
+      const finalCards = stackCards ?? (cardsKnown ? cards : consistent ? listing.cards : []);
+      const finalCardsKnown = stackCards !== null || cardsKnown || consistent;
+      const finalSlots = stack?.slots ?? (matches.length && matches.every((item) => item.slots === listing.slots) ? listing.slots : undefined);
+      const extraTags = stack ? [
+        stack.forged ? '鍛造武器' : '',
+        stack.element ? `屬性:${stack.element}` : '',
+        stack.starCrumbs ? `星星角×${stack.starCrumbs}` : '',
+        stack.options ? (Array.isArray(stack.options) ? stack.options.join('、') : String(stack.options)) : ''
+      ].filter(Boolean).join(' ｜ ') : (consistent ? listing?.rawSpecText : '');
+
       populateRichTooltip({
-        id, refine, price, name: rawName, base: rawName.replace(/^\+\s*\d+\s*/, ''),
-        slots: matches.length && matches.every((item) => item.slots === listing.slots) ? listing.slots : undefined,
-        cards: cardsKnown ? cards : consistent ? listing.cards : [],
-        cardsKnown: cardsKnown || consistent
+        id,
+        refine,
+        price,
+        qty: consistent ? listing?.qty : undefined,
+        seller: consistent ? listing?.seller : undefined,
+        city: consistent ? listing?.city : undefined,
+        name: rawName,
+        base: rawName.replace(/^\+\s*\d+\s*/, ''),
+        slots: finalSlots,
+        cards: finalCards,
+        cardsKnown: finalCardsKnown,
+        rawSpecText: extraTags
       });
       showTooltip(e);
       return;
     }
-    if (tooltip.style.display === 'block') tooltip.style.display = 'none';
+    if (tooltip.style.display === 'block') { tooltip.style.display = 'none'; lastHoveredTarget = null; }
   });
 
   mktRowsBox.addEventListener('click', (e) => {
@@ -2576,6 +2609,7 @@
   }
 
   function syncMktMount() {
+    ensurePackItemsLoaded();
     const allFields = [...document.querySelectorAll('fieldset')].filter((f) => f !== mktPanel);
     const searchField = allFields.find((f) => clean(roiPriceText([...f.children].find((e) => e.tagName === 'LEGEND') || document.createElement('span'))).startsWith('搜尋所有城鎮的攤位'));
     if (searchField) {
@@ -2617,10 +2651,6 @@
       [data-roi-browse-hidden], [data-roi-native-fold] { display: none !important; }
       .roi-mc-text { color: var(--roi-mc) !important; font-weight: bold !important; font-variant-numeric: tabular-nums; }
       html.night .roi-mc-text, html[data-info-night] .roi-mc-text, #roi-mkt-rows .roi-mc-text { color: var(--roi-mn) !important; -webkit-text-fill-color: currentColor !important; }
-      /* 全裝備精煉傷害與防禦加成標記徽章 */
-      .ro-ref-tag { display:inline-flex; align-items:center; padding:1px 6px; margin-left:5px; border-radius:4px; font-size:10.5px; font-weight:bold; white-space:nowrap; cursor:help; vertical-align:middle; box-shadow:0 1px 4px rgba(0,0,0,0.35); }
-      .ro-ref-tag.is-wpn { background:linear-gradient(135deg,rgba(220,38,38,0.3),rgba(234,88,12,0.38)); color:#fef08a; border:1px solid rgba(249,115,22,0.75); }
-      .ro-ref-tag.is-arm { background:linear-gradient(135deg,rgba(2,132,199,0.28),rgba(37,99,235,0.32)); color:#bae6fd; border:1px solid rgba(56,189,248,0.7); }
       .roi-mkt-row:hover { background:rgba(56,189,248,0.12) !important; }
       table.roi-market-table { width:100% !important; table-layout:fixed !important; }
       table.roi-market-table tr > [data-roi-market-col] { box-sizing:border-box !important; }
@@ -2648,26 +2678,6 @@
       [data-ro-ref-tier="8"]  { color: #fb923c !important; font-weight: 800 !important; text-shadow: 0 0 7px rgba(251,146,60,0.55) !important; }
       [data-ro-ref-tier="9"]  { color: #f87171 !important; font-weight: 800 !important; text-shadow: 0 0 9px rgba(248,113,113,0.7) !important; }
       [data-ro-ref-tier="10"] { color: #ff2d55 !important; font-weight: 900 !important; text-shadow: 0 0 8px #ff2d55, 0 0 3px #ffd700 !important; background: linear-gradient(90deg, rgba(255,45,85,0.22), rgba(250,204,21,0.18)) !important; border-radius: 4px !important; padding: 0 5px !important; border: 1px solid rgba(255,215,0,0.65) !important; }
-      .roi-mkt-row:hover { background:rgba(56,189,248,0.12) !important; }
-      table.roi-market-table { width:100% !important; table-layout:fixed !important; }
-      table.roi-market-table tr > [data-roi-market-col] { box-sizing:border-box !important; }
-      table.roi-market-table tr > [data-roi-market-col="item"] { width:auto !important; }
-      table.roi-market-table tr > [data-roi-market-col="price"] { position:relative !important; width:180px !important; padding-right:48px !important; text-align:right !important; white-space:nowrap !important; }
-      table.roi-market-table tr > [data-roi-market-col="stock"] { width:65px !important; text-align:right !important; white-space:nowrap !important; }
-      table.roi-market-table tr > [data-roi-market-col="input"] { width:85px !important; text-align:right !important; white-space:nowrap !important; }
-      table.roi-market-table tr > [data-roi-market-col="input-stock"] { width:150px !important; text-align:right !important; white-space:nowrap !important; }
-      table.roi-market-table tr > [data-roi-market-col^="input"] input[type="number"] { width:64px !important; max-width:100% !important; box-sizing:border-box !important; }
-      table.roi-market-table td[data-roi-market-col="price"] > button[data-roi-price-search] { position:absolute; right:22px; top:50%; transform:translateY(-50%); width:21px; height:21px; padding:0; border:0; background:transparent; color:#38bdf8 !important; font:14px sans-serif; cursor:pointer; }
-      @media(max-width:600px) {
-        table.roi-market-table tr > [data-roi-market-col="price"] { width:135px !important; }
-        table.roi-market-table tr > [data-roi-market-col="stock"] { width:45px !important; }
-        table.roi-market-table tr > [data-roi-market-col="input"] { width:65px !important; }
-        table.roi-market-table tr > [data-roi-market-col="input-stock"] { width:110px !important; }
-        table.roi-market-table tr > [data-roi-market-col^="input"] input[type="number"] { width:52px !important; }
-      }
-      li.ro-wh-locked { background:linear-gradient(90deg,rgba(245,158,11,0.22),transparent 85%)!important; border-left:3px solid #f59e0b!important; padding-left:4px!important; }
-      button.ro-badge-lock { background:linear-gradient(135deg,#78350f,#92400e)!important; color:#fde047!important; border:1px solid #f59e0b!important; border-radius:4px!important; padding:0 5px!important; margin:0 4px!important; font-size:11px!important; font-weight:bold!important; cursor:pointer!important; }
-      button.ro-badge-unlock { background:transparent!important; color:#64748b!important; border:1px dashed #475569!important; border-radius:4px!important; padding:0 4px!important; margin:0 4px!important; font-size:11px!important; opacity:0.6; cursor:pointer!important; }
       #ro-helper-hud { position:fixed; top:48px; right:14px; z-index:2147483646; font-family:system-ui,-apple-system,"Microsoft JhengHei",sans-serif; user-select:none; touch-action:none; }
       #ro-hud-card { background:linear-gradient(165deg,rgba(15,23,42,0.96),rgba(9,13,22,0.98)); backdrop-filter:blur(12px); color:#f8fafc; border:1.5px solid rgba(56,189,248,0.75); border-radius:12px; box-sizing:border-box; width:min(355px,calc(100vw - 8px)); max-height:calc(100vh - 8px); max-height:calc(100dvh - 8px); box-shadow:0 16px 40px rgba(0,0,0,0.88), 0 0 15px rgba(56,189,248,0.15); font-size:12px; overflow:auto; }
       #ro-drag { position:sticky; top:0; z-index:1; }
@@ -2757,8 +2767,13 @@
       header.insertBefore(menu, header.querySelector('#ro-min-btn'));
     }
     attachBrowserMenu();
-    const browserMenuObserver = new MutationObserver(attachBrowserMenu);
-    browserMenuObserver.observe(document.body, { childList: true, subtree: true });
+    const browserMenuObserver = new MutationObserver(() => {
+      if (document.getElementById('mgm-userscript-menu')) {
+        attachBrowserMenu();
+        browserMenuObserver.disconnect();
+      }
+    });
+    browserMenuObserver.observe(document.body, { childList: true });
 
 
     function placeHud(left, top) {
@@ -2889,30 +2904,52 @@
     };
   }
 
+  let hudRefs = null;
+  function getHudRefs() {
+    if (hudRefs && hudRefs.bexp?.isConnected) return hudRefs;
+    const bexp = document.getElementById('u-bexp');
+    if (!bexp) return null;
+    hudRefs = {
+      name: document.getElementById('u-name'),
+      time: document.getElementById('u-time'),
+      bexp,
+      jexp: document.getElementById('u-jexp'),
+      kph: document.getElementById('u-kph'),
+      dmg: document.getElementById('u-dmg'),
+      zeny: document.getElementById('u-zeny'),
+      miss: document.getElementById('u-miss'),
+      llist: document.getElementById('u-llist'),
+      rlist: document.getElementById('u-rlist')
+    };
+    return hudRefs;
+  }
+
   const fmt = (n) => n >= 1e8 ? (n / 1e8).toFixed(2) + '億' : n >= 1e4 ? (n / 1e4).toFixed(1) + '萬' : Math.round(n).toLocaleString();
   function updateHUD() {
-    if (document.hidden || state.hudMin || !document.getElementById('u-bexp')) return;
+    if (document.hidden || state.hudMin) return;
+    const refs = getHudRefs();
+    if (!refs) return;
     const sec = Math.max(1, Math.floor((state.accMs + (state.paused ? 0 : Date.now() - state.lastResumed)) / 1000)), hrs = sec / 3600;
-    document.getElementById('u-name').textContent = state.activeCharName;
-    document.getElementById('u-time').textContent = `${state.paused ? '⏸️ ' : '⏱️ '}${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
-    document.getElementById('u-bexp').textContent = fmt(state.bexp / hrs);
-    document.getElementById('u-jexp').textContent = fmt(state.jexp / hrs);
-    document.getElementById('u-kph').textContent = `${Math.round(state.kills / hrs)}/h (${state.kills})`;
-    document.getElementById('u-dmg').textContent = `${fmt(state.hits ? state.dmgSum / state.hits : 0)} / ${fmt(state.maxDmg)}`;
+    refs.name.textContent = state.activeCharName;
+    refs.time.textContent = `${state.paused ? '⏸️ ' : '⏱️ '}${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
+    refs.bexp.textContent = fmt(state.bexp / hrs);
+    refs.jexp.textContent = fmt(state.jexp / hrs);
+    refs.kph.textContent = `${Math.round(state.kills / hrs)}/h (${state.kills})`;
+    refs.dmg.textContent = `${fmt(state.hits ? state.dmgSum / state.hits : 0)} / ${fmt(state.maxDmg)}`;
     const initZ = state.initZenyMap[state.activeCharId] ?? state.curZeny, diff = state.curZeny - initZ;
-    document.getElementById('u-zeny').textContent = `${state.curZeny.toLocaleString()} Z (${diff >= 0 ? '+' : ''}${diff.toLocaleString()})`;
-    document.getElementById('u-miss').textContent = `${state.missed} 次`;
+    refs.zeny.textContent = `${state.curZeny.toLocaleString()} Z (${diff >= 0 ? '+' : ''}${diff.toLocaleString()})`;
+    refs.miss.textContent = `${state.missed} 次`;
 
     if (state.lootRev !== state.renderedLootRev) {
       state.renderedLootRev = state.lootRev;
       const lEntries = Object.entries(state.loot).sort((a, b) => b[1] - a[1]);
-      if (lEntries.length) document.getElementById('u-llist').replaceChildren(...lEntries.map(([name, qty]) => {
+      if (lEntries.length) refs.llist.replaceChildren(...lEntries.map(([name, qty]) => {
         const row = element('div', null, 'display:flex;justify-content:space-between;border-bottom:1px dashed #334155;padding:3px 0;');
         row.append(element('span', name), element('b', `×${qty}`, 'color:#4ade80'));
         return row;
       }));
     }
-    const list = document.getElementById('u-rlist');
+    const list = refs.rlist;
     const pending = Math.min(state.rares.length, state.rareRev - Number(list.dataset.rev || 0));
     if (pending > 0) {
       if (!list.children.length) list.textContent = '';
@@ -2940,8 +2977,12 @@
   function runPageRouter() {
     if (document.querySelector('table.xp-table')) alignAndColorizeNativeMarkets();
     if (document.querySelector('input[aria-label="搜尋物品"]') || refPanel) refreshRefinePanel();
-    if (document.querySelector('[aria-label="道具設定的複製與匯出匯入"],select[aria-label="怪物控制：加入怪物"]') || document.body.textContent.includes('必撿稀有掉落')) mountSettingsTools();
     const legends = [...document.querySelectorAll('fieldset > legend')].map((l) => clean(l.textContent));
+    if (
+      document.querySelector('[aria-label="道具設定的複製與匯出匯入"],select[aria-label="怪物控制：加入怪物"]') ||
+      rareKnownRoots.size > 0 ||
+      legends.some((t) => /^必撿稀有掉落/.test(t))
+    ) mountSettingsTools();
     if (legends.some((t) => /^倉庫/.test(t))) refreshWarehouse();
     if (legends.some((t) => /的攤位/.test(t)) || mktPanel.isConnected) syncMktMount();
     annotateAllRefinedEquipment();
@@ -2952,7 +2993,7 @@
     let domChanged = false;
     for (const r of records) {
       const el = r.target.nodeType === 1 ? r.target : r.target.parentElement;
-      if (!el || !el.isConnected || el.closest('#ro-helper-hud,#roi-item-hover-tooltip,[data-roi-market-browser],[data-ro-wh-bar],[data-ro-rare-helper],[data-roi-settings-tools],[data-roi-refine-helper],[data-roi-price-search],[data-roi-upper-fold],[data-ro-ref-annotated],[data-ro-detail-ref-badge]')) continue;
+      if (!el || !el.isConnected || el.closest('#ro-helper-hud,#roi-item-hover-tooltip,[data-roi-market-browser],[data-ro-wh-bar],[data-ro-rare-helper],[data-roi-settings-tools],[data-roi-refine-helper],[data-roi-price-search],[data-roi-upper-fold]')) continue;
       if (r.type === 'attributes' && !el.matches('fieldset') && !el.querySelector('fieldset')) continue;
       if (el.closest('.log-window')) {
         if (r.type === 'characterData' || r.type === 'childList') parseLog(el.closest('.log-line'));
@@ -2977,10 +3018,10 @@
   document.querySelectorAll('.log-window .log-line').forEach(parseLog);
   ensureHUD(); pollChars(); runPageRouter();
   setInterval(() => {
+    if (document.hidden) return;
     ensureHUD(); updateHUD();
     const itemGroup = document.querySelector('[role="group"][aria-label="道具設定的複製與匯出匯入"]');
-    lootSyncPanels.get(itemGroup)?.();
-
+    if (itemGroup) lootSyncPanels.get(itemGroup)?.();
   }, 1500);
   setInterval(pollChars, 45000);
 })();
