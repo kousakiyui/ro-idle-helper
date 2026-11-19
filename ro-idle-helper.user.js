@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.3.16
+// @version      3.3.17
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -481,7 +481,7 @@
     whProtect: true, whSaleReview: true, whAutoEquipCard: true,
     whMarks: {}, whAutoLocks: {}, customProtectWords: [],
     hudMin: false, hudPos: null, mktUpperFold: false,
-    processedLines: new WeakSet(), lastNotifyAt: 0
+    processedLines: new WeakMap(), lastNotifyAt: 0
   };
 
   try {
@@ -722,10 +722,10 @@
   }
 
   function parseLog(el) {
-    if (!el || state.processedLines.has(el)) return;
-    state.processedLines.add(el);
+    if (!el) return;
     const t = clean(el.textContent);
-    if (!t) return;
+    if (!t || state.processedLines.get(el) === t) return;
+    state.processedLines.set(el, t);
     if (/(?:卡片|稀有)!/.test(t)) {
       state.rares.unshift(`[${new Date().toLocaleTimeString()}] ✨ ${t.slice(0, 42)}`);
       if (state.rares.length > rareLimit) state.rares.pop();
@@ -2509,7 +2509,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.16</span>
+          <span>⚡ RO Idle 便利助手 v3.3.17</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -2778,9 +2778,18 @@
       if (!el || !el.isConnected || el.closest('#ro-helper-hud,#roi-item-hover-tooltip,[data-roi-market-browser],[data-ro-wh-bar],[data-ro-rare-helper],[data-roi-settings-tools],[data-roi-refine-helper],[data-roi-price-search],[data-roi-upper-fold],[data-ro-ref-annotated],[data-ro-detail-ref-badge]')) continue;
       if (r.type === 'attributes' && !el.matches('fieldset') && !el.querySelector('fieldset')) continue;
       if (el.closest('.log-window')) {
-        r.addedNodes.forEach((n) => { if (n.nodeType === 1) { if (n.classList?.contains('log-line')) parseLog(n); else n.querySelectorAll?.('.log-line').forEach(parseLog); } });
+        if (r.type === 'characterData' || r.type === 'childList') parseLog(el.closest('.log-line'));
+        r.addedNodes.forEach((n) => {
+          if (n.nodeType !== 1) return;
+          if (n.matches?.('.log-line')) parseLog(n);
+          n.querySelectorAll?.('.log-line').forEach(parseLog);
+        });
         continue;
       }
+      if (r.type === 'childList') r.addedNodes.forEach((n) => {
+        if (n.nodeType !== 1) return;
+        n.querySelectorAll?.('.log-window .log-line').forEach(parseLog);
+      });
       domChanged = true;
     }
     if (domChanged && !uiTimer) {
@@ -2788,6 +2797,7 @@
     }
   }).observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes:true, attributeFilter:['hidden','aria-hidden','inert','class','style'] });
 
+  document.querySelectorAll('.log-window .log-line').forEach(parseLog);
   ensureHUD(); pollChars(); runPageRouter();
   setInterval(() => {
     ensureHUD(); updateHUD();
