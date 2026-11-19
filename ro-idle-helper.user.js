@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.3.11
+// @version      3.3.12
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -1630,14 +1630,27 @@
     }
   }
 
+  const isWeaponRefineButton = (text) => /^武器精[練煉]\s*\(\s*技能(?:[,\s)]|$)/.test(text);
+  const isNpcRefineButton = (text) => /^請.+精[煉練]$/.test(text);
+  const weaponRefineLevel = (snapshot) => snapshot.character.skills?.WS_WEAPONREFINE ?? 0;
+
   async function runHybridRefine(modeType) {
     if (refBusy) return;
     let b = readBackpackContext(true);
     if (!b) return;
     const setStatus = (msg) => { if (!refPanel?.isConnected && readBackpackContext(true)) refreshRefinePanel(); const el = refPanel?.querySelector('[data-ref-status]'); if (el) el.textContent = msg; };
 
-    const initJobs = b.rows.filter((r) => isEligibleEquip(r) && refSelected.has(r.uid));
-    if (!initJobs.length) return setStatus('⚠️ 請先在下方清單勾選要精煉的裝備！');
+    const skillOnly = modeType === 'skill_only';
+    const limitPlus = modeType === 'safe_only' ? 10
+      : skillOnly ? Math.min(refTargetPlus, weaponRefineLevel(b.s)) : refTargetPlus;
+    const canUseSkill = (row) => {
+      const item = refinePack?.items.get(row.st.itemId);
+      return item?.weaponType !== undefined && (row.st.refine ?? 0) < limitPlus;
+    };
+    const initJobs = b.rows.filter((r) => isEligibleEquip(r) && refSelected.has(r.uid) && (!skillOnly || canUseSkill(r)));
+    if (!initJobs.length) return setStatus(skillOnly
+      ? '⚠️ 請勾選低於目標與武器精練技能上限的武器'
+      : '⚠️ 請先在下方清單勾選要精煉的裝備！');
     const runUids = new Set(initJobs.map((r) => r.uid));
     const trackedItemIds = new Set(initJobs.map((r) => r.st.itemId));
 
@@ -1652,7 +1665,6 @@
         if (!b || document.hidden) throw Error('已離開背包頁面');
 
         let pool = b.rows.filter((r) => isEligibleEquip(r) && runUids.has(r.uid) && refSelected.has(r.uid));
-        const limitPlus = modeType === 'safe_only' ? 10 : refTargetPlus;
         pool = pool.filter((r) => !skipped.has(r.uid) && (r.st.refine || 0) < limitPlus);
 
         if (!pool.length && refAutoWh) {
@@ -1687,7 +1699,7 @@
         b = await selectBagItemRow(uid);
         if (!b || refStop || document.hidden) throw Error('已離開背包或中止精煉');
 
-        const safeBtn = findNativeDetailBtn(b.table, uid, (t) => /^一鍵精煉到安全值\s*\+\d+/.test(t));
+        const safeBtn = !skillOnly && findNativeDetailBtn(b.table, uid, (t) => /^一鍵精煉到安全值\s*\+\d+/.test(t));
         const nativeLimit = Number(clean(safeBtn?.textContent).match(/\+(\d+)/)?.[1]);
         if (modeType === 'safe_only' && nativeLimit > 0) safeLimits.set(target.st.itemId, nativeLimit);
         if (safeBtn && !safeBtn.disabled) {
@@ -1716,28 +1728,33 @@
           continue;
         }
 
-        let skillBtn = findNativeDetailBtn(b.table, uid, (t) => /^武器精練（技能/.test(t));
-        let npcBtn = findNativeDetailBtn(b.table, uid, (t) => /^請忽克連精[煉練]$/.test(t));
-        const useSkill = Boolean(skillBtn && !skillBtn.disabled);
+        let skillBtn = findNativeDetailBtn(b.table, uid, isWeaponRefineButton);
+        let npcBtn = skillOnly ? null : findNativeDetailBtn(b.table, uid, isNpcRefineButton);
 
-        if (!useSkill && !npcBtn) {
+        if (!skillOnly && !skillBtn && !npcBtn) {
           b = await equipItemByUid(uid);
           changedEquip = true;
-          npcBtn = findNativeDetailBtn(b.table, uid, (t) => /^請忽克連精[煉練]$/.test(t));
+          npcBtn = findNativeDetailBtn(b.table, uid, isNpcRefineButton);
         }
 
-        let activeBtn = useSkill ? skillBtn : npcBtn;
-        if ((!activeBtn || activeBtn.disabled) && refAutoWh) {
-          const pulledOres = await tryWithdrawFromWarehouse(new Set([984, 985, 1010, 1011]), limitPlus, setStatus);
+        let activeBtn = skillBtn && !skillBtn.disabled ? skillBtn : npcBtn;
+        if ((!activeBtn || activeBtn.disabled) && refAutoWh && (!skillOnly || (skillBtn && b.s.character.sp >= 5))) {
+          const item = refinePack.items.get(target.st.itemId);
+          const level = Math.min(4, Math.max(1, item.weaponLevel ?? 1));
+          const steps = item.slots.includes('weapon') ? refinePack.refine.weapon[level] : refinePack.refine.armor;
+          const material = steps?.[curPlus]?.material;
+          const pulledOres = material ? await tryWithdrawFromWarehouse(new Set([material]), limitPlus, setStatus) : [];
           if (pulledOres.length) {
             b = await selectBagItemRow(uid);
-        if (!b || refStop || document.hidden) throw Error('已離開背包或中止精煉');
-            skillBtn = findNativeDetailBtn(b.table, uid, (t) => /^武器精練（技能/.test(t));
-            npcBtn = findNativeDetailBtn(b.table, uid, (t) => /^請忽克連精[煉練]$/.test(t));
-            activeBtn = (skillBtn && !skillBtn.disabled) ? skillBtn : npcBtn;
+            if (!b || refStop || document.hidden) throw Error('已離開背包或中止精煉');
+            skillBtn = findNativeDetailBtn(b.table, uid, isWeaponRefineButton);
+            npcBtn = skillOnly ? null : findNativeDetailBtn(b.table, uid, isNpcRefineButton);
+            activeBtn = skillBtn && !skillBtn.disabled ? skillBtn : npcBtn;
           }
         }
-        if (!activeBtn || activeBtn.disabled) throw Error(`【${target.name}】精煉按鈕不可用（礦石已用盡、Zeny/SP不足或不在主城）`);
+        if (!activeBtn || activeBtn.disabled) throw Error(skillOnly
+          ? `【${target.name}】武器精練不可用，請確認技能等級、材料與 SP（至少 5）`
+          : `【${target.name}】精煉按鈕不可用（礦石已用盡、Zeny/SP不足或不在主城）`);
 
         if (refStop || document.hidden) throw Error('已中止精煉');
         const beforeZeny = b.s.character.zeny, beforeSp = b.s.character.sp;
@@ -1766,9 +1783,9 @@
           const paid = activeBtn === skillBtn ? (b.s.character.sp <= beforeSp - 5) : (b.s.character.zeny < beforeZeny);
           if (nowSt && (nowSt.refine || 0) === curPlus + 1) {
             successCnt++; resolved = true;
-            if (nowSt.refine >= refTargetPlus) {
+            if (nowSt.refine >= limitPlus) {
               refSelected.delete(uid);
-              if (refAutoWh && !refStop && !document.hidden) {
+              if (refAutoWh && nowSt.refine >= refTargetPlus && !refStop && !document.hidden) {
                 const stBtn = findNativeDetailBtn(b.table, uid, (t) => /^存入倉庫|^存倉$/.test(t));
                 if (stBtn && !stBtn.disabled) { stBtn.click(); await sleep(150); }
               }
@@ -1827,6 +1844,7 @@
           <label style="color:#fbbf24;font-weight:bold;">目標 +<input type="number" id="ref-target" class="xp-input" value="${refTargetPlus}" min="1" max="10" style="width:48px;"></label>
           <button type="button" class="xp-btn small" id="ref-run-safe" style="background:linear-gradient(135deg,#0284c7,#0369a1);color:#fff;border:none;">🛡️ 所選衝到安全值</button>
           <button type="button" class="xp-btn small" id="ref-run-target" style="background:linear-gradient(135deg,#d97706,#b45309);color:#fff;font-weight:bold;border:none;">🚀 啟動衝到目標 +N</button>
+          <button type="button" class="xp-btn small" id="ref-run-skill" hidden>神工匠武器精練</button>
           <button type="button" class="xp-btn small" id="ref-stop" style="background:#dc2626;color:#fff;display:none;border:none;">⏹ 停止</button>
         </div>
         <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:#cbd5e1;">
@@ -1883,6 +1901,7 @@
       refPanel.querySelector('#ref-auto-wh').onchange = (e) => { refAutoWh = e.target.checked; };
       refPanel.querySelector('#ref-run-safe').onclick = () => runHybridRefine('safe_only');
       refPanel.querySelector('#ref-run-target').onclick = () => runHybridRefine('to_target');
+      refPanel.querySelector('#ref-run-skill').onclick = () => runHybridRefine('skill_only');
       refPanel.querySelector('#ref-stop').onclick = () => { refStop = true; };
     }
 
@@ -1893,6 +1912,11 @@
     refPanel.querySelector('#ref-toggle').textContent =
       `${refOpen ? '🔼 收合精煉清單' : '🔨 展開精煉清單'} (共選 ${refSelected.size} 件)`;
     for (const el of refPanel.querySelectorAll('#ref-mode,#ref-target,#ref-auto-wh,#ref-skip-cfm')) el.disabled = refBusy;
+    const skillButton = refPanel.querySelector('#ref-run-skill');
+    const skillLevel = weaponRefineLevel(b.s);
+    skillButton.hidden = skillLevel <= 0;
+    skillButton.disabled = refBusy || !refinePack;
+    skillButton.title = `使用武器精練技能，至多 +${skillLevel}`;
     refPanel.querySelector('#ref-stop').style.display = refBusy ? 'inline-block' : 'none';
     const listEl = refPanel.querySelector('[data-ref-list]');
     listEl.style.display = refOpen ? 'grid' : 'none';
@@ -2479,7 +2503,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.11</span>
+          <span>⚡ RO Idle 便利助手 v3.3.12</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
