@@ -364,7 +364,7 @@
         const defM = txt.match(/(?:防禦力?|DEF)\s*[:：]?\s*(\d+)/i);
         const wLvM = txt.match(/武器等級\s*[:：]?\s*(\d)/);
         const wtM = txt.match(/重量\s*[:：]?\s*(\d+(?:\.\d+)?)/);
-        const desc = lines.slice(1, 7).join(' ｜ ').slice(0, 240);
+        const desc = lines.slice(1, 14).join('\n').slice(0, 600);
         recordItemDetail(itemId, {
           ...(atkM ? { atk: Number(atkM[1]) } : {}),
           ...(matkM ? { matk: Number(matkM[1]) } : {}),
@@ -2127,12 +2127,79 @@
   const CAT_TABS = { all: '全部', favorites: '★ 收藏', card: '🃏 卡片', weapon: '🗡️ 武器', armor: '🛡️ 防具/飾品', consumable: '🧪 消耗品', material: '🪨 材料' };
 
   // ==================== 【核心升級 2】使用安全 element() 建構露天裝備完整數值、精煉加成與插卡功能懸浮卡 ====================
+  function formatItemDescLines(rawDesc, currentRefine = 0) {
+    if (!rawDesc) return [];
+    const chunks = Array.isArray(rawDesc)
+      ? rawDesc.map((x) => clean(x))
+      : String(rawDesc).split(/\r?\n|\s*｜\s*/).map((x) => clean(x));
+    const lines = [];
+    for (const chunk of chunks) {
+      if (!chunk) continue;
+      // 將黏在一起的「精煉 +N: ...」拆成獨立段落
+      const parts = chunk.split(/(?=精煉\s*\+\s*\d+\s*[:：])/).map((s) => s.trim()).filter(Boolean);
+      for (const part of parts) {
+        // 拆開「手杖,武器等級 3,攻擊力 80 INT +4 MATK +15%」這類前綴標頭與屬性條目
+        const metaMatch = part.match(/^([^:：]+?,(?:武器等級|防禦力?|攻擊力?)[^:：]*?)(?:\s+((?:STR|AGI|VIT|INT|DEX|LUK|ATK|MATK|DEF|MDEF|HIT|FLEE|CRI|ASPD|HP|SP|MaxHP|MaxSP|精煉|對|受到|物理|魔法|技能|攻擊|施法|詠唱|移動|無視|不會|可使用|裝備).*))?$/i);
+        if (metaMatch && !/^精煉\s*\+/.test(part)) {
+          const baseSpec = metaMatch[1].split(',').map((s) => s.trim()).filter(Boolean).join(' ｜ ');
+          if (baseSpec) lines.push({ text: baseSpec, type: 'meta' });
+          if (metaMatch[2]) {
+            const subEffects = metaMatch[2].split(/(?=(?:STR|AGI|VIT|INT|DEX|LUK|MaxHP|MaxSP|ATK|MATK|DEF|MDEF|HIT|FLEE|CRI|ASPD)\s*[+-]\s*\d+%?)/g).map((s) => s.trim()).filter(Boolean);
+            for (const eff of subEffects) lines.push({ text: eff, type: 'effect' });
+          }
+          continue;
+        }
+        const refMatch = part.match(/^精煉\s*\+\s*(\d+)\s*[:：]\s*(.+)$/);
+        if (refMatch) {
+          const lvl = Number(refMatch[1]);
+          const body = refMatch[2].trim();
+          lines.push({
+            text: `精煉 +${lvl}：${body}`,
+            type: 'refine',
+            refineLv: lvl,
+            active: currentRefine > 0 && currentRefine >= lvl
+          });
+          continue;
+        }
+        lines.push({ text: part, type: 'effect' });
+      }
+    }
+    return lines;
+  }
+
+  function renderDescBlock(container, rawDesc, currentRefine = 0, baseColor = '#cbd5e1', fontSize = '11px') {
+    const items = formatItemDescLines(rawDesc, currentRefine);
+    if (!items.length) return;
+    const list = element('div', null, `display:flex;flex-direction:column;gap:3px;font-size:${fontSize};line-height:1.45;`);
+    for (const item of items) {
+      if (item.type === 'meta') {
+        const metaEl = element('div', `📋 ${item.text}`, 'color:#93c5fd;font-size:10.5px;padding-bottom:3px;margin-bottom:1px;border-bottom:1px dashed rgba(148,163,184,0.2);');
+        list.append(metaEl);
+      } else if (item.type === 'refine') {
+        const isCur = currentRefine > 0 && currentRefine === item.refineLv;
+        const row = element(
+          'div',
+          `${isCur ? '▶ ' : '• '}${item.text}`,
+          isCur
+            ? 'color:#fde047;font-weight:bold;background:rgba(250,204,21,0.14);padding:2px 6px;border-radius:4px;border-left:2px solid #facc15;'
+            : item.active
+              ? 'color:#86efac;padding-left:4px;'
+              : 'color:#94a3b8;padding-left:4px;'
+        );
+        list.append(row);
+      } else {
+        list.append(element('div', `• ${item.text}`, `color:${baseColor};padding-left:2px;`));
+      }
+    }
+    container.append(list);
+  }
+
   function resolveItemMeta(numId) {
     const dbInfo = ITEM_DETAIL_DB.get(numId) || {};
     const packItem = PACK_ITEMS_MAP?.get(numId);
     if (!packItem) return dbInfo;
     const rawDesc = packItem.description ?? packItem.effect ?? packItem.desc ?? '';
-    const descText = Array.isArray(rawDesc) ? rawDesc.map(clean).filter(Boolean).join(' ｜ ') : clean(rawDesc);
+    const descText = Array.isArray(rawDesc) ? rawDesc.map(clean).filter(Boolean).join('\n') : clean(rawDesc);
     const slotCount = Array.isArray(packItem.slots)
       ? (typeof packItem.cardSlots === 'number' ? packItem.cardSlots : undefined)
       : (typeof packItem.slots === 'number' ? packItem.slots : packItem.cardSlots);
@@ -2191,9 +2258,9 @@
         dbInfo.def ? `🛡️ DEF ${dbInfo.def}` : '',
         dbInfo.mdef ? `✨ MDEF ${dbInfo.mdef}` : ''
       ].filter(Boolean);
-      if (statParts.length) statBox.append(element('div', statParts.join(' ｜ '), 'color:#e2e8f0;font-weight:bold;margin-bottom:4px;'));
-      if (dbInfo.desc) statBox.append(element('div', `📜 ${dbInfo.desc}`, 'color:#cbd5e1;font-size:11px;line-height:1.45;'));
-      if (data.rawSpecText) statBox.append(element('div', `✨ ${data.rawSpecText}`, 'color:#a7f3d0;font-size:11px;margin-top:3px;'));
+      if (statParts.length) statBox.append(element('div', statParts.join(' ｜ '), 'color:#e2e8f0;font-weight:bold;margin-bottom:5px;'));
+      if (dbInfo.desc) renderDescBlock(statBox, dbInfo.desc, Number(data.refine) || 0, '#e2e8f0', '11px');
+      if (data.rawSpecText) statBox.append(element('div', `✨ ${data.rawSpecText}`, 'color:#a7f3d0;font-size:11px;margin-top:4px;padding-top:3px;border-top:1px dashed rgba(148,163,184,0.2);'));
       nodes.push(statBox);
     }
 
@@ -2224,7 +2291,9 @@
           cTitle.append(document.createTextNode(cName), element('small', ` (${cSub})`, 'color:#94a3b8;font-weight:normal;'));
           cDetail.append(cTitle);
           if (cInfo.desc) {
-            cDetail.append(element('div', cInfo.desc, 'color:#a7f3d0;font-size:10.5px;margin-top:2px;line-height:1.4;'));
+            const cDescWrap = element('div', null, 'margin-top:2px;');
+            renderDescBlock(cDescWrap, cInfo.desc, 0, '#a7f3d0', '10.5px');
+            cDetail.append(cDescWrap);
           } else {
             cDetail.append(element('div', '（卡片效果說明尚未載入）', 'color:#64748b;font-size:10px;margin-top:1px;'));
           }
