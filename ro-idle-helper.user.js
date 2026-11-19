@@ -166,7 +166,7 @@
     if (numId >= 1400 && numId <= 1449) return { cat: 'weapon', sub: '1hSpear' };
     if (numId === 1472 || numId === 1473 || (numId >= 2000 && numId <= 2099)) return { cat: 'weapon', sub: '2hStaff' };
     if ((numId >= 1500 && numId <= 1549) || (numId >= 16000 && numId <= 16099)) return { cat: 'weapon', sub: 'mace' };
-    if (numId >= 1550 && id <= 1599) return { cat: 'weapon', sub: 'book' };
+    if (numId >= 1550 && numId <= 1599) return { cat: 'weapon', sub: 'book' };
     if (numId >= 1600 && numId <= 1699) return { cat: 'weapon', sub: 'staff' };
     if (numId >= 1700 && numId <= 1749) return { cat: 'weapon', sub: 'bow' };
     if (numId >= 1750 && numId <= 1799) return { cat: 'consumable', sub: 'other' };
@@ -408,8 +408,15 @@
       const plus = titleM ? Number(titleM[1]) : 0;
       const inStall = isStallContext(box);
       const titleEl = [...box.querySelectorAll('button, span, div, b, strong, p')].find(
-        (el) => !el.children.length && !el.closest('button[data-ro-lock]') && /^\+\s*\d+/.test(clean(el.textContent))
-      ) || box;
+        (el) => el.closest('.xp-sunken') === box && !el.closest('button[data-ro-lock]') &&
+          Array.from(el.childNodes).some((node) => node.nodeType === Node.TEXT_NODE && /^\+\s*\d+/.test(clean(node.textContent)))
+      );
+      const oldTitle = box.querySelector('[data-ro-detail-title]');
+      if (oldTitle && oldTitle !== titleEl) {
+        applyRefineLevelColor(oldTitle, 0);
+        delete oldTitle.dataset.roDetailTitle;
+      }
+      if (titleEl && !titleEl.hasAttribute('data-ro-detail-title')) titleEl.dataset.roDetailTitle = '';
 
       if (inStall) {
         applyRefineLevelColor(titleEl, 0);
@@ -484,11 +491,27 @@
     processedLines: new WeakMap(), lastNotifyAt: 0
   };
 
+  function warehouseSettings(raw, recover = false) {
+    const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const isRecord = (obj) => obj !== null && typeof obj === 'object' && !Array.isArray(obj);
+    if (!isRecord(value)) throw Error('倉庫備份格式錯誤');
+    for (const key of ['marks', 'autoLocks']) {
+      if (value[key] !== undefined && !isRecord(value[key])) {
+        if (!recover) throw Error('倉庫備份欄位錯誤：' + key);
+        delete value[key];
+      }
+    }
+    return { marks: value.marks ?? {}, autoLocks: value.autoLocks ?? {} };
+  }
+
   try {
     const savedAlert = GM_getValue('ro_lean_prefs_v091', null);
     if (savedAlert) Object.assign(state, savedAlert);
-    const savedWh = JSON.parse(GM_getValue('warehouse-helper-v1', '{}'));
-    if (savedWh) { state.whMarks = savedWh.marks || {}; state.whAutoLocks = savedWh.autoLocks || {}; }
+    try {
+      const wh = warehouseSettings(GM_getValue('warehouse-helper-v1', '{}'), true);
+      state.whMarks = wh.marks;
+      state.whAutoLocks = wh.autoLocks;
+    } catch { state.whMarks = {}; state.whAutoLocks = {}; }
     const savedWords = GM_getValue('ro_custom_protect_words_v091', []);
     if (Array.isArray(savedWords)) state.customProtectWords = savedWords;
   } catch {}
@@ -739,7 +762,7 @@
     if (t.includes('成功擊敗')) state.kills++;
     const em = t.match(/獲得\s*Base EXP\s*([\d,]+)(?:\s*\(\s*\d+(?:\.\d+)?\s*%\s*\))?\s*\/\s*Job EXP\s*([\d,]+)/);
     if (em) { state.bexp += parseInt(em[1].replace(/,/g, ''), 10) || 0; state.jexp += parseInt(em[2].replace(/,/g, ''), 10) || 0; }
-    const lm = t.match(/撿取物品:(.+?)\s*[×xX*]\s*(\d+)/);
+    const lm = t.match(/撿取物品\s*[:：]\s*(.+?)\s*[×xX*]\s*(\d+)/);
     if (lm) {
       const name = lm[1].trim(), q = parseInt(lm[2], 10) || 1;
       state.loot[name] = (state.loot[name] || 0) + q;
@@ -880,8 +903,12 @@
     document.body.appendChild(dlg);
     dlg.querySelector('#wh-rev-cancel').onclick = () => { whSaleApproval = null; dlg.close(); dlg.remove(); };
     dlg.querySelector('#wh-rev-ok').onclick = () => {
-      whSaleApproval = { sig, saleBtn, until: Date.now() + 15000 };
-      saleBtn.click();
+      if (!saleBtn.isConnected || saleBtn.disabled || saleBtn.closest('fieldset') !== f) {
+        dlg.close(); dlg.remove();
+        return;
+      }
+      whSaleApproval = { sig, saleBtn, field: f };
+      try { saleBtn.click(); } finally { whSaleApproval = null; }
       dlg.close(); dlg.remove();
       const st = f.querySelector('[data-ro-wh-status]');
       if (st) st.textContent = '已送出遊戲原生販售確認';
@@ -994,7 +1021,7 @@
     if (btn) {
       const cap = clean(btn.textContent);
       if (/^勾選這頁可以賣的/.test(cap)) {
-        setTimeout(() => f.querySelectorAll('li.ro-wh-locked input[type="checkbox"]').forEach((c) => c.checked && c.click()), 40);
+        requestAnimationFrame(() => { if (f.isConnected) refreshWarehouse(); });
         return;
       }
       if (/^直接賣掉\s*\d+\s*項/.test(cap) && state.whProtect) {
@@ -1005,7 +1032,7 @@
         }
         const approval = whSaleApproval;
         whSaleApproval = null;
-        if (approval?.saleBtn === btn && Date.now() <= approval.until && approval.sig === review.sig) return;
+        if (approval?.saleBtn === btn && approval.field === f && approval.sig === review.sig) return;
         if (!state.whSaleReview) return;
         e.preventDefault(); e.stopImmediatePropagation();
         showWarehouseSaleReview(f, btn, review.items, review.sig);
@@ -1014,7 +1041,8 @@
     }
     if (e.target instanceof HTMLInputElement && e.target.type === 'checkbox') {
       const li = e.target.closest('li');
-      if (e.target.checked && li?.classList.contains('ro-wh-locked') && clean(e.target.getAttribute('aria-label')).startsWith('賣掉 ')) {
+      if (state.whProtect && e.target.checked && clean(e.target.getAttribute('aria-label')).startsWith('賣掉 ') &&
+          li && getLockReason(warehouseItemId(li), clean(li.querySelector('button[aria-label$="的物品資訊"]')?.textContent), clean(li.textContent))) {
         e.preventDefault(); e.stopImmediatePropagation(); return;
       }
       if (!(e.ctrlKey || e.metaKey)) return;
@@ -1506,6 +1534,20 @@
     return val;
   }
 
+  function makeRefinePoller(context) {
+    const table = context.table;
+    const hasSnapshot = (p) => [p.s, p.snap].some((s) => s?.character && Array.isArray(s.inventory) && typeof s.mapId === 'string');
+    const initial = getCommittedProps(table, hasSnapshot);
+    const key = initial && ['s', 'snap'].find((k) => initial[k] === context.s);
+    return () => {
+      if (key && table.isConnected && visible(table)) {
+        const current = getCommittedProps(table, hasSnapshot)?.[key];
+        if (current?.character && Array.isArray(current.inventory) && current.mapId === context.s.mapId) return current;
+      }
+      return readBackpackContext(true)?.s;
+    };
+  }
+
   const isEligibleEquip = (r) => canRefine(r.st);
 
   const refineRowsForPage = (rows) => rows.filter((row) =>
@@ -1585,7 +1627,7 @@
         if (!name || Number(name.match(/^\+\s*(\d+)/)?.[1] || 0) >= (limitsById ? limitsById.get(id) || 0 : targetPlusLimit)) continue;
         if (refStop || document.hidden) throw Error('已中止領倉');
         cb.click();
-        selected.set(cb, id);
+        selected.set(cb, { itemId: id, refine: Number(name.match(/^\+\s*(\d+)/)?.[1] || 0) });
         await sleep(25);
         if (maxItems === 1) {
           const amount = li.querySelector('input[type="number"]');
@@ -1637,6 +1679,7 @@
     if (!b) return;
     const setStatus = (msg) => { if (!refPanel?.isConnected && readBackpackContext(true)) refreshRefinePanel(); const el = refPanel?.querySelector('[data-ref-status]'); if (el) el.textContent = msg; };
 
+    if (!refinePack) return setStatus('請等待精煉資料載入，或重新展開清單重試。');
     const skillOnly = modeType === 'skill_only';
     const limitPlus = modeType === 'safe_only' ? 10
       : skillOnly ? Math.min(refTargetPlus, weaponRefineLevel(b.s)) : refTargetPlus;
@@ -1668,12 +1711,13 @@
           const before = new Set(b.s.inventory.map((x) => x.uid));
           const picked = await tryWithdrawFromWarehouse(trackedItemIds, limitPlus, setStatus, modeType === 'safe_only' ? safeLimits : null);
           if (picked.length) {
-            const expected = picked.sort((a, b) => a - b).join(',');
+            const batchSignature = (items) => items.map((x) => x.itemId + ':' + (x.refine ?? 0)).sort().join(',');
+            const expected = batchSignature(picked);
             let received = false;
             for (let i = 0; i < 40; i++) {
               b = readBackpackContext(true);
               const added = b?.s.inventory.filter((x) => !before.has(x.uid) && trackedItemIds.has(x.itemId)) || [];
-              if (added.map((x) => x.itemId).sort((a, b) => a - b).join(',') === expected) {
+              if (batchSignature(added) === expected) {
                 for (const x of added.filter(canRefine)) { runUids.add(x.uid); refSelected.add(x.uid); }
                 received = true;
                 break;
@@ -1717,10 +1761,10 @@
               page.confirm = originalConfirm;
             }
             if (!accepted) throw Error('已取消原生安全精煉');
+            const pollSnapshot = makeRefinePoller(b);
             for (let i = 0; i < 60; i++) {
               await sleep(100);
-              b = readBackpackContext(true);
-              const nowSt = b?.s.inventory.find((x) => x.uid === uid);
+              const nowSt = pollSnapshot()?.inventory.find((x) => x.uid === uid);
               if (nowSt && (nowSt.refine || 0) >= safeTarget) { confirmed = true; successCnt++; break; }
             }
             if (!confirmed) throw Error(`【${target.name}】安全精煉結果逾時，請確認裝備`);
@@ -1782,18 +1826,20 @@
         if (!userAccepted) throw Error('玩家手動取消精煉');
 
         let resolved = false;
+        const pollSnapshot = makeRefinePoller(b);
         for (let i = 0; i < 80; i++) {
           await sleep(100);
-          b = readBackpackContext(true);
-          if (!b) throw Error('離開背包頁面');
-          const nowSt = b.s.inventory.find((x) => x.uid === uid);
-          const paid = activeBtn === skillBtn ? (b.s.character.sp <= beforeSp - 5) : (b.s.character.zeny < beforeZeny);
+          const snapshot = pollSnapshot();
+          if (!snapshot) throw Error('離開背包頁面');
+          const nowSt = snapshot.inventory.find((x) => x.uid === uid);
+          const paid = activeBtn === skillBtn ? (snapshot.character.sp <= beforeSp - 5) : (snapshot.character.zeny < beforeZeny);
           if (nowSt && (nowSt.refine || 0) === curPlus + 1) {
             successCnt++; resolved = true;
             if (nowSt.refine >= limitPlus) {
               refSelected.delete(uid);
               if (refAutoWh && nowSt.refine >= refTargetPlus && !refStop && !document.hidden) {
-                const stBtn = findNativeDetailBtn(b.table, uid, (t) => /^存入倉庫|^存倉$/.test(t));
+                const live = readBackpackContext(true);
+                const stBtn = live && findNativeDetailBtn(live.table, uid, (t) => /^存入倉庫|^存倉$/.test(t));
                 if (stBtn && !stBtn.disabled) { stBtn.click(); await sleep(150); }
               }
             }
@@ -2133,33 +2179,39 @@
   mktPanel.querySelector('#roi-mkt-sort').onchange = () => renderMkt();
   mktPanel.querySelector('#roi-mkt-min').onchange = () => renderMkt();
 
-  let crossRequest = 0;
+  let crossController = null;
   let crossBusy = false;
   async function doCrossSearch(kw, automatic = false) {
     if (!kw || (automatic && crossBusy)) return;
-    const request = ++crossRequest;
+    crossController?.abort();
+    const controller = new AbortController();
+    crossController = controller;
     crossBusy = true;
     const st = mktPanel.querySelector('#roi-mkt-status');
     st.textContent = `🛰️ 正在跨城補查「${kw}」...`;
     try {
-      const r = await fetch('/api/vending?q=' + encodeURIComponent(kw), { credentials: 'same-origin', cache: 'no-store' });
+      const r = await fetch('/api/vending?q=' + encodeURIComponent(kw), { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
+      if (controller.signal.aborted) return;
       if (r.status === 429) {
         stopMktAuto('HTTP 429：自動整理已停止，請稍後手動啟動');
-        ++crossRequest;
-        crossBusy = false;
         return;
       }
       if (!r.ok) throw Error(`HTTP ${r.status}`);
       const d = await r.json();
       const now = Date.now();
-      if (request !== crossRequest) return;
+      if (controller.signal.aborted) return;
       for (const item of parseShopData(d.shops || [], '', null, now, 'cross')) mktCrossMap.set(item.key, item);
       rebuildPriceEvidence();
       refreshWarehouse();
       st.textContent = `🟢 [${new Date().toLocaleTimeString()}] 跨城補查「${kw}」完成！累計跨城快照 ${mktCrossMap.size} 筆`;
       renderMkt();
-    } catch (e) { if (request === crossRequest) st.textContent = '⚠️ 補查失敗：' + e.message; }
-    finally { if (request === crossRequest) crossBusy = false; }
+    } catch (e) { if (!controller.signal.aborted) st.textContent = '⚠️ 補查失敗：' + e.message; }
+    finally {
+      if (crossController === controller) {
+        crossController = null;
+        crossBusy = false;
+      }
+    }
   }
 
   mktPanel.querySelector('#roi-mkt-cross').onclick = () => {
@@ -2684,13 +2736,14 @@
         const f = fileInp.files[0]; if (!f) return;
         const d = JSON.parse(await f.text());
         if (d.format !== 'ro-idle-lean-backup' && d.format !== 'ro-idle-helper-backup') throw Error('備份格式不符');
+        const rawWh = d.settings?.['warehouse-helper-v1'] ?? d.wh;
+        const wh = rawWh === undefined ? undefined : warehouseSettings(rawWh);
         const options = d.priceOptions ?? d.settings?.[priceOptionKey];
         if (options && validThreshold(options.threshold) && typeof options.enabled === 'boolean') GM_setValue(priceOptionKey, options);
         if (d.words) GM_setValue('ro_custom_protect_words_v091', d.words);
-        if (d.wh) GM_setValue('warehouse-helper-v1', JSON.stringify(d.wh));
+        if (wh) GM_setValue('warehouse-helper-v1', JSON.stringify(wh));
         if (d.favs) GM_setValue('roi-favorites-v1', d.favs);
         if (d.prefs) GM_setValue('ro_lean_prefs_v091', d.prefs);
-        if (d.settings?.['warehouse-helper-v1']) GM_setValue('warehouse-helper-v1', JSON.stringify(d.settings['warehouse-helper-v1']));
         if (d.settings?.['roi-favorites-v1']) GM_setValue('roi-favorites-v1', d.settings['roi-favorites-v1']);
         alert('✅ 備份匯入成功，即將重新載入頁面！');
         location.reload();
