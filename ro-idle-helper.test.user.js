@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.3.20.2
+// @version      3.3.20.3
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -1277,14 +1277,12 @@
   }
 
   let lootPack;
-  let resolvedLootPack = null;
   let PACK_ITEMS_MAP = null;
   function ensurePackItemsLoaded() {
     if (PACK_ITEMS_MAP) return;
     try { void loadLootPack().catch(() => {}); } catch {}
   }
   function loadLootPack() {
-    if (resolvedLootPack) return Promise.resolve(resolvedLootPack);
     const link = document.querySelector('link[rel="modulepreload"][href^="/assets/pack-"]');
     if (!link) throw Error('找不到遊戲的地圖資料');
     lootPack ??= import(link.href).then((module) => {
@@ -1295,14 +1293,13 @@
       for (const it of pack.items) {
         if (it?.id && it.name && !ITEM_NAME_CACHE.has(it.id)) ITEM_NAME_CACHE.set(it.id, clean(it.name));
       }
-      resolvedLootPack = {
+      return {
         maps: new Map(pack.maps.map((map) => [map.id, map])),
         monsters: new Map([...(pack.summons ?? []), ...pack.monsters].map((monster) => [monster.id, monster])),
         items: itemsMap,
         refine: pack.refine
       };
-      return resolvedLootPack;
-    }).catch((error) => { lootPack = null; resolvedLootPack = null; throw error; });
+    }).catch((error) => { lootPack = null; throw error; });
     return lootPack;
   }
 
@@ -1458,59 +1455,29 @@
 
     const monSel = document.querySelector('select[aria-label="怪物控制：加入怪物"]');
     const monHost = monSel?.parentElement;
-    const findMonsterProps = (predicate) => {
-      if (!monSel?.isConnected) return null;
-      const direct = getCommittedProps(monSel, predicate);
-      if (direct) return direct;
-      const key = Object.keys(monSel).find((name) => name.startsWith('__reactFiber$'));
-      let fiber = key && monSel[key];
-      if (!fiber) return null;
-      let root = fiber;
-      while (root.return) root = root.return;
-      if (root.stateNode?.current !== root) fiber = fiber.alternate;
-      for (let depth = 0; fiber && depth < 40; depth++, fiber = fiber.return) {
-        if (predicate(fiber.memoizedProps)) return fiber.memoizedProps;
-        if (typeof fiber.type !== 'function') continue;
-        let hook = fiber.memoizedState;
-        for (let count = 0; hook && count < 200; count++, hook = hook.next) {
-          if (predicate(hook.memoizedState)) return hook.memoizedState;
-        }
-      }
-      return null;
+    const liveMonsterSelect = () => monHost?.querySelector('select[aria-label="怪物控制：加入怪物"]');
+    const monsterDraft = () => getCommittedProps(liveMonsterSelect(), (x) => typeof x.update === 'function' && x.draft?.targets && x.draft?.escape);
+    const mapMonsterIds = () => {
+      const fromProps = getCommittedProps(liveMonsterSelect(), (x) => Array.isArray(x.mapMonsters) || Array.isArray(x.monsterIds));
+      const raw = fromProps?.mapMonsters || fromProps?.monsterIds
+        || findRareRoots().map((root) => getRareContext(root)?.p.monsterIds).find(Array.isArray);
+      return raw && [...new Set(raw.map((m) => Number(typeof m === 'object' ? m.id ?? m.monsterId : m)))]
+        .filter((id) => Number.isSafeInteger(id) && id > 0);
     };
-    const monsterDraft = () => findMonsterProps((x) => Boolean(x && typeof x.update === 'function' &&
-      (x.draft?.targets || x.draft?.escape || Array.isArray(x.draft?.monsterRules))));
-    const mapMonsterIds = (draft) => {
-      const map = resolvedLootPack?.maps.get(draft?.lockMap);
-      let raw = map ? [...(map.spawns ?? []), ...(map.timed ?? [])].map((spawn) => spawn.monsterId) : null;
-      if (!raw) {
-        const props = findMonsterProps((x) => Array.isArray(x?.mapMonsters) || Array.isArray(x?.monsterIds) ||
-          Array.isArray(x?.draft?.mapMonsters) || Array.isArray(x?.draft?.monsterIds));
-        raw = props?.mapMonsters ?? props?.monsterIds ?? props?.draft?.mapMonsters ?? props?.draft?.monsterIds;
-      }
-      return Array.isArray(raw) ? [...new Set(raw.map((m) => Number(typeof m === 'object' ? m?.id ?? m?.monsterId : m)))]
-        .filter((id) => Number.isSafeInteger(id) && id > 0) : null;
-    };
-    if (monHost && !monHost.querySelector('[data-roi-mon-btn]')) {
+    if (monHost) {
       const addBtn = (txt, fn) => {
-        const b = document.createElement('button'); b.type = 'button'; b.className = 'xp-btn small'; b.dataset.roiMonBtn = ''; b.textContent = txt;
-        b.onclick = fn; monHost.append(b);
+        let b = [...monHost.querySelectorAll('[data-roi-mon-btn]')].find((button) => button.textContent === txt);
+        if (!b) {
+          b = document.createElement('button'); b.type = 'button'; b.className = 'xp-btn small';
+          b.dataset.roiMonBtn = ''; b.textContent = txt; monHost.append(b);
+        }
+        b.onclick = fn;
       };
-      addBtn('🔄 同步本圖怪物', async () => {
+      addBtn('🔄 同步本圖怪物', () => {
         const status = monHost.querySelector('[data-roi-mon-status]') || document.createElement('span');
         status.dataset.roiMonStatus = '';
         if (!status.isConnected) monHost.append(status);
-        const initial = monsterDraft();
-        if (!initial) { status.textContent = '無法讀取設定草稿，請重新開啟掛機設定'; return; }
-        const mapId = initial.draft.lockMap;
-        try { await loadLootPack(); }
-        catch (error) {
-          if (mapId) { status.textContent = '無法載入地圖資料：' + error.message; return; }
-        }
-        if (!monSel.isConnected) return;
-        const p = monsterDraft();
-        if (!p || p.draft.lockMap !== mapId) { status.textContent = '地圖或設定已變動，請重試'; return; }
-        const ids = mapMonsterIds(p.draft);
+        const p = monsterDraft(), ids = mapMonsterIds();
         if (!p || !ids) { status.textContent = '無法讀取本圖怪物清單或設定草稿，請重新開啟掛機設定'; return; }
         if (!ids.length) { status.textContent = '目前地圖沒有可同步的怪物'; return; }
         const current = readMonsterRules(p.draft);
@@ -2891,7 +2858,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.20.2 測試版</span>
+          <span>⚡ RO Idle 便利助手 v3.3.20.3 測試版</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
