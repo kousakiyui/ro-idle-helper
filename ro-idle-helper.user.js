@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.4.0
+// @version      3.4.1
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -1584,6 +1584,90 @@
     return val;
   }
 
+  const uniqueVisible = (root, selector, match = () => true) => {
+    const candidates = [...root.querySelectorAll(selector)].filter((el) => visible(el) && match(el));
+    return candidates.length === 1 ? candidates[0] : null;
+  };
+
+  async function waitForCartView(read) {
+    for (let attempt = 0; attempt < 30 && !document.hidden; attempt++) {
+      const result = read();
+      if (result) return result;
+      await sleep(80);
+    }
+    return null;
+  }
+
+  let cartShortcutBusy = false;
+  async function putStackInCart(root, inventoryTab, cartTab, stack) {
+    const cartField = () => uniqueVisible(root, 'fieldset', (field) =>
+      /^手推車(?:[ (]|$)/.test(clean(field.querySelector(':scope > legend')?.textContent)));
+    let box, submitted = false;
+    cartShortcutBusy = true;
+    try {
+      cartTab.click();
+      const section = root !== document && await waitForCartView(() => uniqueVisible(root, 'nav[aria-label="設定分類"] button',
+        (button) => clean(button.textContent) === '手推車'));
+      if (section && section.getAttribute('aria-current') !== 'page') section?.click();
+
+      const field = await waitForCartView(cartField);
+      if (!field) throw Error('找不到原版手推車介面');
+      const selected = () => [...field.querySelectorAll('input[type="checkbox"][aria-label^="放入 "]:checked')];
+      if (selected().length) throw Error('手推車已有勾選項目，請先完成原本的操作');
+      box = uniqueVisible(field, 'input[type="checkbox"][aria-label^="放入 "]',
+        (input) => getReactFiber(input.closest('li'))?.key === String(stack.uid));
+      const props = box && getCommittedProps(box, (p) => p.snap?.cart && Array.isArray(p.snap.inventory));
+      const item = props?.snap.inventory.find((item) => item.uid === stack.uid);
+      if (!box || box.disabled || item?.itemId !== stack.itemId || item.qty !== stack.qty || item.locked
+          || props.snap.activity === 'dead') throw Error('目前無法將這疊物品放入手推車');
+
+      box.click();
+      const submit = await waitForCartView(() => field.isConnected && selected().length === 1 && selected()[0] === box
+        && (stack.qty === 1 || Number(box.closest('li')?.querySelector('input[type="number"]')?.value) === stack.qty)
+        && uniqueVisible(field, 'button', (button) => !button.disabled && /^放入\s+1\s+項$/.test(clean(button.textContent))));
+      if (!submit || document.hidden) throw Error('找不到原版「放入 1 項」按鈕');
+      submitted = true;
+      submit.click();
+      // Return only after the backpack stack disappeared. The native cart shows errors.
+      const moved = await waitForCartView(() => field.isConnected && !box.isConnected);
+      if (moved && inventoryTab.isConnected && visible(inventoryTab)) inventoryTab.click();
+    } catch (error) {
+      if (!submitted && box?.isConnected && box.checked && !box.disabled) box.click();
+      if (!submitted && inventoryTab.isConnected && visible(inventoryTab) && cartField()) inventoryTab.click();
+      alert(error.message);
+    } finally {
+      cartShortcutBusy = false;
+    }
+  }
+
+  document.addEventListener('click', (event) => {
+    if (event.button !== 0 || !(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey || refBusy) return;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const modern = target.closest('[role="listbox"][aria-label="道具"] [role="option"], [role="group"][aria-label="道具"] button[aria-selected]');
+    const tabPanel = modern?.closest('[role="tabpanel"][aria-label="道具"]');
+    const classic = target.closest('table.xp-table tbody tr');
+    const backpack = !modern && classic ? readBackpackContext() : null;
+    const row = backpack?.rows.find((entry) => entry.row === classic && target.closest('button') === classic.querySelector('td button'));
+    if ((!tabPanel || !modern) && !row) return;
+    const uid = Number(getReactFiber(modern)?.key);
+    const itemList = modern && getCommittedProps(modern, (props) =>
+      props.label === '道具' && Array.isArray(props.items));
+    const stack = row?.st ?? itemList?.items.find((entry) => entry.st?.uid === uid)?.st;
+    if (!stack) return;
+
+    const root = tabPanel?.parentElement ?? document;
+    const buttons = tabPanel ? '[role="tablist"][aria-label="背包"] button[role="tab"]' : '.xp-menu-item';
+    const cartTab = uniqueVisible(root, buttons, (button) => clean(button.textContent) === (tabPanel ? '手推車與攤位' : '攤位'));
+    const inventoryTab = uniqueVisible(root, buttons, (button) => clean(button.textContent) === (tabPanel ? '道具' : '背包'));
+    if (!cartTab || !inventoryTab || cartTab.disabled || stack.locked
+        || (backpack && (!backpack.s.cart || backpack.s.vend || Object.values(backpack.s.equipment ?? {}).includes(stack.uid)))) return;
+
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (!cartShortcutBusy) void putStackInCart(root, inventoryTab, cartTab, stack);
+  }, true);
+
   const isEligibleEquip = (r) => canRefine(r.st);
 
   const refineRowsForPage = (rows) => rows.filter((row) =>
@@ -2829,7 +2913,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.4.0</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.4.1</span>
           <span data-roi-mvp-entry style="display:inline-flex;align-items:center;margin-left:auto;"></span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
