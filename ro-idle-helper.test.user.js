@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.3.22.1
+// @version      3.4.0
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -75,7 +75,6 @@
   const SLOTS_MAP = new Map();
   for (const [s, ids] of Object.entries(SLOTS_RAW)) ids.split(',').forEach((id) => SLOTS_MAP.set(Number(id), Number(s)));
 
-  // 武器等級壓縮表 (用於計算精煉附加 ATK/MATK 與過安全值額外高傷；未列出之武器預設 Lv.3)
   const WLV_RAW = {
     1: '1101,1102,1104,1105,1107,1108,1116,1117,1201,1202,1204,1205,1207,1208,1301,1302,1401,1402,1404,1405,1407,1408,1501,1502,1504,1505,1601,1602,1701,1702,1704,1705,1901,1950,1951',
     2: '1110,1111,1113,1114,1122,1123,1125,1128,1151,1152,1154,1155,1210,1211,1213,1214,1216,1217,1219,1220,1250,1251,1351,1352,1354,1355,1451,1452,1454,1455,1460,1461,1507,1508,1510,1511,1519,1520,1550,1604,1605,1607,1608,1707,1708,1710,1711,1713,1715,1801,1802,1903,1904,1905,1906,1952,1954',
@@ -94,19 +93,8 @@
   const HEAD_SUB_MAP = new Map();
   for (const [k, ids] of Object.entries(HEAD_SUB_RAW)) ids.split(',').forEach((id) => HEAD_SUB_MAP.set(Number(id), k));
 
-  const CARD_SUB_RAW = {
-    c_armor: '4001,4003,4008,4014,4017,4023,4031,4038,4043,4054,4061,4068,4076,4084,4088,4098,4099,4105,4114,4119,4120,4136,4141,4154,4161,4170,4175,4182,4184,4194,4196,4199,4207,4211,4213,4214,4221,4223,4226,4231,4232,4234,4242,4247,4252,4256,4262,4265,4273,4275,4280,4288,4295,4299,4300,4302,4304,4306,4312,4318,4324,4329,4332,4333,4334,4336,4338,4339,4342,4345,4353,4357,4369,4370,4372,4374,4377,4380,4382,4383,4386,4401,4402,4406,4408,4409,4410,4419,4426,4431,4432,4440',
-    c_shield: '4005,4012,4013,4016,4022,4026,4032,4035,4042,4053,4056,4058,4066,4067,4072,4087,4089,4093,4103,4111,4116,4118,4124,4125,4128,4132,4135,4138,4177,4180,4187,4197,4203,4208,4218,4224,4230,4238,4244,4250,4253,4254,4277,4278,4293,4307,4315,4321,4326,4344,4356,4362,4373,4384,4391,4400,4407,4413,4414,4422,4427,4428,4435,4438,4439',
-    c_head: '4010,4024,4030,4041,4052,4070,4091,4100,4104,4112,4122,4127,4145,4146,4148,4168,4169,4181,4185,4186,4188,4195,4198,4202,4216,4229,4240,4241,4259,4264,4268,4269,4279,4284,4291,4303,4313,4328,4330,4343,4349,4354,4363,4364,4365,4366,4387,4403,4405,4411,4412,4434,4453',
-    c_garment: '4009,4015,4029,4047,4059,4071,4078,4081,4083,4094,4102,4108,4109,4113,4133,4149,4159,4163,4171,4174,4178,4179,4183,4191,4200,4209,4220,4249,4258,4270,4286,4297,4309,4325,4331,4341,4348,4359,4360,4375,4388,4404,4418,4429,4433,4436',
-    c_shoes: '4025,4049,4050,4073,4090,4096,4097,4107,4123,4131,4137,4144,4160,4162,4190,4201,4212,4222,4228,4233,4236,4239,4246,4257,4283,4290,4308,4316,4319,4323,4340,4346,4358,4368,4376,4381,4416,4417,4423,4437,4441',
-    c_acc: '4004,4027,4033,4036,4039,4040,4044,4051,4055,4064,4074,4077,4079,4086,4095,4101,4110,4139,4143,4166,4173,4193,4204,4205,4206,4215,4217,4219,4225,4227,4235,4237,4245,4266,4272,4285,4294,4296,4301,4310,4311,4322,4327,4335,4337,4347,4350,4351,4352,4355,4371,4389,4392,4393,4415,4420,4421,4424,4430'
-  };
-  const CARD_SUB_MAP = new Map();
-  for (const [k, ids] of Object.entries(CARD_SUB_RAW)) ids.split(',').forEach((id) => CARD_SUB_MAP.set(Number(id), k));
   const ITEM_NAME_CACHE = new Map([[984, '神之金屬'], [985, '鋁'], [756, '神之金屬原石'], [757, '鋁原石'], [7054, '布里刊'], [934, '亡者遺物'], [7053, '賽依伐']]);
 
-  // 動態裝備與卡片完整數值學習庫 (持久化記憶 ATK/MATK/DEF/重量/武器等級/卡片與裝備效果說明)
   const ITEM_DETAIL_DB = new Map();
   const isPollutedDesc = (s) => typeof s === 'string' && /(?:\bZeny\b|🔍|剩\s*\d+|購買\s*\()/.test(s);
   try {
@@ -162,12 +150,10 @@
     bow: '弓', knuckle: '拳套', instrument: '樂器', whip: '鞭子',
     headTop: '頭上', headMid: '頭中', headLow: '頭下', 'headTop+headMid': '頭上＋頭中', 'headMid+headLow': '頭中＋頭下', 'headTop+headMid+headLow': '頭上＋中＋下',
     armor: '鎧甲', shield: '副手盾牌', garment: '披肩', shoes: '鞋子', accessory: '飾品',
-    c_weapon: '武器卡片', c_head: '頭飾卡片', c_armor: '鎧甲卡片', c_shield: '盾牌卡片', c_garment: '披肩卡片', c_shoes: '鞋子卡片', c_acc: '飾品卡片',
     other: '其他'
   };
 
   const CAT_SUBS = {
-    card: ['c_weapon', 'c_head', 'c_armor', 'c_shield', 'c_garment', 'c_shoes', 'c_acc'],
     weapon: ['1hSword', '2hSword', 'dagger', 'katar', 'bow', 'staff', '2hStaff', 'mace', '1hSpear', '2hSpear', '1hAxe', '2hAxe', 'knuckle', 'book', 'instrument', 'whip'],
     armor: ['headTop', 'headMid', 'headLow', 'headTop+headMid', 'headMid+headLow', 'headTop+headMid+headLow', 'armor', 'shield', 'garment', 'shoes', 'accessory']
   };
@@ -175,7 +161,7 @@
   function classifyItem(id, name = '') {
     const numId = Number(id);
     if (name) ITEM_NAME_CACHE.set(numId, name);
-    if ((numId >= 4001 && numId <= 4999) || name.endsWith('卡片')) return { cat: 'card', sub: CARD_SUB_MAP.get(numId) || 'c_weapon' };
+    if ((numId >= 4001 && numId <= 4999) || name.endsWith('卡片')) return { cat: 'card' };
     if (numId === 1116 || numId === 1117 || (numId >= 1150 && numId <= 1199)) return { cat: 'weapon', sub: '2hSword' };
     if ((numId >= 1100 && numId <= 1149) || (numId >= 13400 && numId <= 13499)) return { cat: 'weapon', sub: '1hSword' };
     if ((numId >= 1200 && numId <= 1249) || (numId >= 13000 && numId <= 13099)) return { cat: 'weapon', sub: 'dagger' };
@@ -203,7 +189,6 @@
     return { cat: 'material', sub: 'other' };
   }
 
-  // 判斷 DOM 元素是否屬於攤位／拍賣介面
   function isStallContext(el) {
     if (!el) return false;
     if (el.closest('[data-roi-market-browser], table.roi-market-table')) return true;
@@ -215,7 +200,6 @@
     return false;
   }
 
-  // 非攤位介面：針對 +4 ~ +10 精煉裝備套用漸進式變色（+10 最顯眼）
   function applyRefineLevelColor(el, plus) {
     if (!el) return;
     if (plus >= 4) {
@@ -282,14 +266,13 @@
     }
   }
 
-  // 全域掃描：攤位顯示詳細精煉數值卡片/徽章；人物裝備欄、背包、倉庫等其他地方改用 +4~+10 分級變色
   function annotateAllRefinedEquipment() {
     tryLearnFromReactTree(document.querySelector('main, #root, table.xp-table, fieldset'));
 
     const bagRowMap = bagMemo?.val ? new Map(bagMemo.val.rows.map((x) => [x.row, x])) : null;
     for (const img of document.querySelectorAll('li img[src*="/client/item/"], table.xp-table tr img[src*="/client/item/"]')) {
       const row = img.closest('li, table.xp-table tr');
-      if (!row || row.closest('#ro-helper-hud,[data-roi-market-browser],[data-roi-refine-helper]')) continue;
+      if (!row || row.closest('#ro-helper-hud,#roi-helper-mvp-panel,[data-roi-market-browser],[data-roi-refine-helper]')) continue;
       const itemId = Number(img.getAttribute('src')?.match(/\/(\d+)\.png/)?.[1]);
       if (!itemId) continue;
 
@@ -345,11 +328,9 @@
       applyRefineLevelColor(nameEl, inStall ? 0 : plus);
     }
 
-    // 掃描原生物品資訊彈窗與裝備欄格子 (.xp-sunken)：動態學習數值；非攤位套用 +4~+10 變色
     for (const box of document.querySelectorAll('.xp-sunken')) {
-      if (box.closest('#ro-helper-hud,[data-roi-market-browser],[data-roi-refine-helper]')) continue;
+      if (box.closest('#ro-helper-hud,#roi-helper-mvp-panel,[data-roi-market-browser],[data-roi-refine-helper]')) continue;
       box.querySelector(':scope > [data-ro-detail-ref-badge]')?.remove();
-      // 跳過整張攤位/背包/倉庫表格或清單容器，避免把整個攤位的商品列當成單一物品說明抓進去
       if (box.querySelector('table, ul, ol, input[type="number"], [data-roi-price-search]')) continue;
       const imgs = box.querySelectorAll('img[src*="/client/item/"]');
       const img = imgs[0];
@@ -390,7 +371,7 @@
       const titleM = (lines[0] || '').match(/^\+\s*(\d+)/);
       const plus = titleM ? Number(titleM[1]) : 0;
       const inStall = isStallContext(box);
-      const titleEl = [...box.querySelectorAll('button, span, div, b, strong, p')].find(
+      const titleEl = !/[+＋]\s*[0-9０-９]/.test(rawBoxText) ? null : [...box.querySelectorAll('button, span, div, b, strong, p')].find(
         (el) => !el.children.length && !el.closest('button[data-ro-lock]') && /^\+\s*\d+/.test(clean(el.textContent))
       ) || [...box.querySelectorAll('button, span, div, b, strong, p')].find((el) =>
         !el.closest('button[data-ro-lock]') && [...el.childNodes].some((node) =>
@@ -835,6 +816,17 @@
       ? `已載入攤位普通同規格掛牌：${stats.sellers} 位賣家，最低 ${stats.minimum.toLocaleString('zh-TW')} Zeny；不代表成交價` : '';
   }
 
+  let whSaveTimer = null;
+  function flushWarehouseSave() {
+    if (whSaveTimer) { clearTimeout(whSaveTimer); whSaveTimer = null; }
+    try { GM_setValue('warehouse-helper-v1', JSON.stringify({ marks: state.whMarks, autoLocks: state.whAutoLocks })); } catch {}
+  }
+  function saveWarehouseSoon() {
+    if (!whSaveTimer) whSaveTimer = setTimeout(flushWarehouseSave, 400);
+  }
+  window.addEventListener('pagehide', () => { if (whSaveTimer) flushWarehouseSave(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && whSaveTimer) flushWarehouseSave(); });
+
   function warehouseItemId(li) {
     return li?.querySelector('img[src*="/client/item/"]')?.getAttribute('src')?.match(/\/client\/item\/(\d+)\.png(?:[?#]|$)/)?.[1];
   }
@@ -967,7 +959,7 @@
             const nowLocked = Boolean(getLockReason(id, clean(li.querySelector('button[aria-label$="的物品資訊"]')?.textContent), clean(li.textContent)));
             state.whMarks[id] = nowLocked ? 'neutral' : 'lock';
             if (nowLocked) delete state.whAutoLocks[id];
-            try { GM_setValue('warehouse-helper-v1', JSON.stringify({ marks: state.whMarks, autoLocks: state.whAutoLocks })); } catch {}
+            saveWarehouseSoon();
             refreshWarehouse();
           };
           li.insertBefore(lBtn, cb.nextSibling);
@@ -978,7 +970,7 @@
         if (lBtn.textContent !== lbl) lBtn.textContent = lbl;
         lBtn.title = locked ? `${name} (#${id})｜${reason}\n點擊解鎖` : `點擊鎖定 ${name}`;
       }
-      if (dirty) try { GM_setValue('warehouse-helper-v1', JSON.stringify({ marks: state.whMarks, autoLocks: state.whAutoLocks })); } catch {}
+      if (dirty) saveWarehouseSoon();
     }
   }
 
@@ -986,7 +978,7 @@
     const ids = [...new Set([...f.querySelectorAll('li')].filter(visible).map((li) => warehouseItemId(li)).filter(Boolean))];
     if (!ids.length || !confirm(`確定將目前可見的 ${ids.length} 種物品全部${lock ? '上鎖' : '解鎖'}？`)) return;
     ids.forEach((id) => { state.whMarks[id] = lock ? 'lock' : 'neutral'; if (!lock) delete state.whAutoLocks[id]; });
-    try { GM_setValue('warehouse-helper-v1', JSON.stringify({ marks: state.whMarks, autoLocks: state.whAutoLocks })); } catch {}
+    saveWarehouseSoon();
     refreshWarehouse();
   }
 
@@ -1547,7 +1539,6 @@
 
     const rowNodes = new Set(table.querySelectorAll('tbody > tr')), rows = [], snaps = [];
     const validSnap = (s) => s?.character && Array.isArray(s.inventory) && typeof s.mapId === 'string';
-    // 常見情況只讀背包表格的 Fiber 路徑，避免精煉輪詢每次掃整棵 React 樹。
     const props = bagFastMiss.has(table) ? null : getCommittedProps(table, (p) => validSnap(p?.s) || validSnap(p?.snap));
     const localSnap = props?.s || props?.snap;
     if (validSnap(localSnap)) {
@@ -2166,7 +2157,6 @@
 
   const CAT_TABS = { all: '全部', favorites: '★ 收藏', card: '🃏 卡片', weapon: '🗡️ 武器', armor: '🛡️ 防具/飾品', consumable: '🧪 消耗品', material: '🪨 材料' };
 
-  // ==================== 【核心升級 2】使用安全 element() 建構露天裝備完整數值、精煉加成與插卡功能懸浮卡 ====================
   const descLinesCache = new Map();
   function formatItemDescLines(rawDesc, currentRefine = 0) {
     if (!rawDesc) return [];
@@ -2179,10 +2169,8 @@
     const lines = [];
     for (const chunk of chunks) {
       if (!chunk) continue;
-      // 將黏在一起的「精煉 +N: ...」拆成獨立段落
       const parts = chunk.split(/(?=精煉\s*\+\s*\d+\s*[:：])/).map((s) => s.trim()).filter(Boolean);
       for (const part of parts) {
-        // 拆開「手杖,武器等級 3,攻擊力 80 INT +4 MATK +15%」這類前綴標頭與屬性條目
         const metaMatch = part.match(/^([^:：]+?,(?:武器等級|防禦力?|攻擊力?)[^:：]*?)(?:\s+((?:STR|AGI|VIT|INT|DEX|LUK|ATK|MATK|DEF|MDEF|HIT|FLEE|CRI|ASPD|HP|SP|MaxHP|MaxSP|精煉|對|受到|物理|魔法|技能|攻擊|施法|詠唱|移動|無視|不會|可使用|裝備).*))?$/i);
         if (metaMatch && !/^精煉\s*\+/.test(part)) {
           const baseSpec = metaMatch[1].split(',').map((s) => s.trim()).filter(Boolean).join(' ｜ ');
@@ -2272,7 +2260,6 @@
     const cards = (data.cards || []).filter(Boolean);
     const nodes = [];
 
-    // 1. 頂部圖示與標題區（精煉/插卡強化邊框與標籤）
     const hasCards = cards.length > 0;
     const isRefined = (data.refine || 0) > 0;
     tooltip.style.borderColor = hasCards ? '#facc15' : isRefined ? '#38bdf8' : 'rgba(56,189,248,0.75)';
@@ -2295,7 +2282,6 @@
     header.append(iconWrap, titleBox);
     nodes.push(header);
 
-    // 2. 原始數值與裝備/卡片效果說明區
     if (dbInfo.atk || dbInfo.matk || dbInfo.def || dbInfo.mdef || dbInfo.desc || data.rawSpecText) {
       const statBox = element('div', null, 'background:rgba(9,13,22,0.78);padding:7px 9px;border-radius:7px;margin-bottom:7px;border:1px solid #1e293b;font-size:11.5px;');
       const statParts = [
@@ -2310,7 +2296,6 @@
       nodes.push(statBox);
     }
 
-    // 4. 插卡槽位與每張卡片的圖示、部位與功能說明
     const maxSlots = Math.max(slots, cards.length);
     if (maxSlots > 0 && data.cardsKnown === false) {
       nodes.push(element('div', `💎 插槽 ${maxSlots} 洞（目前清單未提供插卡明細）`, 'font-size:11px;color:#93c5fd;margin-bottom:6px;'));
@@ -2328,13 +2313,11 @@
         if (cid) {
           const cInfo = resolveItemMeta(cid);
           const cName = cInfo.name || ITEM_NAME_CACHE.get(cid) || `卡片 #${cid}`;
-          const cSub = SUB_LABELS[CARD_SUB_MAP.get(cid) || 'c_weapon'];
           const cRow = element('div', null, `display:flex;align-items:flex-start;gap:6px;padding:4px 0;${idx ? 'border-top:1px dashed #334155;' : ''}`);
           const cIcon = element('img', null, 'width:18px;height:18px;object-fit:contain;margin-top:1px;flex-shrink:0;');
           cIcon.src = `/client/item/${cid}.png`;
           const cDetail = element('div', null, 'flex:1;min-width:0;');
-          const cTitle = element('div', null, 'font-weight:bold;color:#fde047;font-size:11.5px;');
-          cTitle.append(document.createTextNode(cName), element('small', ` (${cSub})`, 'color:#94a3b8;font-weight:normal;'));
+          const cTitle = element('div', cName, 'font-weight:bold;color:#fde047;font-size:11.5px;');
           cDetail.append(cTitle);
           if (cInfo.desc) {
             const cDescWrap = element('div', null, 'margin-top:2px;');
@@ -2354,7 +2337,6 @@
       nodes.push(cardBox);
     }
 
-    // 5. 攤位價格、數量與賣家底部列
     if (data.price) {
       const foot = element('div', null, 'display:flex;justify-content:space-between;align-items:center;gap:8px;padding-top:6px;border-top:1px solid rgba(148,163,184,0.22);font-size:11px;color:#94a3b8;');
       const sellerText = `🏪 ${data.seller || '露天攤位'}${data.city ? ` (${TOWN_NAMES[data.city] || data.city})` : ''}`;
@@ -2434,7 +2416,7 @@
 
   mktPanel.querySelector('#roi-mkt-cross').onclick = () => {
     const kw = mktPanel.querySelector('#roi-mkt-q').value.trim() || (mktFilter === 'card' ? '卡片' : mktSub !== 'all' ? SUB_LABELS[mktSub] : '');
-    if (!kw) return alert('請在搜尋框輸入關鍵字（或先選擇卡片/武器/防具細分類）再點跨城補查！');
+    if (!kw) return alert('請在搜尋框輸入關鍵字（或先選擇卡片總類或武器／防具細分類）再點跨城補查！');
     doCrossSearch(kw);
   };
 
@@ -2573,10 +2555,10 @@
       const cid = b.dataset.cid; b.textContent = `${CAT_TABS[cid]} (${counts[cid] || 0})`;
       b.style.outline = mktFilter === cid ? '2px solid #38bdf8' : '';
     });
-    const isDetail = mktFilter === 'card' || mktFilter === 'weapon' || mktFilter === 'armor';
+    const opts = CAT_SUBS[mktFilter];
+    const isDetail = Boolean(opts);
     mktSubWrap.style.display = isDetail ? 'inline-flex' : 'none';
     if (isDetail) {
-      const opts = CAT_SUBS[mktFilter] || [];
       if (mktSub !== 'all' && !opts.includes(mktSub)) mktSub = 'all';
       mktSubSel.innerHTML = [`<option value="all">全部 (${counts[mktFilter] || 0})</option>`, ...opts.map((k) => `<option value="${k}">${SUB_LABELS[k]} (${subCounts[k] || 0})</option>`)].join('');
       mktSubSel.value = mktSub;
@@ -2614,7 +2596,6 @@
     mktRowsBox.replaceChildren(...(rows.length ? rows : [element('div', '無符合商品', 'padding:16px;text-align:center;color:#94a3b8')]));
   }
 
-  // 全域懸浮監聽：同時支援「商品分類 ([data-rkey])」與「原生露天攤位/背包/倉庫 ([data-ro-hover-id])」
   let lastHoveredTarget = null;
   let marketLookupCache = null;
   let marketLookupRef = null;
@@ -2676,11 +2657,9 @@
       const price = priceMatch ? Number(priceMatch[1].replace(/,/g, '')) : undefined;
       const cardsKnown = natRow.dataset.roHoverCards !== undefined;
 
-      // 優先從 React Fiber 讀取該列直接綁定的物品實例（包含完整 cards、slots、鍛造/附魔）
       const stack = readNearbyItemStack(natRow, id, refine);
       const stackCards = Array.isArray(stack?.cards) ? stack.cards.filter(Boolean) : null;
 
-      // 其次比對 O(1) 索引後的本地攤位與跨城補查快取
       let matches = [];
       if (price !== undefined && (natRow.closest('table.roi-market-table') || isStallContext(natRow))) {
         const candidates = getMarketLookup().get(`${id}|${refine}|${price}`) || [];
@@ -2834,7 +2813,7 @@
       [data-ro-ref-tier="9"]  { color: #f87171 !important; font-weight: 800 !important; text-shadow: 0 0 9px rgba(248,113,113,0.7) !important; }
       [data-ro-ref-tier="10"] { color: #ff2d55 !important; font-weight: 900 !important; text-shadow: 0 0 8px #ff2d55, 0 0 3px #ffd700 !important; background: linear-gradient(90deg, rgba(255,45,85,0.22), rgba(250,204,21,0.18)) !important; border-radius: 4px !important; padding: 0 5px !important; border: 1px solid rgba(255,215,0,0.65) !important; }
       #ro-helper-hud { position:fixed; top:48px; right:14px; z-index:2147483646; font-family:system-ui,-apple-system,"Microsoft JhengHei",sans-serif; user-select:none; touch-action:none; }
-      #ro-hud-card { background:linear-gradient(165deg,rgba(15,23,42,0.96),rgba(9,13,22,0.98)); backdrop-filter:blur(12px); color:#f8fafc; border:1.5px solid rgba(56,189,248,0.75); border-radius:12px; box-sizing:border-box; width:min(355px,calc(100vw - 8px)); max-height:calc(100vh - 8px); max-height:calc(100dvh - 8px); box-shadow:0 16px 40px rgba(0,0,0,0.88), 0 0 15px rgba(56,189,248,0.15); font-size:12px; overflow:auto; }
+      #ro-hud-card { background:linear-gradient(165deg,rgba(15,23,42,0.96),rgba(9,13,22,0.98)); backdrop-filter:blur(12px); color:#f8fafc; border:1.5px solid rgba(56,189,248,0.75); border-radius:12px; box-sizing:border-box; width:min(365px,calc(100vw - 8px)); max-height:calc(100vh - 8px); max-height:calc(100dvh - 8px); box-shadow:0 16px 40px rgba(0,0,0,0.88), 0 0 15px rgba(56,189,248,0.15); font-size:12px; overflow:auto; }
       #ro-drag { position:sticky; top:0; z-index:1; }
       .ro-tab { flex:1; text-align:center; padding:8px 2px; cursor:pointer; color:#94a3b8; font-weight:bold; font-size:11px; border-bottom:2px solid transparent; transition:all 0.15s; }
       .ro-tab:hover { color:#e2e8f0; background:rgba(30,41,59,0.5); }
@@ -2849,16 +2828,17 @@
     hud.innerHTML = `
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
-        <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.22.1 測試版</span>
-          <span data-roi-mvp-entry></span>
-          <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
+        <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
+          <span style="white-space:nowrap;">⚡ RO Idle v3.4.0</span>
+          <span data-roi-mvp-entry style="display:inline-flex;align-items:center;margin-left:auto;"></span>
+          <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
           <div class="ro-tab active" data-t="tel">📊 效率</div>
           <div class="ro-tab" data-t="chr">👥 分身</div>
           <div class="ro-tab" data-t="lot">🎒 掉寶</div>
           <div class="ro-tab" data-t="cfg">🔒 貴重詞/備份</div>
+          <div class="ro-tab" data-t="mvp" data-roi-mvp-tab>🧭 MVP</div>
         </div>
         <div class="ro-pane active" id="pane-tel">
           <div style="display:flex;justify-content:space-between;margin-bottom:7px;font-size:11.5px;">
@@ -2908,20 +2888,26 @@
             <input type="file" id="i-imp-file" accept=".json" style="display:none;">
           </div>
         </div>
+        <div class="ro-pane" id="pane-mvp">
+          <div class="ro-box" style="display:flex;flex-direction:column;gap:8px;align-items:flex-start;">
+            <div style="font-weight:bold;color:#fbbf24;">🧭 個人 MVP 雷達</div>
+            <div style="font-size:11.5px;color:#cbd5e1;line-height:1.5;">高頻查閱重生時段、搜尋地圖與一鍵帶入掛機設定；開啟雷達視窗後，點選視窗外畫面即可自動收合。</div>
+            <button type="button" id="b-open-mvp-from-tab" style="background:linear-gradient(135deg,#d97706,#b45309);color:#fff;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-weight:bold;">開啟 MVP 雷達視窗</button>
+          </div>
+        </div>
       </div>
     `;
     hud.querySelector('#i-words').value = state.customProtectWords.join(', ');
     state.renderedLootRev = -1;
     document.body.appendChild(hud);
     if (mvpEntry) hud.querySelector('[data-roi-mvp-entry]').append(mvpEntry);
-    // The embedded browser creates its userscript menu outside the game UI.
-    // Keep that menu with the draggable helper window when it is available.
+
     function attachBrowserMenu() {
       const menu = document.getElementById('mgm-userscript-menu');
       const header = hud.querySelector('#ro-drag');
       if (!menu || !header || menu.parentElement === header) return;
-      menu.style.cssText = 'position:relative;top:auto;right:auto;z-index:2;font:12px system-ui;color:#eee;margin-left:auto;margin-right:8px;';
-      header.insertBefore(menu, header.querySelector('#ro-min-btn'));
+      menu.style.cssText = 'position:relative;top:auto;right:auto;z-index:2;font:12px system-ui;color:#eee;margin-right:4px;';
+      header.insertBefore(menu, header.querySelector('[data-roi-mvp-entry]'));
     }
     attachBrowserMenu();
     const browserMenuObserver = new MutationObserver(() => {
@@ -2931,7 +2917,6 @@
       }
     });
     browserMenuObserver.observe(document.body, { childList: true });
-
 
     function placeHud(left, top) {
       const { width, height } = hud.getBoundingClientRect();
@@ -2996,7 +2981,9 @@
     hud.querySelectorAll('.ro-tab').forEach((t) => t.onclick = () => {
       hud.querySelectorAll('.ro-tab,.ro-pane').forEach((x) => x.classList.remove('active'));
       t.classList.add('active'); document.getElementById('pane-' + t.dataset.t).classList.add('active');
+      if (t.dataset.t === 'mvp') mvpEntry?.click();
     });
+    document.getElementById('b-open-mvp-from-tab').onclick = () => mvpEntry?.click();
 
     document.getElementById('c-snd').onchange = (e) => { state.sound = e.target.checked; savePrefs(); };
     document.getElementById('c-ntf').onchange = (e) => { state.notify = e.target.checked; savePrefs(); };
@@ -3131,7 +3118,9 @@
     }));
   }
 
+  let lastRouterAt = 0;
   function runPageRouter() {
+    lastRouterAt = Date.now();
     refreshRareHelper();
     if (document.querySelector('table.xp-table')) alignAndColorizeNativeMarkets();
     if (document.querySelector('input[aria-label="搜尋物品"]') || refPanel) refreshRefinePanel();
@@ -3173,7 +3162,7 @@
     }
   }).observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes:true, attributeFilter:['hidden','aria-hidden','inert','class','style'] });
 
-  // 個人 MVP 時刻表（整合自獨立版 v1.1.2）
+  // MVP 雷達（個人 MVP 時刻表）：融入儀表盤頂部與分頁，點選視窗外畫面自動關閉（儀表盤保留）
   function createMvpSchedule() {
     const schedules = {"俄塞里斯":[["夢羅克金字塔 4樓","moc_pryd04",3600000,600000]],"巴風特":[["普隆德拉迷宮森林 3樓","prt_maze03",7200000,600000]],"死靈":[["吉芬地下密穴 3樓","gef_dun02",7200000,600000]],"蜂后":[["妙勒妙勒尼山脈北區 04","mjolnir_04",7200000,600000]],"黃金蟲":[["普隆德拉地下水道 4樓","prt_sewb4",3600000,600000]],"獸人英雄":[["吉芬原野 02","gef_fild02",86400000,600000],["西邊 獸人村","gef_fild14",3600000,600000]],"海盜之王":[["艾爾貝塔沈船 2樓","treasure02",7200000,600000]],"虎王":[["斐揚森林 11","pay_fild11",7200000,600000]],"蟻后":[["夢羅克螞蟻地獄密穴 2樓","anthell02",7200000,600000]],"月夜貓":[["斐揚洞穴 5樓(廢村)","pay_dun04",3600000,600000]],"法老王":[["夢羅克人面獅身像 地下 5樓","in_sphinx5",3600000,600000]],"皮里恩":[["蘇克拉特沙漠 17","moc_fild17",7200000,600000]],"獸人酋長":[["獸人村","gef_fild10",7200000,600000]],"冰暴騎士":[["薑餅城玩具分類場","xmas_dun02",3600000,600000]],"卡崙":[["薑餅城原野","xmas_fild01",7200000,600000]],"黑暗之王":[["克雷斯特漢姆古城 地下公墓","gl_chyard",3600000,600000]],"烏龜將軍":[["舊良宮","tur_dun04",3600000,600000]],"死靈騎士":[["尼芙菲姆 鬼峽谷","nif_fild02",7980000,0]],"德古拉男爵":[["吉芬地下密穴 2樓","gef_dun01",3600000,600000]],"墨蛇君":[["崑崙武陵道院","gon_dun03",5650000,600000]],"元靈武士":[["天津町 地下神舍","ama_dun03",5460000,600000]],"古埃及王":[["夢羅克金字塔 地下 2樓","moc_pryd06",3600000,600000]],"塔奧群卡":[["克魔島西邊洞穴加露","beach_dun",18000000,600000]],"RSX-0806":[["艾音貝赫礦山 2樓","ein_dun02",7500000,600000]],"白素貞":[["龍之城審良宮","lou_dun03",7000000,600000]],"騎士領主 賽依連":[["活體實驗研究所 地下 3樓","lhz_dun03",6000000,1800000]],"十字刺客 艾勒梅斯":[["活體實驗研究所 地下 3樓","lhz_dun03",6000000,1800000]],"神工匠 哈沃得":[["活體實驗研究所 地下 3樓","lhz_dun03",6000000,1800000]],"神官 瑪嘉雷特":[["活體實驗研究所 地下 3樓","lhz_dun03",6000000,1800000]],"神射手 迪文":[["活體實驗研究所 地下 3樓","lhz_dun03",6000000,1800000]],"超魔導師 凱特莉娜":[["活體實驗研究所 地下 3樓","lhz_dun03",6000000,1800000]],"闇●劍士 賽尼亞":[["活體實驗研究所 地下 2樓","lhz_dun02",7200000,600000]],"貝思波":[["優配擂斯中心部","jupe_core",7200000,600000]],"嗒妮小姐":[["哎喲泰雅 古神殿內部","ayo_dun02",25200000,600000]],"迪塔勒泰晤勒斯":[["毀葛深淵湖水 地下洞穴 3樓","abyss_03",10800000,600000]],"齊爾-D-01":[["機械娃娃工廠 2樓","kh_dun02",7200000,3600000]],"蘭特克力斯":[["毀葛奧丁神殿北區","odin_tem03",28800000,600000]],"幽暗夢魘":[["拉赫神殿聖域二樓中區","ra_san05",18000000,600000]],"阿特羅斯":[["拉赫歐茲峽谷 02","ra_fild02",14400000,600000],["拉赫 伊達平原 03","ra_fild03",10800000,600000],["拉赫 阿巫敦拉草原 04","ra_fild04",18000000,600000]],"伊夫利特":[["菲音斯 托爾火山洞穴 3樓","thor_v03",39600000,600000]],"墮落大神官 悉潘":[["無名島修道院 地下1樓","abbey02",7200000,600000]],"詛咒蠅王":[["無名島修道院 地下2樓","abbey03",43200000,600000]],"青冠龍":[["莫斯科森林最深處","mosk_dun03",7200000,600000]]};
     const format = new Intl.DateTimeFormat('zh-TW', {
@@ -3237,7 +3226,7 @@
             return frame;
           }).catch(error => { frames.delete(id); throw error; }));
         const [x,y,w,h] = await frames.get(id);
-        if (!canvas.isConnected || !panel.open) { if (canvas.isConnected) portraits.observe(canvas); return; }
+        if (!canvas.isConnected || !isRadarOpen()) { if (canvas.isConnected) portraits.observe(canvas); return; }
         const image = new Image();
         image.src = '/client/mob/'+id+'.png';
         await image.decode();
@@ -3254,34 +3243,37 @@
       #roi-helper-mvp-open {
         display: inline-flex;
         align-items: center;
-        gap: 7px;
-        padding: 4px 6px;
-        border: 1px solid #596e86;
-        border-left: 3px solid #f6c56f;
-        border-radius: 9px;
-        background: linear-gradient(135deg, #243449, #182334);
-        color: #f4f6fa;
-        font: 600 11px/1.2 system-ui, -apple-system, sans-serif;
-        box-shadow: 0 6px 20px #00000066;
+        gap: 5px;
+        padding: 3px 8px;
+        border: 1px solid rgba(251, 191, 36, 0.55);
+        border-radius: 6px;
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.95));
+        color: #fde68a;
+        font: 700 11px/1.2 system-ui, -apple-system, "Microsoft JhengHei", sans-serif;
         cursor: pointer;
         transition: transform .15s ease, border-color .15s ease, background .15s ease;
       }
       #roi-helper-mvp-open:hover {
-        border-color: #83a0c0;
-        background: linear-gradient(135deg, #2b3f57, #1e2b3e);
-        transform: translateY(-1px);
+        border-color: #fbbf24;
+        background: linear-gradient(135deg, #2b3f57, #1e293b);
+        color: #fff;
+      }
+      #roi-helper-mvp-open[data-active="true"] {
+        border-color: #38bdf8;
+        background: linear-gradient(135deg, #1d4ed8, #1e3a8a);
+        color: #fff;
       }
       #roi-helper-mvp-open .badge {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        min-width: 18px;
-        height: 18px;
-        padding: 0 5px;
+        min-width: 16px;
+        height: 16px;
+        padding: 0 4px;
         border-radius: 999px;
         background: #f59e0b;
         color: #16120a;
-        font-size: 11px;
+        font-size: 10.5px;
         font-weight: 800;
         font-variant-numeric: tabular-nums;
       }
@@ -3291,23 +3283,25 @@
         position: fixed;
         inset: 0;
         margin: auto;
+        z-index: 2147483647;
         box-sizing: border-box;
-        width: min(940px, calc(100vw - 24px));
+        width: min(920px, calc(100vw - 24px));
         height: fit-content;
-        max-height: 86vh;
-        max-height: 86dvh;
+        max-height: 84vh;
+        max-height: 84dvh;
         padding: 0;
-        background: #121b29;
+        background: linear-gradient(165deg, rgba(15, 23, 42, 0.97), rgba(9, 13, 22, 0.99));
+        backdrop-filter: blur(12px);
         color: #edf1f7;
-        border: 1px solid #43556d;
-        border-radius: 14px;
-        box-shadow: 0 24px 72px #000000a6;
-        font: 13.5px/1.45 system-ui, -apple-system, sans-serif;
+        border: 1.5px solid rgba(56, 189, 248, 0.72);
+        border-radius: 12px;
+        box-shadow: 0 20px 64px rgba(0, 0, 0, 0.9), 0 0 18px rgba(56, 189, 248, 0.14);
+        font: 13.5px/1.45 system-ui, -apple-system, "Microsoft JhengHei", sans-serif;
         color-scheme: dark;
         overflow: hidden;
       }
+      #roi-helper-mvp-panel:not([open]) { display: none; }
       #roi-helper-mvp-panel[open] { display: flex; flex-direction: column; }
-      #roi-helper-mvp-panel::backdrop { background: #070d18cc; backdrop-filter: blur(2px); }
 
       #roi-helper-mvp-panel button {
         border: 1px solid #485b73;
@@ -3335,10 +3329,10 @@
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        padding: 13px 16px;
-        background: linear-gradient(180deg, #1d2b3e, #172334);
-        border-top: 2px solid #d4a660;
-        border-bottom: 1px solid #304056;
+        padding: 11px 16px;
+        background: linear-gradient(90deg, #1e293b, #0f172a);
+        border-top: 2px solid #fbbf24;
+        border-bottom: 1px solid #334155;
       }
       #roi-helper-mvp-panel .title-wrap {
         display: flex;
@@ -3353,8 +3347,8 @@
       }
       #roi-helper-mvp-panel h2 {
         margin: 0;
-        color: #fff;
-        font-size: 18px;
+        color: #38bdf8;
+        font-size: 16.5px;
         font-weight: 750;
         letter-spacing: .02em;
       }
@@ -3380,9 +3374,9 @@
         align-items: center;
         justify-content: space-between;
         gap: 10px;
-        padding: 10px 16px;
-        background: #152030;
-        border-bottom: 1px solid #2b3a4f;
+        padding: 9px 16px;
+        background: rgba(15, 23, 42, 0.85);
+        border-bottom: 1px solid #263549;
       }
       #roi-helper-mvp-panel .filters {
         display: flex;
@@ -3435,7 +3429,7 @@
         padding: 5px 28px 5px 10px;
         border: 1px solid #3c4e66;
         border-radius: 7px;
-        background: #0e1622;
+        background: #090d16;
         color: #eef3fa;
         font: inherit;
         font-size: 13px;
@@ -3472,7 +3466,7 @@
         margin: 0;
         padding: 8px 12px;
         border-radius: 8px;
-        background: #1b283b;
+        background: rgba(30, 41, 59, 0.75);
         border: 1px solid #344761;
         color: #c8d7ea;
         font-size: 12.5px;
@@ -3517,7 +3511,7 @@
 
       #roi-helper-mvp-panel .cards-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(min(100%, 390px), 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr));
         gap: 10px;
         align-items: stretch;
       }
@@ -3529,18 +3523,18 @@
         justify-content: space-between;
         gap: 10px;
         padding: 11px 12px 11px 14px;
-        background: linear-gradient(145deg, #1b283a, #15202f);
-        border: 1px solid #2f4057;
+        background: rgba(30, 41, 59, 0.72);
+        border: 1px solid rgba(71, 85, 105, 0.65);
         border-left-width: 4px;
         border-radius: 10px;
         transition: border-color .15s ease, transform .15s ease;
       }
       #roi-helper-mvp-panel article.mvp-card:hover {
-        border-color: #496182;
+        border-color: #64748b;
       }
       #roi-helper-mvp-panel article.mvp-card[data-state="window"] {
         border-left-color: #f59e0b;
-        background: linear-gradient(145deg, #272622, #17202e);
+        background: linear-gradient(145deg, rgba(66, 44, 16, 0.55), rgba(30, 41, 59, 0.78));
       }
       #roi-helper-mvp-panel article.mvp-card[data-state="upcoming"] {
         border-left-color: #60a5fa;
@@ -3565,7 +3559,7 @@
         place-items: center;
         border: 1px solid #3c4f66;
         border-radius: 8px;
-        background: radial-gradient(circle at 50% 45%, #37485d, #131c29 80%);
+        background: radial-gradient(circle at 50% 45%, #37485d, #090d16 82%);
         overflow: hidden;
       }
       #roi-helper-mvp-panel canvas {
@@ -3660,7 +3654,7 @@
         gap: 5px;
         padding: 7px 9px;
         border-radius: 7px;
-        background: #121b28;
+        background: rgba(9, 13, 22, 0.72);
         border: 1px solid #263549;
       }
       #roi-helper-mvp-panel .map-top {
@@ -3742,8 +3736,8 @@
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        padding: 10px 16px;
-        background: #152030;
+        padding: 9px 16px;
+        background: rgba(15, 23, 42, 0.9);
         border-top: 1px solid #2b3a4f;
       }
 
@@ -3758,17 +3752,22 @@
     const open = document.createElement('button');
     open.id = 'roi-helper-mvp-open';
     open.type = 'button';
-    open.setAttribute('aria-haspopup', 'dialog');
-    const openLabel = node('span', 'MVP 時刻表');
+    open.title = '開啟／收合 MVP 雷達（開啟時點視窗外畫面可自動關閉）';
+    const openLabel = node('span', '🧭 雷達');
     const openBadge = node('span', '', 'badge');
     openBadge.title = '目前處於預估重生時段的 MVP 數量';
     open.append(openLabel, openBadge);
 
-    const panel = document.createElement('dialog');
+    const panel = document.createElement('div');
     panel.id = 'roi-helper-mvp-panel';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'false');
     panel.setAttribute('aria-labelledby', 'roi-helper-mvp-title');
+    panel.hidden = true;
 
-    const title = node('h2', '個人 MVP 時刻表');
+    const isRadarOpen = () => !panel.hidden && panel.hasAttribute('open');
+
+    const title = node('h2', '🧭 個人 MVP 雷達');
     title.id = 'roi-helper-mvp-title';
     const meta = node('small', '');
     const titleRow = node('div', null, 'title-row');
@@ -3780,7 +3779,18 @@
     refresh.type = 'button';
     const close = node('button', '關閉', 'btn-ghost');
     close.type = 'button';
-    close.onclick = () => panel.close();
+
+    let refreshTimer;
+    function closeRadar() {
+      if (!isRadarOpen()) return;
+      panel.removeAttribute('open');
+      panel.hidden = true;
+      open.dataset.active = 'false';
+      clearInterval(refreshTimer);
+      portraits.disconnect();
+    }
+
+    close.onclick = closeRadar;
 
     const headerActions = node('div', null, 'header-actions');
     headerActions.append(refresh, close);
@@ -3845,23 +3855,17 @@
     const results = document.createElement('main');
     const footer = document.createElement('footer');
     footer.append(
-      node('small', '台北時間 (UTC+8) · 重生後仍需隨機遇敵'),
+      node('small', '台北時間 (UTC+8) · 點選視窗外畫面自動關閉'),
       node('small', '點擊地圖名稱可自動帶入掛機設定')
     );
 
     const portraits = new IntersectionObserver(entries => {
-      for (const entry of entries) if (entry.isIntersecting && panel.open) {
+      for (const entry of entries) if (entry.isIntersecting && isRadarOpen()) {
         portraits.unobserve(entry.target);
         drawPortrait(entry.target);
       }
     }, { root: results });
 
-    let refreshTimer;
-    panel.addEventListener('close', () => {
-      if (panel.open) return;
-      clearInterval(refreshTimer);
-      portraits.disconnect();
-    });
     panel.append(header, toolbar, results, footer);
     document.body.append(panel);
 
@@ -3926,7 +3930,7 @@
     async function chooseMap(map, id) {
       if (navigating) return;
       navigating = true;
-      panel.close();
+      closeRadar();
       try {
         if (!mapGroup()) {
           let tab = namedButton('掛機設定');
@@ -4108,7 +4112,7 @@
     }
 
     function render(data = capture()) {
-      const scrollTop = panel.open ? results.scrollTop : 0;
+      const scrollTop = isRadarOpen() ? results.scrollTop : 0;
       const focused = document.activeElement;
       const focusedBoss = focused?.closest?.('article')?.querySelector('h3')?.textContent;
       const focusedMap = focused?.title;
@@ -4347,18 +4351,42 @@
       restore();return restore;
     }
 
-    const positionPanel=draggable(panel,header);
-    open.onclick = () => {
-      if (panel.open) return;
-      panel.showModal();
+    const positionPanel = draggable(panel, header);
+    function openRadar() {
+      if (isRadarOpen()) return;
+      panel.hidden = false;
+      panel.setAttribute('open', '');
+      open.dataset.active = 'true';
       render();
       positionPanel();
       clearInterval(refreshTimer);
       refreshTimer = window.setInterval(() => {
-        if (panel.open && !document.hidden) render(captureBackground());
+        if (isRadarOpen() && !document.hidden) render(captureBackground());
       }, 30000);
+    }
+    function toggleRadar() {
+      if (isRadarOpen()) closeRadar();
+      else openRadar();
+    }
+
+    open.onclick = (e) => {
+      e.stopPropagation();
+      toggleRadar();
     };
     refresh.onclick = () => render();
+
+    document.addEventListener('pointerdown', (e) => {
+      if (!isRadarOpen()) return;
+      const target = e.target;
+      if (!(target instanceof Element)) return;
+      if (panel.contains(target) || open.contains(target) || target.closest('[data-roi-mvp-tab], #b-open-mvp-from-tab')) return;
+      closeRadar();
+    }, true);
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && isRadarOpen()) closeRadar();
+    });
+
     captureBackground();
     window.setInterval(() => { if (!document.hidden) captureBackground(); }, 15000);
     document.addEventListener('visibilitychange', captureBackground);
@@ -4384,7 +4412,7 @@
   setInterval(() => {
     if (document.hidden) return;
     ensureHUD(); updateHUD();
-    refreshRareHelper();
+    if (Date.now() - lastRouterAt > 1200) refreshRareHelper();
     const itemGroup = document.querySelector('[role="group"][aria-label="道具設定的複製與匯出匯入"]');
     if (itemGroup) lootSyncPanels.get(itemGroup)?.();
   }, 1500);
