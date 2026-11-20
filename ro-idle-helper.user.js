@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.3.22
-// @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計。
+// @version      3.4.0
+// @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
 // @grant        unsafeWindow
@@ -75,7 +75,6 @@
   const SLOTS_MAP = new Map();
   for (const [s, ids] of Object.entries(SLOTS_RAW)) ids.split(',').forEach((id) => SLOTS_MAP.set(Number(id), Number(s)));
 
-  // 武器等級壓縮表 (用於計算精煉附加 ATK/MATK 與過安全值額外高傷；未列出之武器預設 Lv.3)
   const WLV_RAW = {
     1: '1101,1102,1104,1105,1107,1108,1116,1117,1201,1202,1204,1205,1207,1208,1301,1302,1401,1402,1404,1405,1407,1408,1501,1502,1504,1505,1601,1602,1701,1702,1704,1705,1901,1950,1951',
     2: '1110,1111,1113,1114,1122,1123,1125,1128,1151,1152,1154,1155,1210,1211,1213,1214,1216,1217,1219,1220,1250,1251,1351,1352,1354,1355,1451,1452,1454,1455,1460,1461,1507,1508,1510,1511,1519,1520,1550,1604,1605,1607,1608,1707,1708,1710,1711,1713,1715,1801,1802,1903,1904,1905,1906,1952,1954',
@@ -94,19 +93,8 @@
   const HEAD_SUB_MAP = new Map();
   for (const [k, ids] of Object.entries(HEAD_SUB_RAW)) ids.split(',').forEach((id) => HEAD_SUB_MAP.set(Number(id), k));
 
-  const CARD_SUB_RAW = {
-    c_armor: '4001,4003,4008,4014,4017,4023,4031,4038,4043,4054,4061,4068,4076,4084,4088,4098,4099,4105,4114,4119,4120,4136,4141,4154,4161,4170,4175,4182,4184,4194,4196,4199,4207,4211,4213,4214,4221,4223,4226,4231,4232,4234,4242,4247,4252,4256,4262,4265,4273,4275,4280,4288,4295,4299,4300,4302,4304,4306,4312,4318,4324,4329,4332,4333,4334,4336,4338,4339,4342,4345,4353,4357,4369,4370,4372,4374,4377,4380,4382,4383,4386,4401,4402,4406,4408,4409,4410,4419,4426,4431,4432,4440',
-    c_shield: '4005,4012,4013,4016,4022,4026,4032,4035,4042,4053,4056,4058,4066,4067,4072,4087,4089,4093,4103,4111,4116,4118,4124,4125,4128,4132,4135,4138,4177,4180,4187,4197,4203,4208,4218,4224,4230,4238,4244,4250,4253,4254,4277,4278,4293,4307,4315,4321,4326,4344,4356,4362,4373,4384,4391,4400,4407,4413,4414,4422,4427,4428,4435,4438,4439',
-    c_head: '4010,4024,4030,4041,4052,4070,4091,4100,4104,4112,4122,4127,4145,4146,4148,4168,4169,4181,4185,4186,4188,4195,4198,4202,4216,4229,4240,4241,4259,4264,4268,4269,4279,4284,4291,4303,4313,4328,4330,4343,4349,4354,4363,4364,4365,4366,4387,4403,4405,4411,4412,4434,4453',
-    c_garment: '4009,4015,4029,4047,4059,4071,4078,4081,4083,4094,4102,4108,4109,4113,4133,4149,4159,4163,4171,4174,4178,4179,4183,4191,4200,4209,4220,4249,4258,4270,4286,4297,4309,4325,4331,4341,4348,4359,4360,4375,4388,4404,4418,4429,4433,4436',
-    c_shoes: '4025,4049,4050,4073,4090,4096,4097,4107,4123,4131,4137,4144,4160,4162,4190,4201,4212,4222,4228,4233,4236,4239,4246,4257,4283,4290,4308,4316,4319,4323,4340,4346,4358,4368,4376,4381,4416,4417,4423,4437,4441',
-    c_acc: '4004,4027,4033,4036,4039,4040,4044,4051,4055,4064,4074,4077,4079,4086,4095,4101,4110,4139,4143,4166,4173,4193,4204,4205,4206,4215,4217,4219,4225,4227,4235,4237,4245,4266,4272,4285,4294,4296,4301,4310,4311,4322,4327,4335,4337,4347,4350,4351,4352,4355,4371,4389,4392,4393,4415,4420,4421,4424,4430'
-  };
-  const CARD_SUB_MAP = new Map();
-  for (const [k, ids] of Object.entries(CARD_SUB_RAW)) ids.split(',').forEach((id) => CARD_SUB_MAP.set(Number(id), k));
   const ITEM_NAME_CACHE = new Map([[984, '神之金屬'], [985, '鋁'], [756, '神之金屬原石'], [757, '鋁原石'], [7054, '布里刊'], [934, '亡者遺物'], [7053, '賽依伐']]);
 
-  // 動態裝備與卡片完整數值學習庫 (持久化記憶 ATK/MATK/DEF/重量/武器等級/卡片與裝備效果說明)
   const ITEM_DETAIL_DB = new Map();
   const isPollutedDesc = (s) => typeof s === 'string' && /(?:\bZeny\b|🔍|剩\s*\d+|購買\s*\()/.test(s);
   try {
@@ -162,12 +150,10 @@
     bow: '弓', knuckle: '拳套', instrument: '樂器', whip: '鞭子',
     headTop: '頭上', headMid: '頭中', headLow: '頭下', 'headTop+headMid': '頭上＋頭中', 'headMid+headLow': '頭中＋頭下', 'headTop+headMid+headLow': '頭上＋中＋下',
     armor: '鎧甲', shield: '副手盾牌', garment: '披肩', shoes: '鞋子', accessory: '飾品',
-    c_weapon: '武器卡片', c_head: '頭飾卡片', c_armor: '鎧甲卡片', c_shield: '盾牌卡片', c_garment: '披肩卡片', c_shoes: '鞋子卡片', c_acc: '飾品卡片',
     other: '其他'
   };
 
   const CAT_SUBS = {
-    card: ['c_weapon', 'c_head', 'c_armor', 'c_shield', 'c_garment', 'c_shoes', 'c_acc'],
     weapon: ['1hSword', '2hSword', 'dagger', 'katar', 'bow', 'staff', '2hStaff', 'mace', '1hSpear', '2hSpear', '1hAxe', '2hAxe', 'knuckle', 'book', 'instrument', 'whip'],
     armor: ['headTop', 'headMid', 'headLow', 'headTop+headMid', 'headMid+headLow', 'headTop+headMid+headLow', 'armor', 'shield', 'garment', 'shoes', 'accessory']
   };
@@ -175,7 +161,7 @@
   function classifyItem(id, name = '') {
     const numId = Number(id);
     if (name) ITEM_NAME_CACHE.set(numId, name);
-    if ((numId >= 4001 && numId <= 4999) || name.endsWith('卡片')) return { cat: 'card', sub: CARD_SUB_MAP.get(numId) || 'c_weapon' };
+    if ((numId >= 4001 && numId <= 4999) || name.endsWith('卡片')) return { cat: 'card' };
     if (numId === 1116 || numId === 1117 || (numId >= 1150 && numId <= 1199)) return { cat: 'weapon', sub: '2hSword' };
     if ((numId >= 1100 && numId <= 1149) || (numId >= 13400 && numId <= 13499)) return { cat: 'weapon', sub: '1hSword' };
     if ((numId >= 1200 && numId <= 1249) || (numId >= 13000 && numId <= 13099)) return { cat: 'weapon', sub: 'dagger' };
@@ -203,7 +189,6 @@
     return { cat: 'material', sub: 'other' };
   }
 
-  // 判斷 DOM 元素是否屬於攤位／拍賣介面
   function isStallContext(el) {
     if (!el) return false;
     if (el.closest('[data-roi-market-browser], table.roi-market-table')) return true;
@@ -215,7 +200,6 @@
     return false;
   }
 
-  // 非攤位介面：針對 +4 ~ +10 精煉裝備套用漸進式變色（+10 最顯眼）
   function applyRefineLevelColor(el, plus) {
     if (!el) return;
     if (plus >= 4) {
@@ -282,14 +266,13 @@
     }
   }
 
-  // 全域掃描：攤位顯示詳細精煉數值卡片/徽章；人物裝備欄、背包、倉庫等其他地方改用 +4~+10 分級變色
   function annotateAllRefinedEquipment() {
     tryLearnFromReactTree(document.querySelector('main, #root, table.xp-table, fieldset'));
 
     const bagRowMap = bagMemo?.val ? new Map(bagMemo.val.rows.map((x) => [x.row, x])) : null;
     for (const img of document.querySelectorAll('li img[src*="/client/item/"], table.xp-table tr img[src*="/client/item/"]')) {
       const row = img.closest('li, table.xp-table tr');
-      if (!row || row.closest('#ro-helper-hud,[data-roi-market-browser],[data-roi-refine-helper]')) continue;
+      if (!row || row.closest('#ro-helper-hud,#roi-helper-mvp-panel,[data-roi-market-browser],[data-roi-refine-helper]')) continue;
       const itemId = Number(img.getAttribute('src')?.match(/\/(\d+)\.png/)?.[1]);
       if (!itemId) continue;
 
@@ -345,11 +328,9 @@
       applyRefineLevelColor(nameEl, inStall ? 0 : plus);
     }
 
-    // 掃描原生物品資訊彈窗與裝備欄格子 (.xp-sunken)：動態學習數值；非攤位套用 +4~+10 變色
     for (const box of document.querySelectorAll('.xp-sunken')) {
-      if (box.closest('#ro-helper-hud,[data-roi-market-browser],[data-roi-refine-helper]')) continue;
+      if (box.closest('#ro-helper-hud,#roi-helper-mvp-panel,[data-roi-market-browser],[data-roi-refine-helper]')) continue;
       box.querySelector(':scope > [data-ro-detail-ref-badge]')?.remove();
-      // 跳過整張攤位/背包/倉庫表格或清單容器，避免把整個攤位的商品列當成單一物品說明抓進去
       if (box.querySelector('table, ul, ol, input[type="number"], [data-roi-price-search]')) continue;
       const imgs = box.querySelectorAll('img[src*="/client/item/"]');
       const img = imgs[0];
@@ -390,7 +371,7 @@
       const titleM = (lines[0] || '').match(/^\+\s*(\d+)/);
       const plus = titleM ? Number(titleM[1]) : 0;
       const inStall = isStallContext(box);
-      const titleEl = [...box.querySelectorAll('button, span, div, b, strong, p')].find(
+      const titleEl = !/[+＋]\s*[0-9０-９]/.test(rawBoxText) ? null : [...box.querySelectorAll('button, span, div, b, strong, p')].find(
         (el) => !el.children.length && !el.closest('button[data-ro-lock]') && /^\+\s*\d+/.test(clean(el.textContent))
       ) || [...box.querySelectorAll('button, span, div, b, strong, p')].find((el) =>
         !el.closest('button[data-ro-lock]') && [...el.childNodes].some((node) =>
@@ -835,6 +816,17 @@
       ? `已載入攤位普通同規格掛牌：${stats.sellers} 位賣家，最低 ${stats.minimum.toLocaleString('zh-TW')} Zeny；不代表成交價` : '';
   }
 
+  let whSaveTimer = null;
+  function flushWarehouseSave() {
+    if (whSaveTimer) { clearTimeout(whSaveTimer); whSaveTimer = null; }
+    try { GM_setValue('warehouse-helper-v1', JSON.stringify({ marks: state.whMarks, autoLocks: state.whAutoLocks })); } catch {}
+  }
+  function saveWarehouseSoon() {
+    if (!whSaveTimer) whSaveTimer = setTimeout(flushWarehouseSave, 400);
+  }
+  window.addEventListener('pagehide', () => { if (whSaveTimer) flushWarehouseSave(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && whSaveTimer) flushWarehouseSave(); });
+
   function warehouseItemId(li) {
     return li?.querySelector('img[src*="/client/item/"]')?.getAttribute('src')?.match(/\/client\/item\/(\d+)\.png(?:[?#]|$)/)?.[1];
   }
@@ -967,7 +959,7 @@
             const nowLocked = Boolean(getLockReason(id, clean(li.querySelector('button[aria-label$="的物品資訊"]')?.textContent), clean(li.textContent)));
             state.whMarks[id] = nowLocked ? 'neutral' : 'lock';
             if (nowLocked) delete state.whAutoLocks[id];
-            try { GM_setValue('warehouse-helper-v1', JSON.stringify({ marks: state.whMarks, autoLocks: state.whAutoLocks })); } catch {}
+            saveWarehouseSoon();
             refreshWarehouse();
           };
           li.insertBefore(lBtn, cb.nextSibling);
@@ -978,7 +970,7 @@
         if (lBtn.textContent !== lbl) lBtn.textContent = lbl;
         lBtn.title = locked ? `${name} (#${id})｜${reason}\n點擊解鎖` : `點擊鎖定 ${name}`;
       }
-      if (dirty) try { GM_setValue('warehouse-helper-v1', JSON.stringify({ marks: state.whMarks, autoLocks: state.whAutoLocks })); } catch {}
+      if (dirty) saveWarehouseSoon();
     }
   }
 
@@ -986,7 +978,7 @@
     const ids = [...new Set([...f.querySelectorAll('li')].filter(visible).map((li) => warehouseItemId(li)).filter(Boolean))];
     if (!ids.length || !confirm(`確定將目前可見的 ${ids.length} 種物品全部${lock ? '上鎖' : '解鎖'}？`)) return;
     ids.forEach((id) => { state.whMarks[id] = lock ? 'lock' : 'neutral'; if (!lock) delete state.whAutoLocks[id]; });
-    try { GM_setValue('warehouse-helper-v1', JSON.stringify({ marks: state.whMarks, autoLocks: state.whAutoLocks })); } catch {}
+    saveWarehouseSoon();
     refreshWarehouse();
   }
 
@@ -1547,7 +1539,6 @@
 
     const rowNodes = new Set(table.querySelectorAll('tbody > tr')), rows = [], snaps = [];
     const validSnap = (s) => s?.character && Array.isArray(s.inventory) && typeof s.mapId === 'string';
-    // 常見情況只讀背包表格的 Fiber 路徑，避免精煉輪詢每次掃整棵 React 樹。
     const props = bagFastMiss.has(table) ? null : getCommittedProps(table, (p) => validSnap(p?.s) || validSnap(p?.snap));
     const localSnap = props?.s || props?.snap;
     if (validSnap(localSnap)) {
@@ -2166,7 +2157,6 @@
 
   const CAT_TABS = { all: '全部', favorites: '★ 收藏', card: '🃏 卡片', weapon: '🗡️ 武器', armor: '🛡️ 防具/飾品', consumable: '🧪 消耗品', material: '🪨 材料' };
 
-  // ==================== 【核心升級 2】使用安全 element() 建構露天裝備完整數值、精煉加成與插卡功能懸浮卡 ====================
   const descLinesCache = new Map();
   function formatItemDescLines(rawDesc, currentRefine = 0) {
     if (!rawDesc) return [];
@@ -2179,10 +2169,8 @@
     const lines = [];
     for (const chunk of chunks) {
       if (!chunk) continue;
-      // 將黏在一起的「精煉 +N: ...」拆成獨立段落
       const parts = chunk.split(/(?=精煉\s*\+\s*\d+\s*[:：])/).map((s) => s.trim()).filter(Boolean);
       for (const part of parts) {
-        // 拆開「手杖,武器等級 3,攻擊力 80 INT +4 MATK +15%」這類前綴標頭與屬性條目
         const metaMatch = part.match(/^([^:：]+?,(?:武器等級|防禦力?|攻擊力?)[^:：]*?)(?:\s+((?:STR|AGI|VIT|INT|DEX|LUK|ATK|MATK|DEF|MDEF|HIT|FLEE|CRI|ASPD|HP|SP|MaxHP|MaxSP|精煉|對|受到|物理|魔法|技能|攻擊|施法|詠唱|移動|無視|不會|可使用|裝備).*))?$/i);
         if (metaMatch && !/^精煉\s*\+/.test(part)) {
           const baseSpec = metaMatch[1].split(',').map((s) => s.trim()).filter(Boolean).join(' ｜ ');
@@ -2272,7 +2260,6 @@
     const cards = (data.cards || []).filter(Boolean);
     const nodes = [];
 
-    // 1. 頂部圖示與標題區（精煉/插卡強化邊框與標籤）
     const hasCards = cards.length > 0;
     const isRefined = (data.refine || 0) > 0;
     tooltip.style.borderColor = hasCards ? '#facc15' : isRefined ? '#38bdf8' : 'rgba(56,189,248,0.75)';
@@ -2295,7 +2282,6 @@
     header.append(iconWrap, titleBox);
     nodes.push(header);
 
-    // 2. 原始數值與裝備/卡片效果說明區
     if (dbInfo.atk || dbInfo.matk || dbInfo.def || dbInfo.mdef || dbInfo.desc || data.rawSpecText) {
       const statBox = element('div', null, 'background:rgba(9,13,22,0.78);padding:7px 9px;border-radius:7px;margin-bottom:7px;border:1px solid #1e293b;font-size:11.5px;');
       const statParts = [
@@ -2310,7 +2296,6 @@
       nodes.push(statBox);
     }
 
-    // 4. 插卡槽位與每張卡片的圖示、部位與功能說明
     const maxSlots = Math.max(slots, cards.length);
     if (maxSlots > 0 && data.cardsKnown === false) {
       nodes.push(element('div', `💎 插槽 ${maxSlots} 洞（目前清單未提供插卡明細）`, 'font-size:11px;color:#93c5fd;margin-bottom:6px;'));
@@ -2328,13 +2313,11 @@
         if (cid) {
           const cInfo = resolveItemMeta(cid);
           const cName = cInfo.name || ITEM_NAME_CACHE.get(cid) || `卡片 #${cid}`;
-          const cSub = SUB_LABELS[CARD_SUB_MAP.get(cid) || 'c_weapon'];
           const cRow = element('div', null, `display:flex;align-items:flex-start;gap:6px;padding:4px 0;${idx ? 'border-top:1px dashed #334155;' : ''}`);
           const cIcon = element('img', null, 'width:18px;height:18px;object-fit:contain;margin-top:1px;flex-shrink:0;');
           cIcon.src = `/client/item/${cid}.png`;
           const cDetail = element('div', null, 'flex:1;min-width:0;');
-          const cTitle = element('div', null, 'font-weight:bold;color:#fde047;font-size:11.5px;');
-          cTitle.append(document.createTextNode(cName), element('small', ` (${cSub})`, 'color:#94a3b8;font-weight:normal;'));
+          const cTitle = element('div', cName, 'font-weight:bold;color:#fde047;font-size:11.5px;');
           cDetail.append(cTitle);
           if (cInfo.desc) {
             const cDescWrap = element('div', null, 'margin-top:2px;');
@@ -2354,7 +2337,6 @@
       nodes.push(cardBox);
     }
 
-    // 5. 攤位價格、數量與賣家底部列
     if (data.price) {
       const foot = element('div', null, 'display:flex;justify-content:space-between;align-items:center;gap:8px;padding-top:6px;border-top:1px solid rgba(148,163,184,0.22);font-size:11px;color:#94a3b8;');
       const sellerText = `🏪 ${data.seller || '露天攤位'}${data.city ? ` (${TOWN_NAMES[data.city] || data.city})` : ''}`;
@@ -2434,7 +2416,7 @@
 
   mktPanel.querySelector('#roi-mkt-cross').onclick = () => {
     const kw = mktPanel.querySelector('#roi-mkt-q').value.trim() || (mktFilter === 'card' ? '卡片' : mktSub !== 'all' ? SUB_LABELS[mktSub] : '');
-    if (!kw) return alert('請在搜尋框輸入關鍵字（或先選擇卡片/武器/防具細分類）再點跨城補查！');
+    if (!kw) return alert('請在搜尋框輸入關鍵字（或先選擇卡片總類或武器／防具細分類）再點跨城補查！');
     doCrossSearch(kw);
   };
 
@@ -2573,10 +2555,10 @@
       const cid = b.dataset.cid; b.textContent = `${CAT_TABS[cid]} (${counts[cid] || 0})`;
       b.style.outline = mktFilter === cid ? '2px solid #38bdf8' : '';
     });
-    const isDetail = mktFilter === 'card' || mktFilter === 'weapon' || mktFilter === 'armor';
+    const opts = CAT_SUBS[mktFilter];
+    const isDetail = Boolean(opts);
     mktSubWrap.style.display = isDetail ? 'inline-flex' : 'none';
     if (isDetail) {
-      const opts = CAT_SUBS[mktFilter] || [];
       if (mktSub !== 'all' && !opts.includes(mktSub)) mktSub = 'all';
       mktSubSel.innerHTML = [`<option value="all">全部 (${counts[mktFilter] || 0})</option>`, ...opts.map((k) => `<option value="${k}">${SUB_LABELS[k]} (${subCounts[k] || 0})</option>`)].join('');
       mktSubSel.value = mktSub;
@@ -2614,7 +2596,6 @@
     mktRowsBox.replaceChildren(...(rows.length ? rows : [element('div', '無符合商品', 'padding:16px;text-align:center;color:#94a3b8')]));
   }
 
-  // 全域懸浮監聽：同時支援「商品分類 ([data-rkey])」與「原生露天攤位/背包/倉庫 ([data-ro-hover-id])」
   let lastHoveredTarget = null;
   let marketLookupCache = null;
   let marketLookupRef = null;
@@ -2676,11 +2657,9 @@
       const price = priceMatch ? Number(priceMatch[1].replace(/,/g, '')) : undefined;
       const cardsKnown = natRow.dataset.roHoverCards !== undefined;
 
-      // 優先從 React Fiber 讀取該列直接綁定的物品實例（包含完整 cards、slots、鍛造/附魔）
       const stack = readNearbyItemStack(natRow, id, refine);
       const stackCards = Array.isArray(stack?.cards) ? stack.cards.filter(Boolean) : null;
 
-      // 其次比對 O(1) 索引後的本地攤位與跨城補查快取
       let matches = [];
       if (price !== undefined && (natRow.closest('table.roi-market-table') || isStallContext(natRow))) {
         const candidates = getMarketLookup().get(`${id}|${refine}|${price}`) || [];
@@ -2834,7 +2813,7 @@
       [data-ro-ref-tier="9"]  { color: #f87171 !important; font-weight: 800 !important; text-shadow: 0 0 9px rgba(248,113,113,0.7) !important; }
       [data-ro-ref-tier="10"] { color: #ff2d55 !important; font-weight: 900 !important; text-shadow: 0 0 8px #ff2d55, 0 0 3px #ffd700 !important; background: linear-gradient(90deg, rgba(255,45,85,0.22), rgba(250,204,21,0.18)) !important; border-radius: 4px !important; padding: 0 5px !important; border: 1px solid rgba(255,215,0,0.65) !important; }
       #ro-helper-hud { position:fixed; top:48px; right:14px; z-index:2147483646; font-family:system-ui,-apple-system,"Microsoft JhengHei",sans-serif; user-select:none; touch-action:none; }
-      #ro-hud-card { background:linear-gradient(165deg,rgba(15,23,42,0.96),rgba(9,13,22,0.98)); backdrop-filter:blur(12px); color:#f8fafc; border:1.5px solid rgba(56,189,248,0.75); border-radius:12px; box-sizing:border-box; width:min(355px,calc(100vw - 8px)); max-height:calc(100vh - 8px); max-height:calc(100dvh - 8px); box-shadow:0 16px 40px rgba(0,0,0,0.88), 0 0 15px rgba(56,189,248,0.15); font-size:12px; overflow:auto; }
+      #ro-hud-card { background:linear-gradient(165deg,rgba(15,23,42,0.96),rgba(9,13,22,0.98)); backdrop-filter:blur(12px); color:#f8fafc; border:1.5px solid rgba(56,189,248,0.75); border-radius:12px; box-sizing:border-box; width:min(365px,calc(100vw - 8px)); max-height:calc(100vh - 8px); max-height:calc(100dvh - 8px); box-shadow:0 16px 40px rgba(0,0,0,0.88), 0 0 15px rgba(56,189,248,0.15); font-size:12px; overflow:auto; }
       #ro-drag { position:sticky; top:0; z-index:1; }
       .ro-tab { flex:1; text-align:center; padding:8px 2px; cursor:pointer; color:#94a3b8; font-weight:bold; font-size:11px; border-bottom:2px solid transparent; transition:all 0.15s; }
       .ro-tab:hover { color:#e2e8f0; background:rgba(30,41,59,0.5); }
@@ -2849,15 +2828,17 @@
     hud.innerHTML = `
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
-        <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span>⚡ RO Idle 便利助手 v3.3.22</span>
-          <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 9px;cursor:pointer;font-weight:bold;">━</button>
+        <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
+          <span style="white-space:nowrap;">⚡ RO Idle v3.4.0</span>
+          <span data-roi-mvp-entry style="display:inline-flex;align-items:center;margin-left:auto;"></span>
+          <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
           <div class="ro-tab active" data-t="tel">📊 效率</div>
           <div class="ro-tab" data-t="chr">👥 分身</div>
           <div class="ro-tab" data-t="lot">🎒 掉寶</div>
           <div class="ro-tab" data-t="cfg">🔒 貴重詞/備份</div>
+          <div class="ro-tab" data-t="mvp" data-roi-mvp-tab>🧭 MVP</div>
         </div>
         <div class="ro-pane active" id="pane-tel">
           <div style="display:flex;justify-content:space-between;margin-bottom:7px;font-size:11.5px;">
@@ -2907,19 +2888,26 @@
             <input type="file" id="i-imp-file" accept=".json" style="display:none;">
           </div>
         </div>
+        <div class="ro-pane" id="pane-mvp">
+          <div class="ro-box" style="display:flex;flex-direction:column;gap:8px;align-items:flex-start;">
+            <div style="font-weight:bold;color:#fbbf24;">🧭 個人 MVP 雷達</div>
+            <div style="font-size:11.5px;color:#cbd5e1;line-height:1.5;">高頻查閱重生時段、搜尋地圖與一鍵帶入掛機設定；開啟雷達視窗後，點選視窗外畫面即可自動收合。</div>
+            <button type="button" id="b-open-mvp-from-tab" style="background:linear-gradient(135deg,#d97706,#b45309);color:#fff;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-weight:bold;">開啟 MVP 雷達視窗</button>
+          </div>
+        </div>
       </div>
     `;
     hud.querySelector('#i-words').value = state.customProtectWords.join(', ');
     state.renderedLootRev = -1;
     document.body.appendChild(hud);
-    // The embedded browser creates its userscript menu outside the game UI.
-    // Keep that menu with the draggable helper window when it is available.
+    if (mvpEntry) hud.querySelector('[data-roi-mvp-entry]').append(mvpEntry);
+
     function attachBrowserMenu() {
       const menu = document.getElementById('mgm-userscript-menu');
       const header = hud.querySelector('#ro-drag');
       if (!menu || !header || menu.parentElement === header) return;
-      menu.style.cssText = 'position:relative;top:auto;right:auto;z-index:2;font:12px system-ui;color:#eee;margin-left:auto;margin-right:8px;';
-      header.insertBefore(menu, header.querySelector('#ro-min-btn'));
+      menu.style.cssText = 'position:relative;top:auto;right:auto;z-index:2;font:12px system-ui;color:#eee;margin-right:4px;';
+      header.insertBefore(menu, header.querySelector('[data-roi-mvp-entry]'));
     }
     attachBrowserMenu();
     const browserMenuObserver = new MutationObserver(() => {
@@ -2929,7 +2917,6 @@
       }
     });
     browserMenuObserver.observe(document.body, { childList: true });
-
 
     function placeHud(left, top) {
       const { width, height } = hud.getBoundingClientRect();
@@ -2994,7 +2981,9 @@
     hud.querySelectorAll('.ro-tab').forEach((t) => t.onclick = () => {
       hud.querySelectorAll('.ro-tab,.ro-pane').forEach((x) => x.classList.remove('active'));
       t.classList.add('active'); document.getElementById('pane-' + t.dataset.t).classList.add('active');
+      if (t.dataset.t === 'mvp') mvpEntry?.click();
     });
+    document.getElementById('b-open-mvp-from-tab').onclick = () => mvpEntry?.click();
 
     document.getElementById('c-snd').onchange = (e) => { state.sound = e.target.checked; savePrefs(); };
     document.getElementById('c-ntf').onchange = (e) => { state.notify = e.target.checked; savePrefs(); };
@@ -3129,7 +3118,9 @@
     }));
   }
 
+  let lastRouterAt = 0;
   function runPageRouter() {
+    lastRouterAt = Date.now();
     refreshRareHelper();
     if (document.querySelector('table.xp-table')) alignAndColorizeNativeMarkets();
     if (document.querySelector('input[aria-label="搜尋物品"]') || refPanel) refreshRefinePanel();
@@ -3149,7 +3140,7 @@
     let domChanged = false;
     for (const r of records) {
       const el = r.target.nodeType === 1 ? r.target : r.target.parentElement;
-      if (!el || !el.isConnected || el.closest('#ro-helper-hud,#roi-item-hover-tooltip,[data-roi-market-browser],[data-ro-wh-bar],[data-ro-rare-helper],[data-roi-settings-tools],[data-roi-refine-helper],[data-roi-price-search],[data-roi-upper-fold]')) continue;
+      if (!el || !el.isConnected || el.closest('#ro-helper-hud,#roi-helper-mvp-panel,#roi-item-hover-tooltip,[data-roi-market-browser],[data-ro-wh-bar],[data-ro-rare-helper],[data-roi-settings-tools],[data-roi-refine-helper],[data-roi-price-search],[data-roi-upper-fold]')) continue;
       if (r.type === 'attributes' && !el.matches('fieldset') && !el.querySelector('fieldset')) continue;
       if (el.closest('.log-window')) {
         if (r.type === 'characterData' || r.type === 'childList') parseLog(el.closest('.log-line'));
@@ -3171,12 +3162,1257 @@
     }
   }).observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes:true, attributeFilter:['hidden','aria-hidden','inert','class','style'] });
 
+  // MVP 雷達（個人 MVP 時刻表）：融入儀表盤頂部與分頁，點選視窗外畫面自動關閉（儀表盤保留）
+  function createMvpSchedule() {
+    const schedules = {"俄塞里斯":[["夢羅克金字塔 4樓","moc_pryd04",3600000,600000]],"巴風特":[["普隆德拉迷宮森林 3樓","prt_maze03",7200000,600000]],"死靈":[["吉芬地下密穴 3樓","gef_dun02",7200000,600000]],"蜂后":[["妙勒妙勒尼山脈北區 04","mjolnir_04",7200000,600000]],"黃金蟲":[["普隆德拉地下水道 4樓","prt_sewb4",3600000,600000]],"獸人英雄":[["吉芬原野 02","gef_fild02",86400000,600000],["西邊 獸人村","gef_fild14",3600000,600000]],"海盜之王":[["艾爾貝塔沈船 2樓","treasure02",7200000,600000]],"虎王":[["斐揚森林 11","pay_fild11",7200000,600000]],"蟻后":[["夢羅克螞蟻地獄密穴 2樓","anthell02",7200000,600000]],"月夜貓":[["斐揚洞穴 5樓(廢村)","pay_dun04",3600000,600000]],"法老王":[["夢羅克人面獅身像 地下 5樓","in_sphinx5",3600000,600000]],"皮里恩":[["蘇克拉特沙漠 17","moc_fild17",7200000,600000]],"獸人酋長":[["獸人村","gef_fild10",7200000,600000]],"冰暴騎士":[["薑餅城玩具分類場","xmas_dun02",3600000,600000]],"卡崙":[["薑餅城原野","xmas_fild01",7200000,600000]],"黑暗之王":[["克雷斯特漢姆古城 地下公墓","gl_chyard",3600000,600000]],"烏龜將軍":[["舊良宮","tur_dun04",3600000,600000]],"死靈騎士":[["尼芙菲姆 鬼峽谷","nif_fild02",7980000,0]],"德古拉男爵":[["吉芬地下密穴 2樓","gef_dun01",3600000,600000]],"墨蛇君":[["崑崙武陵道院","gon_dun03",5650000,600000]],"元靈武士":[["天津町 地下神舍","ama_dun03",5460000,600000]],"古埃及王":[["夢羅克金字塔 地下 2樓","moc_pryd06",3600000,600000]],"塔奧群卡":[["克魔島西邊洞穴加露","beach_dun",18000000,600000]],"RSX-0806":[["艾音貝赫礦山 2樓","ein_dun02",7500000,600000]],"白素貞":[["龍之城審良宮","lou_dun03",7000000,600000]],"騎士領主 賽依連":[["活體實驗研究所 地下 3樓","lhz_dun03",6000000,1800000]],"十字刺客 艾勒梅斯":[["活體實驗研究所 地下 3樓","lhz_dun03",6000000,1800000]],"神工匠 哈沃得":[["活體實驗研究所 地下 3樓","lhz_dun03",6000000,1800000]],"神官 瑪嘉雷特":[["活體實驗研究所 地下 3樓","lhz_dun03",6000000,1800000]],"神射手 迪文":[["活體實驗研究所 地下 3樓","lhz_dun03",6000000,1800000]],"超魔導師 凱特莉娜":[["活體實驗研究所 地下 3樓","lhz_dun03",6000000,1800000]],"闇●劍士 賽尼亞":[["活體實驗研究所 地下 2樓","lhz_dun02",7200000,600000]],"貝思波":[["優配擂斯中心部","jupe_core",7200000,600000]],"嗒妮小姐":[["哎喲泰雅 古神殿內部","ayo_dun02",25200000,600000]],"迪塔勒泰晤勒斯":[["毀葛深淵湖水 地下洞穴 3樓","abyss_03",10800000,600000]],"齊爾-D-01":[["機械娃娃工廠 2樓","kh_dun02",7200000,3600000]],"蘭特克力斯":[["毀葛奧丁神殿北區","odin_tem03",28800000,600000]],"幽暗夢魘":[["拉赫神殿聖域二樓中區","ra_san05",18000000,600000]],"阿特羅斯":[["拉赫歐茲峽谷 02","ra_fild02",14400000,600000],["拉赫 伊達平原 03","ra_fild03",10800000,600000],["拉赫 阿巫敦拉草原 04","ra_fild04",18000000,600000]],"伊夫利特":[["菲音斯 托爾火山洞穴 3樓","thor_v03",39600000,600000]],"墮落大神官 悉潘":[["無名島修道院 地下1樓","abbey02",7200000,600000]],"詛咒蠅王":[["無名島修道院 地下2樓","abbey03",43200000,600000]],"青冠龍":[["莫斯科森林最深處","mosk_dun03",7200000,600000]]};
+    const format = new Intl.DateTimeFormat('zh-TW', {
+      timeZone: 'Asia/Taipei', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+    });
+    const formatTimeOnly = new Intl.DateTimeFormat('zh-TW', {
+      timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+    });
+
+    function readMinute(text, now) {
+      const match = text.normalize('NFKC').match(/最後一次擊殺:\s*(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})$/);
+      if (!match) return null;
+      const [, month, day, hour, minute] = match.map(Number);
+      if (hour > 23 || minute > 59) return null;
+      const taipeiNow = new Date(now + 8 * 3600000);
+      const year = taipeiNow.getUTCFullYear();
+      let nearest = null;
+      for (const y of [year, year - 1, year + 1]) {
+        const local = new Date(Date.UTC(y, month - 1, day, hour, minute));
+        const time = local.getTime() - 8 * 3600000;
+        if (local.getUTCMonth() !== month - 1 || local.getUTCDate() !== day || time > now + 300000) continue;
+        if (nearest === null || Math.abs(time - now) < Math.abs(nearest - now)) nearest = time;
+      }
+      return nearest;
+    }
+
+    function node(tag, text, className) {
+      const el = document.createElement(tag);
+      if (text != null) el.textContent = text;
+      if (className) el.className = className;
+      return el;
+    }
+
+    function formatDuration(ms) {
+      const totalMin = Math.max(1, Math.ceil(ms / 60000));
+      if (totalMin < 60) return totalMin + ' 分';
+      const h = Math.floor(totalMin / 60);
+      const m = totalMin % 60;
+      return m ? `${h} 小時 ${m} 分` : `${h} 小時`;
+    }
+
+    function formatRange(start, end) {
+      const s = format.format(start);
+      const eFull = format.format(end);
+      return s.slice(0, 5) === eFull.slice(0, 5)
+        ? `${s} ～ ${formatTimeOnly.format(end)}`
+        : `${s} ～ ${eFull}`;
+    }
+
+    const monsterIds = {"俄塞里斯":1038,"巴風特":1039,"死靈":1046,"蜂后":1059,"黃金蟲":1086,"獸人英雄":1087,"海盜之王":1112,"虎王":1115,"蟻后":1147,"月夜貓":1150,"法老王":1157,"皮里恩":1159,"獸人酋長":1190,"冰暴騎士":1251,"卡崙":1252,"黑暗之王":1272,"烏龜將軍":1312,"死靈騎士":1373,"德古拉男爵":1389,"墨蛇君":1418,"元靈武士":1492,"古埃及王":1511,"塔奧群卡":1583,"RSX-0806":1623,"白素貞":1630,"騎士領主 賽依連":1646,"十字刺客 艾勒梅斯":1647,"神工匠 哈沃得":1648,"神官 瑪嘉雷特":1649,"神射手 迪文":1650,"超魔導師 凱特莉娜":1651,"闇●劍士 賽尼亞":1658,"貝思波":1685,"嗒妮小姐":1688,"迪塔勒泰晤勒斯":1719,"齊爾-D-01":1734,"蘭特克力斯":1751,"幽暗夢魘":1768,"阿特羅斯":1785,"伊夫利特":1832,"墮落大神官 悉潘":1871,"詛咒蠅王":1874,"青冠龍":1885};
+    const frames = new Map();
+    async function drawPortrait(canvas) {
+      const id = canvas.dataset.monster;
+      try {
+        if (!frames.has(id)) frames.set(id, fetch('/client/mob/'+id+'.json')
+          .then(async response => {
+            if (!response.ok) throw Error();
+            const frame = (await response.json()).stand.frames[0];
+            if (!Array.isArray(frame) || frame.length < 4 || !frame.slice(0,4).every(Number.isFinite) || frame[2] <= 0 || frame[3] <= 0) throw Error();
+            return frame;
+          }).catch(error => { frames.delete(id); throw error; }));
+        const [x,y,w,h] = await frames.get(id);
+        if (!canvas.isConnected || !isRadarOpen()) { if (canvas.isConnected) portraits.observe(canvas); return; }
+        const image = new Image();
+        image.src = '/client/mob/'+id+'.png';
+        await image.decode();
+        const ctx = canvas.getContext('2d');
+        const scale = Math.min(2, (canvas.width-8)/w, (canvas.height-8)/h);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(image,x,y,w,h,(canvas.width-w*scale)/2,(canvas.height-h*scale)/2,w*scale,h*scale);
+      } catch {
+        if (canvas.isConnected) canvas.parentElement?.replaceChildren(node('small','圖片暫缺','no-portrait'));
+      }
+    }
+
+    const style = node('style', `
+      #roi-helper-mvp-open {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 8px;
+        border: 1px solid rgba(251, 191, 36, 0.55);
+        border-radius: 6px;
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.95));
+        color: #fde68a;
+        font: 700 11px/1.2 system-ui, -apple-system, "Microsoft JhengHei", sans-serif;
+        cursor: pointer;
+        transition: transform .15s ease, border-color .15s ease, background .15s ease;
+      }
+      #roi-helper-mvp-open:hover {
+        border-color: #fbbf24;
+        background: linear-gradient(135deg, #2b3f57, #1e293b);
+        color: #fff;
+      }
+      #roi-helper-mvp-open[data-active="true"] {
+        border-color: #38bdf8;
+        background: linear-gradient(135deg, #1d4ed8, #1e3a8a);
+        color: #fff;
+      }
+      #roi-helper-mvp-open .badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 16px;
+        height: 16px;
+        padding: 0 4px;
+        border-radius: 999px;
+        background: #f59e0b;
+        color: #16120a;
+        font-size: 10.5px;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+      }
+      #roi-helper-mvp-open .badge:empty { display: none; }
+
+      #roi-helper-mvp-panel {
+        position: fixed;
+        inset: 0;
+        margin: auto;
+        z-index: 2147483647;
+        box-sizing: border-box;
+        width: min(920px, calc(100vw - 24px));
+        height: fit-content;
+        max-height: 84vh;
+        max-height: 84dvh;
+        padding: 0;
+        background: linear-gradient(165deg, rgba(15, 23, 42, 0.97), rgba(9, 13, 22, 0.99));
+        backdrop-filter: blur(12px);
+        color: #edf1f7;
+        border: 1.5px solid rgba(56, 189, 248, 0.72);
+        border-radius: 12px;
+        box-shadow: 0 20px 64px rgba(0, 0, 0, 0.9), 0 0 18px rgba(56, 189, 248, 0.14);
+        font: 13.5px/1.45 system-ui, -apple-system, "Microsoft JhengHei", sans-serif;
+        color-scheme: dark;
+        overflow: hidden;
+      }
+      #roi-helper-mvp-panel:not([open]) { display: none; }
+      #roi-helper-mvp-panel[open] { display: flex; flex-direction: column; }
+
+      #roi-helper-mvp-panel button {
+        border: 1px solid #485b73;
+        background: #223146;
+        color: #eef3fa;
+        border-radius: 7px;
+        padding: 6px 12px;
+        font: inherit;
+        cursor: pointer;
+        transition: background .15s ease, border-color .15s ease, color .15s ease;
+      }
+      #roi-helper-mvp-panel button:hover {
+        background: #2b3e57;
+        border-color: #6b84a3;
+      }
+      #roi-helper-mvp-panel button:focus-visible,
+      #roi-helper-mvp-open:focus-visible,
+      #roi-helper-mvp-panel input:focus-visible {
+        outline: 2px solid #ffcf80;
+        outline-offset: 2px;
+      }
+
+      #roi-helper-mvp-panel header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 11px 16px;
+        background: linear-gradient(90deg, #1e293b, #0f172a);
+        border-top: 2px solid #fbbf24;
+        border-bottom: 1px solid #334155;
+      }
+      #roi-helper-mvp-panel .title-wrap {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+      }
+      #roi-helper-mvp-panel .title-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      #roi-helper-mvp-panel h2 {
+        margin: 0;
+        color: #38bdf8;
+        font-size: 16.5px;
+        font-weight: 750;
+        letter-spacing: .02em;
+      }
+      #roi-helper-mvp-panel .header-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+      #roi-helper-mvp-panel .btn-ghost {
+        background: transparent;
+        border-color: #3d4f66;
+        color: #c2d0e2;
+      }
+      #roi-helper-mvp-panel .btn-ghost:hover {
+        background: #223146;
+        color: #fff;
+      }
+
+      #roi-helper-mvp-panel .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 9px 16px;
+        background: rgba(15, 23, 42, 0.85);
+        border-bottom: 1px solid #263549;
+      }
+      #roi-helper-mvp-panel .filters {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      #roi-helper-mvp-panel .filter-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 1px solid #384960;
+        background: #1b283b;
+        color: #b7c6da;
+        font-size: 12.5px;
+        font-weight: 500;
+      }
+      #roi-helper-mvp-panel .filter-chip:hover {
+        border-color: #5a7291;
+        color: #fff;
+      }
+      #roi-helper-mvp-panel .filter-chip[aria-pressed="true"] {
+        background: #2b415e;
+        border-color: #82a6d1;
+        color: #fff;
+        font-weight: 650;
+      }
+      #roi-helper-mvp-panel .filter-chip .count {
+        padding: 0 5px;
+        border-radius: 999px;
+        background: #0f1724;
+        color: #9fb3cc;
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+      }
+      #roi-helper-mvp-panel .filter-chip[aria-pressed="true"] .count {
+        background: #17263a;
+        color: #ffd894;
+      }
+
+      #roi-helper-mvp-panel .search-wrap {
+        position: relative;
+        flex: 1 1 200px;
+        max-width: 260px;
+      }
+      #roi-helper-mvp-panel .search-input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 5px 28px 5px 10px;
+        border: 1px solid #3c4e66;
+        border-radius: 7px;
+        background: #090d16;
+        color: #eef3fa;
+        font: inherit;
+        font-size: 13px;
+      }
+      #roi-helper-mvp-panel .search-input::placeholder { color: #7588a3; }
+      #roi-helper-mvp-panel .search-clear {
+        position: absolute;
+        right: 4px;
+        top: 50%;
+        transform: translateY(-50%);
+        padding: 1px 6px;
+        border: none;
+        background: transparent;
+        color: #8ca0bc;
+        font-size: 14px;
+        line-height: 1;
+      }
+      #roi-helper-mvp-panel .search-clear:hover {
+        background: transparent;
+        color: #fff;
+      }
+
+      #roi-helper-mvp-panel small { color: #a9b9ce; font-size: 12px; }
+
+      #roi-helper-mvp-panel main {
+        padding: 14px 16px;
+        overflow: auto;
+        overscroll-behavior: contain;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      #roi-helper-mvp-panel .notice-bar {
+        margin: 0;
+        padding: 8px 12px;
+        border-radius: 8px;
+        background: rgba(30, 41, 59, 0.75);
+        border: 1px solid #344761;
+        color: #c8d7ea;
+        font-size: 12.5px;
+      }
+      #roi-helper-mvp-panel .notice-bar.warn {
+        background: #2d2118;
+        border-color: #7c5330;
+        color: #fbd3a8;
+      }
+
+      #roi-helper-mvp-panel .group-section {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      #roi-helper-mvp-panel .group-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding-bottom: 4px;
+        border-bottom: 1px solid #263549;
+        color: #cddbf0;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: .03em;
+      }
+      #roi-helper-mvp-panel .group-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      #roi-helper-mvp-panel .group-dot.window { background: #f59e0b; box-shadow: 0 0 8px #f59e0b99; }
+      #roi-helper-mvp-panel .group-dot.upcoming { background: #60a5fa; }
+      #roi-helper-mvp-panel .group-dot.passed { background: #34d399; }
+      #roi-helper-mvp-panel .group-dot.unknown { background: #64748b; }
+      #roi-helper-mvp-panel .group-count {
+        color: #889cb8;
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      #roi-helper-mvp-panel .cards-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr));
+        gap: 10px;
+        align-items: stretch;
+      }
+
+      #roi-helper-mvp-panel article.mvp-card {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 11px 12px 11px 14px;
+        background: rgba(30, 41, 59, 0.72);
+        border: 1px solid rgba(71, 85, 105, 0.65);
+        border-left-width: 4px;
+        border-radius: 10px;
+        transition: border-color .15s ease, transform .15s ease;
+      }
+      #roi-helper-mvp-panel article.mvp-card:hover {
+        border-color: #64748b;
+      }
+      #roi-helper-mvp-panel article.mvp-card[data-state="window"] {
+        border-left-color: #f59e0b;
+        background: linear-gradient(145deg, rgba(66, 44, 16, 0.55), rgba(30, 41, 59, 0.78));
+      }
+      #roi-helper-mvp-panel article.mvp-card[data-state="upcoming"] {
+        border-left-color: #60a5fa;
+      }
+      #roi-helper-mvp-panel article.mvp-card[data-state="passed"] {
+        border-left-color: #34d399;
+      }
+      #roi-helper-mvp-panel article.mvp-card[data-state="unknown"] {
+        border-left-color: #4b5d75;
+        opacity: .92;
+      }
+
+      #roi-helper-mvp-panel .boss-head {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+      }
+      #roi-helper-mvp-panel .portrait {
+        flex: 0 0 64px;
+        height: 64px;
+        display: grid;
+        place-items: center;
+        border: 1px solid #3c4f66;
+        border-radius: 8px;
+        background: radial-gradient(circle at 50% 45%, #37485d, #090d16 82%);
+        overflow: hidden;
+      }
+      #roi-helper-mvp-panel canvas {
+        width: 64px;
+        height: 64px;
+        image-rendering: pixelated;
+      }
+      #roi-helper-mvp-panel .no-portrait {
+        color: #7d90aa;
+        font-size: 11px;
+      }
+      #roi-helper-mvp-panel .boss-info {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      #roi-helper-mvp-panel .boss-title-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      #roi-helper-mvp-panel h3 {
+        margin: 0;
+        color: #fff;
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: .02em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      #roi-helper-mvp-panel .status-pill {
+        flex-shrink: 0;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 11.5px;
+        font-weight: 650;
+        font-variant-numeric: tabular-nums;
+        background: #243347;
+        color: #b7c8de;
+        border: 1px solid #394d68;
+      }
+      #roi-helper-mvp-panel .status-pill[data-state="window"] {
+        background: #422c10;
+        border-color: #b46914;
+        color: #ffd584;
+      }
+      #roi-helper-mvp-panel .status-pill[data-state="upcoming"] {
+        background: #172e4c;
+        border-color: #2f629e;
+        color: #9ecbff;
+      }
+      #roi-helper-mvp-panel .status-pill[data-state="passed"] {
+        background: #13352c;
+        border-color: #256e59;
+        color: #8ce9c3;
+      }
+
+      #roi-helper-mvp-panel .kill-meta {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: #9eb0c7;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+      }
+      #roi-helper-mvp-panel .source-tag {
+        padding: 0 5px;
+        border-radius: 4px;
+        background: #233348;
+        color: #9ec3e6;
+        font-size: 11px;
+      }
+
+      #roi-helper-mvp-panel .maps-list {
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+        padding-top: 8px;
+        border-top: 1px solid #29384d;
+      }
+      #roi-helper-mvp-panel .multi-map-hint {
+        color: #9fb2ca;
+        font-size: 11.5px;
+      }
+      #roi-helper-mvp-panel .map-row {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        padding: 7px 9px;
+        border-radius: 7px;
+        background: rgba(9, 13, 22, 0.72);
+        border: 1px solid #263549;
+      }
+      #roi-helper-mvp-panel .map-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      #roi-helper-mvp-panel .map-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 4px 9px;
+        background: #21364c;
+        border-color: #395878;
+        color: #dceeff;
+        font-size: 12.5px;
+        font-weight: 600;
+        text-align: left;
+      }
+      #roi-helper-mvp-panel .map-btn:hover {
+        background: #2a4663;
+        border-color: #5b87b5;
+        color: #fff;
+      }
+      #roi-helper-mvp-panel .map-btn::after {
+        content: '前往 ›';
+        color: #8cc5ea;
+        font-size: 11.5px;
+        font-weight: 500;
+      }
+      #roi-helper-mvp-panel .interval-tag {
+        color: #8da1bc;
+        font-size: 11.5px;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+      #roi-helper-mvp-panel .window-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 12.5px;
+      }
+      #roi-helper-mvp-panel .window-label {
+        color: #93a7c2;
+        font-size: 11.5px;
+      }
+      #roi-helper-mvp-panel .time {
+        color: #ffdc9c;
+        font-weight: 650;
+        font-variant-numeric: tabular-nums;
+      }
+      #roi-helper-mvp-panel .progress-track {
+        height: 3px;
+        border-radius: 999px;
+        background: #223044;
+        overflow: hidden;
+      }
+      #roi-helper-mvp-panel .progress-fill {
+        height: 100%;
+        border-radius: 999px;
+        background: #60a5fa;
+      }
+      #roi-helper-mvp-panel .progress-fill[data-state="window"] { background: #f59e0b; }
+      #roi-helper-mvp-panel .progress-fill[data-state="passed"] { background: #34d399; }
+
+      #roi-helper-mvp-panel .empty-state {
+        padding: 28px 16px;
+        text-align: center;
+        color: #92a5bf;
+        background: #162131;
+        border: 1px dashed #32445c;
+        border-radius: 10px;
+      }
+
+      #roi-helper-mvp-panel footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 9px 16px;
+        background: rgba(15, 23, 42, 0.9);
+        border-top: 1px solid #2b3a4f;
+      }
+
+      @media (max-width: 560px) {
+        #roi-helper-mvp-panel .toolbar { flex-direction: column; align-items: stretch; }
+        #roi-helper-mvp-panel .search-wrap { max-width: none; }
+        #roi-helper-mvp-panel .map-top { flex-wrap: wrap; }
+      }
+    `);
+    document.head.append(style);
+
+    const open = document.createElement('button');
+    open.id = 'roi-helper-mvp-open';
+    open.type = 'button';
+    open.title = '開啟／收合 MVP 雷達（開啟時點視窗外畫面可自動關閉）';
+    const openLabel = node('span', '🧭 雷達');
+    const openBadge = node('span', '', 'badge');
+    openBadge.title = '目前處於預估重生時段的 MVP 數量';
+    open.append(openLabel, openBadge);
+
+    const panel = document.createElement('div');
+    panel.id = 'roi-helper-mvp-panel';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'false');
+    panel.setAttribute('aria-labelledby', 'roi-helper-mvp-title');
+    panel.hidden = true;
+
+    const isRadarOpen = () => !panel.hidden && panel.hasAttribute('open');
+
+    const title = node('h2', '🧭 個人 MVP 雷達');
+    title.id = 'roi-helper-mvp-title';
+    const meta = node('small', '');
+    const titleRow = node('div', null, 'title-row');
+    titleRow.append(title);
+    const titleWrap = node('div', null, 'title-wrap');
+    titleWrap.append(titleRow, meta);
+
+    const refresh = node('button', '重新整理');
+    refresh.type = 'button';
+    const close = node('button', '關閉', 'btn-ghost');
+    close.type = 'button';
+
+    let refreshTimer;
+    function closeRadar() {
+      if (!isRadarOpen()) return;
+      panel.removeAttribute('open');
+      panel.hidden = true;
+      open.dataset.active = 'false';
+      clearInterval(refreshTimer);
+      portraits.disconnect();
+    }
+
+    close.onclick = closeRadar;
+
+    const headerActions = node('div', null, 'header-actions');
+    headerActions.append(refresh, close);
+    const header = document.createElement('header');
+    header.append(titleWrap, headerActions);
+
+    let activeFilter = 'all';
+    let searchQuery = '';
+    const filterDefs = [
+      ['all', '全部'],
+      ['ready', '可挑戰'],
+      ['upcoming', '即將重生'],
+      ['recorded', '有紀錄']
+    ];
+    const filterBar = node('div', null, 'filters');
+    const filterButtons = new Map();
+    for (const [key, label] of filterDefs) {
+      const btn = node('button', null, 'filter-chip');
+      btn.type = 'button';
+      btn.setAttribute('aria-pressed', key === activeFilter ? 'true' : 'false');
+      const txt = node('span', label);
+      const cnt = node('span', '0', 'count');
+      btn.append(txt, cnt);
+      btn.onclick = () => {
+        activeFilter = key;
+        for (const [k, b] of filterButtons) {
+          b.setAttribute('aria-pressed', k === activeFilter ? 'true' : 'false');
+        }
+        render(latestData || capture());
+      };
+      filterButtons.set(key, btn);
+      filterBar.append(btn);
+    }
+
+    const searchWrap = node('div', null, 'search-wrap');
+    const searchInput = document.createElement('input');
+    searchInput.type = 'search';
+    searchInput.className = 'search-input';
+    searchInput.placeholder = '搜尋 MVP 或地圖名稱 / ID…';
+    searchInput.setAttribute('aria-label', '搜尋 MVP 或地圖');
+    const searchClear = node('button', '×', 'search-clear');
+    searchClear.type = 'button';
+    searchClear.title = '清除搜尋';
+    searchClear.hidden = true;
+    searchInput.addEventListener('input', () => {
+      searchQuery = searchInput.value.trim().toLowerCase();
+      searchClear.hidden = !searchQuery;
+      render(latestData || capture());
+    });
+    searchClear.onclick = () => {
+      searchInput.value = '';
+      searchQuery = '';
+      searchClear.hidden = true;
+      searchInput.focus();
+      render(latestData || capture());
+    };
+    searchWrap.append(searchInput, searchClear);
+
+    const toolbar = node('div', null, 'toolbar');
+    toolbar.append(filterBar, searchWrap);
+
+    const results = document.createElement('main');
+    const footer = document.createElement('footer');
+    footer.append(
+      node('small', '台北時間 (UTC+8) · 點選視窗外畫面自動關閉'),
+      node('small', '點擊地圖名稱可自動帶入掛機設定')
+    );
+
+    const portraits = new IntersectionObserver(entries => {
+      for (const entry of entries) if (entry.isIntersecting && isRadarOpen()) {
+        portraits.unobserve(entry.target);
+        drawPortrait(entry.target);
+      }
+    }, { root: results });
+
+    panel.append(header, toolbar, results, footer);
+    document.body.append(panel);
+
+    function currentSnapshot() {
+      const root = document.getElementById('root');
+      if (!root) return null;
+      const key = Object.keys(root).find(k => k.startsWith('__reactContainer$'));
+      const stack = [root[key]?.stateNode?.current];
+      let identity = null;
+      for (let steps = 0; stack.length && steps < 4000; steps++) {
+        const fiber = stack.pop();
+        if (!fiber) continue;
+        const props = fiber.memoizedProps;
+        for (const snap of [props?.data?.s, props?.snap, props?.s]) {
+          if (typeof snap?.character?.name !== 'string' || !snap.character.name.trim()) continue;
+          if (Array.isArray(snap.mvpLastKill)) return snap;
+          if (snap.mapId != null) identity ??= snap;
+        }
+        if (fiber.sibling) stack.push(fiber.sibling);
+        if (fiber.child) stack.push(fiber.child);
+      }
+      return identity;
+    }
+
+    function timestamp(value) {
+      if (typeof value !== 'number' && typeof value !== 'string') return null;
+      const at = typeof value === 'number' ? value : Date.parse(value);
+      return Number.isFinite(at) && at > 0 && Number.isFinite(new Date(at).getTime()) ? at : null;
+    }
+
+    const visible = el => el && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
+    function namedButton(label) {
+      return [...document.querySelectorAll('button,[role="tab"]')].find(el =>
+        visible(el) && !el.disabled && [el.textContent.trim(),el.getAttribute('aria-label'),el.title].includes(label));
+    }
+    function setSearch(input, value) {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);
+      input.dispatchEvent(new InputEvent('input', {bubbles:true, composed:true, inputType:'insertReplacementText', data:value}));
+      input.dispatchEvent(new Event('change', {bubbles:true}));
+    }
+    async function until(read) {
+      for (let n = 0; n < 100; n++) {
+        const value = read();
+        if (value) return value;
+        await new Promise(resolve => setTimeout(resolve,80));
+      }
+      return null;
+    }
+    const mapGroup = () => [...document.querySelectorAll('[role="group"][aria-label="掛機地圖"]')].find(visible);
+    function reactFiber(el) {
+      const key = Object.keys(el).find(name => name.startsWith('__reactFiber$'));
+      return key && el[key];
+    }
+    function pickerMaps(group) {
+      for (let fiber = reactFiber(group); fiber; fiber = fiber.return) {
+        const props = fiber.memoizedProps;
+        if (props?.label === '掛機地圖' && Array.isArray(props.maps)) return props.maps;
+      }
+      return [];
+    }
+    let navigating = false;
+    async function chooseMap(map, id) {
+      if (navigating) return;
+      navigating = true;
+      closeRadar();
+      try {
+        if (!mapGroup()) {
+          let tab = namedButton('掛機設定');
+          if (!tab) {
+            namedButton('冒險')?.click();
+            tab = await until(() => namedButton('掛機設定'));
+          }
+          if (!tab && !mapGroup()) throw Error('找不到掛機設定入口。請先開啟掛機設定再點地圖。');
+          tab?.click();
+        }
+        const findFilter = () => [...document.querySelectorAll('input[type="search"]')].find(el =>
+          visible(el) && el.closest('label')?.textContent.includes('搜尋設定'));
+        await until(() => mapGroup() || findFilter());
+        if (!mapGroup() && findFilter()) setSearch(findFilter(),'掛機地圖');
+        const field = await until(() => mapGroup()?.querySelector('input[aria-label="掛機地圖：搜尋"]'));
+        if (!field) throw Error('找不到原生掛機地圖選單。');
+        const options = pickerMaps(field.closest('[role="group"]'));
+        const label = options.find(option => option.id === id)?.name || map;
+        const uniqueLabel = options.filter(option => option.name === label).length === 1;
+        const query = uniqueLabel ? label : id;
+        setSearch(field, query);
+        const choice = () => {
+          const group = mapGroup();
+          if (group?.querySelector('input[aria-label="掛機地圖：搜尋"]')?.value !== query) return null;
+          const buttons = [...group.querySelectorAll('button[aria-pressed]')].filter(visible);
+          const exact = buttons.filter(button => reactFiber(button)?.key === id);
+          if (exact.length > 1) return null;
+          let button = exact[0];
+          if (!button) {
+            const byName = buttons.filter(candidate => candidate.firstElementChild?.textContent.trim() === label);
+            if (byName.length !== 1 || reactFiber(byName[0])?.key != null) return null;
+            button = byName[0];
+          }
+          return !button.disabled || button.getAttribute('aria-pressed') === 'true' ? button : null;
+        };
+        const button = await until(choice);
+        if (!button) throw Error('原生選單無法確認這張地圖：'+map+'（'+id+'）。');
+        let selected = button;
+        if (button.getAttribute('aria-pressed') !== 'true') {
+          button.click();
+          selected = await until(() => {
+            const target = choice();
+            return target?.getAttribute('aria-pressed') === 'true' && target;
+          });
+        }
+        if (!selected) throw Error('尚未確認選取成功，請在掛機設定檢查地圖。');
+        selected.scrollIntoView({block:'nearest'});
+        selected.focus({preventScroll:true});
+      } catch (error) {
+        alert(error.message);
+      } finally { navigating = false; }
+    }
+
+    const cacheRoot = 'ro-idle.mvp.v1/';
+    const profileKey = cacheRoot + 'last-profile';
+    const memory = new Map();
+    let lastProfile = '';
+    let storageFailed = false;
+    try { lastProfile = sessionStorage.getItem(profileKey) || ''; } catch {}
+
+    function prefixFor(profile) {
+      return cacheRoot + encodeURIComponent(profile) + '/';
+    }
+    function remember(profile, name, at) {
+      const key = prefixFor(profile) + name;
+      const previous = memory.get(key) || 0;
+      if (at <= previous) return;
+      let newest = at;
+      try {
+        const stored = timestamp(Number(localStorage.getItem(key))) || 0;
+        newest = Math.max(stored, at);
+        if (at > stored) localStorage.setItem(key, String(at));
+      } catch { storageFailed = true; }
+      memory.set(key, newest);
+    }
+    function savedKills(profile) {
+      const prefix = prefixFor(profile);
+      const kills = new Map();
+      function merge(key, at) {
+        if (!key?.startsWith(prefix) || !at) return;
+        const name = key.slice(prefix.length);
+        kills.set(name, Math.max(kills.get(name) || 0, at));
+      }
+      for (const [key, at] of memory) merge(key, at);
+      try {
+        for (let n = 0; n < localStorage.length; n++) {
+          const key = localStorage.key(n);
+          if (key?.startsWith(prefix)) merge(key, timestamp(Number(localStorage.getItem(key))));
+        }
+      } catch { storageFailed = true; }
+      return kills;
+    }
+
+    let lastBackgroundAt = -Infinity;
+    let latestData;
+    function capture() {
+      const snap = currentSnapshot();
+      const profile = snap?.character.name.trim() || '';
+      if (profile && profile !== lastProfile) {
+        lastProfile = profile;
+        try { sessionStorage.setItem(profileKey, profile); } catch {}
+      }
+      const live = new Map();
+      function record(name, at) {
+        if (typeof name !== 'string' || !name || !at) return;
+        live.set(name, Math.max(live.get(name) || 0, at));
+        if (profile) remember(profile, name, at);
+      }
+      const list = [...document.querySelectorAll('ul[aria-label="MVP 最後一次擊殺"]')].find(visible);
+      if (list) {
+        const now = Date.now();
+        for (const row of list.children) {
+          record(row.children[0]?.textContent.trim(), readMinute(row.children[1]?.textContent || '', now));
+        }
+      }
+      if (Array.isArray(snap?.mvpLastKill)) {
+        for (const entry of snap.mvpLastKill) record(entry?.name, timestamp(entry?.at));
+      }
+      latestData = {profile, live, hasList:Boolean(list) || Array.isArray(snap?.mvpLastKill)};
+      updateFloatingBadge(latestData);
+      return latestData;
+    }
+
+    function evaluateBoss(name, at, maps, now) {
+      const known = Number.isFinite(at);
+      if (!known || !maps?.length) {
+        return { state: 'unknown', sortTime: Infinity, badgeText: '時間未知' };
+      }
+      let hasWindow = false;
+      let earliestUpcoming = Infinity;
+      let latestPassed = -Infinity;
+      for (const [, , base, variance] of maps) {
+        if (base == null) continue;
+        const start = at + base;
+        const end = start + (variance || 0);
+        if (now >= start && now <= end) hasWindow = true;
+        else if (now < start) earliestUpcoming = Math.min(earliestUpcoming, start);
+        else latestPassed = Math.max(latestPassed, end);
+      }
+      if (hasWindow) {
+        return { state: 'window', sortTime: 0, badgeText: '重生時段中' };
+      }
+      if (Number.isFinite(earliestUpcoming)) {
+        return {
+          state: 'upcoming',
+          sortTime: earliestUpcoming,
+          badgeText: '約 ' + formatDuration(earliestUpcoming - now) + '後'
+        };
+      }
+      if (latestPassed > -Infinity) {
+        return { state: 'passed', sortTime: -latestPassed, badgeText: '已過預估時段' };
+      }
+      return { state: 'unknown', sortTime: Infinity, badgeText: '時間未知' };
+    }
+
+    function updateFloatingBadge(data) {
+      if (!data) return;
+      const now = Date.now();
+      const { profile, live, hasList } = data;
+      const historical = !profile && !hasList && lastProfile;
+      const owner = profile || historical;
+      const kills = owner ? savedKills(owner) : new Map();
+      for (const [name, at] of live) kills.set(name, Math.max(kills.get(name) || 0, at));
+      let windowCount = 0;
+      for (const [name, maps] of Object.entries(schedules)) {
+        const info = evaluateBoss(name, kills.get(name), maps, now);
+        if (info.state === 'window') windowCount++;
+      }
+      openBadge.textContent = windowCount > 0 ? String(windowCount) : '';
+    }
+
+    function captureBackground() {
+      const now = performance.now();
+      if (now - lastBackgroundAt >= 1000) {
+        capture();
+        lastBackgroundAt = now;
+      }
+      return latestData;
+    }
+
+    function render(data = capture()) {
+      const scrollTop = isRadarOpen() ? results.scrollTop : 0;
+      const focused = document.activeElement;
+      const focusedBoss = focused?.closest?.('article')?.querySelector('h3')?.textContent;
+      const focusedMap = focused?.title;
+      portraits.disconnect();
+      results.replaceChildren();
+
+      const now = Date.now();
+      const { profile, live, hasList } = data;
+      const historical = !profile && !hasList && lastProfile;
+      const owner = profile || historical;
+      const kills = owner ? savedKills(owner) : new Map();
+      for (const [name, at] of live) kills.set(name, Math.max(kills.get(name) || 0, at));
+
+      meta.textContent = historical
+        ? `角色：${owner}（本機離線紀錄）`
+        : `${profile || '未辨識角色'} · 更新於 ${format.format(now)}`;
+
+      if (historical) {
+        results.append(node('p', `目前畫面未載入角色快照，以下顯示「${owner}」在本機保存的擊殺時間。`, 'notice-bar'));
+      } else if (!profile && hasList) {
+        results.append(node('p', '目前無法辨識角色名稱；開啟一次「統計」分頁即可依角色自動保存紀錄。', 'notice-bar'));
+      } else if (!hasList && !kills.size) {
+        results.append(node('p', '尚未讀取到擊殺紀錄，請先切換至「統計」分頁一次再按「重新整理」。', 'notice-bar'));
+      }
+      if (storageFailed) {
+        results.append(node('p', '瀏覽器目前無法寫入 localStorage，重新整理網頁後紀錄可能不會保留。', 'notice-bar warn'));
+      }
+
+      const allNames = [...new Set([...kills.keys(), ...Object.keys(schedules)])];
+      const items = allNames.map(name => {
+        const at = kills.get(name);
+        const maps = Object.hasOwn(schedules, name) ? schedules[name] : [];
+        const evalInfo = evaluateBoss(name, at, maps, now);
+        return { name, at, maps, ...evalInfo };
+      });
+
+      const counts = {
+        all: items.length,
+        ready: items.filter(i => i.state === 'window' || i.state === 'passed').length,
+        upcoming: items.filter(i => i.state === 'upcoming').length,
+        recorded: items.filter(i => Number.isFinite(i.at)).length
+      };
+      for (const [key, btn] of filterButtons) {
+        btn.querySelector('.count').textContent = String(counts[key] ?? 0);
+      }
+
+      const filtered = items.filter(item => {
+        if (activeFilter === 'ready' && item.state !== 'window' && item.state !== 'passed') return false;
+        if (activeFilter === 'upcoming' && item.state !== 'upcoming') return false;
+        if (activeFilter === 'recorded' && !Number.isFinite(item.at)) return false;
+        if (searchQuery) {
+          const hitName = item.name.toLowerCase().includes(searchQuery);
+          const hitMap = item.maps.some(([m, id]) => m.toLowerCase().includes(searchQuery) || id.toLowerCase().includes(searchQuery));
+          if (!hitName && !hitMap) return false;
+        }
+        return true;
+      });
+
+      if (!filtered.length) {
+        results.append(node('div', '沒有符合目前篩選或搜尋條件的 MVP。', 'empty-state'));
+        results.scrollTop = 0;
+        return;
+      }
+
+      const groups = [
+        { key: 'window', label: '預估重生時段中（建議立即前往）', list: [] },
+        { key: 'upcoming', label: '即將進入重生時段', list: [] },
+        { key: 'passed', label: '已過預估時段（可能已重生或未被擊殺）', list: [] },
+        { key: 'unknown', label: '尚無擊殺紀錄', list: [] }
+      ];
+      const groupMap = Object.fromEntries(groups.map(g => [g.key, g]));
+      for (const item of filtered) {
+        groupMap[item.state].list.push(item);
+      }
+      for (const g of groups) {
+        g.list.sort((a, b) => a.sortTime - b.sortTime || a.name.localeCompare(b.name, 'zh-Hant'));
+      }
+
+      for (const g of groups) {
+        if (!g.list.length) continue;
+        const section = node('section', null, 'group-section');
+        const gHeader = node('div', null, 'group-header');
+        gHeader.append(
+          node('span', null, `group-dot ${g.key}`),
+          node('span', g.label),
+          node('span', `(${g.list.length})`, 'group-count')
+        );
+        const grid = node('div', null, 'cards-grid');
+
+        for (const { name, at, maps, state, badgeText } of g.list) {
+          const known = Number.isFinite(at);
+          const missing = !kills.has(name) && hasList;
+          const card = document.createElement('article');
+          card.className = 'mvp-card';
+          card.dataset.state = state;
+
+          const head = node('div', null, 'boss-head');
+          if (Object.hasOwn(monsterIds, name)) {
+            const portrait = node('div', null, 'portrait');
+            const canvas = document.createElement('canvas');
+            canvas.setAttribute('aria-hidden', 'true');
+            canvas.width = canvas.height = 128;
+            canvas.dataset.monster = monsterIds[name];
+            portrait.append(canvas);
+            head.append(portrait);
+            portraits.observe(canvas);
+          }
+
+          const info = node('div', null, 'boss-info');
+          const titleLine = node('div', null, 'boss-title-row');
+          const pill = node('span', known ? badgeText : (missing ? '清單無紀錄' : '時間未知'), 'status-pill');
+          pill.dataset.state = state;
+          titleLine.append(node('h3', name), pill);
+
+          const killMeta = node('div', null, 'kill-meta');
+          if (known) {
+            const isLive = live.get(name) === at;
+            killMeta.append(
+              node('span', (isLive ? '最後擊殺 ' : '上次紀錄 ') + format.format(at)),
+              node('span', isLive ? '即時' : '快取', 'source-tag')
+            );
+          } else {
+            killMeta.append(node('span', missing ? '目前清單無擊殺紀錄' : '尚未讀取到擊殺時間'));
+          }
+          info.append(titleLine, killMeta);
+          head.append(info);
+          card.append(head);
+
+          if (!maps?.length) {
+            card.append(node('small', '官方地圖表未列出沒地圖與重生間隔。'));
+            grid.append(card);
+            continue;
+          }
+
+          const mapsList = node('div', null, 'maps-list');
+          if (maps.length > 1 && known) {
+            mapsList.append(node('div', '多張候選地圖（請對照實際擊殺地點）', 'multi-map-hint'));
+          }
+
+          for (const [map, id, base, variance] of maps) {
+            const row = node('div', null, 'map-row');
+            const top = node('div', null, 'map-top');
+            const place = node('button', map, 'map-btn');
+            place.type = 'button';
+            place.title = '在掛機設定選擇 ' + id;
+            place.onclick = () => chooseMap(map, id);
+
+            const intervalText = base == null
+              ? '間隔未知'
+              : `${Math.round(base / 60000)}${variance ? '～' + Math.round((base + variance) / 60000) : ''} 分`;
+            top.append(place, node('span', intervalText, 'interval-tag'));
+            row.append(top);
+
+            if (focusedBoss === name && focusedMap === place.title) {
+              place.focus({ preventScroll: true });
+            }
+
+            if (known && base != null) {
+              const start = at + base;
+              const end = start + (variance || 0);
+              const mapState = now < start ? 'upcoming' : (now <= end ? 'window' : 'passed');
+
+              const winRow = node('div', null, 'window-row');
+              const labelText = mapState === 'upcoming'
+                ? `約 ${formatDuration(start - now)}後進入`
+                : (mapState === 'window' ? '重生時段中' : '已過預估時段');
+              const timeEl = node('span', formatRange(start, end), 'time');
+              timeEl.setAttribute('aria-label', '預估重生 ' + timeEl.textContent);
+              winRow.append(node('span', labelText, 'window-label'), timeEl);
+              row.append(winRow);
+
+              const track = node('div', null, 'progress-track');
+              const fill = node('div', null, 'progress-fill');
+              fill.dataset.state = mapState;
+              const ratio = end > at ? Math.max(0, Math.min(1, (now - at) / (end - at))) : 1;
+              fill.style.width = Math.round(ratio * 100) + '%';
+              track.append(fill);
+              row.append(track);
+            }
+
+            mapsList.append(row);
+          }
+
+          card.append(mapsList);
+          grid.append(card);
+        }
+
+        section.append(gHeader, grid);
+        results.append(section);
+      }
+
+      results.scrollTop = scrollTop;
+    }
+
+    function draggable(el, handle) {
+      const key = el.id + '-position-v1';
+      let saved, drag, suppress = false;
+      try { saved = JSON.parse(localStorage.getItem(key)); } catch {}
+      function place(x,y) {
+        const rect = el.getBoundingClientRect();
+        Object.assign(el.style, {margin:'0',right:'auto',bottom:'auto',
+          left:Math.max(0, Math.min(x,innerWidth-rect.width))+'px',
+          top:Math.max(0, Math.min(y,innerHeight-rect.height))+'px'});
+      }
+      function restore() {
+        if (el.getClientRects().length && saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) place(saved.x,saved.y);
+      }
+      Object.assign(handle.style,{touchAction:'none',cursor:'grab',userSelect:'none'});
+      handle.title='拖曳調整位置';
+      handle.addEventListener('pointerdown',e=>{
+        if (!e.isPrimary || e.button!==0 || (handle!==el && e.target.closest('button,input'))) return;
+        const r=el.getBoundingClientRect();
+        drag={id:e.pointerId,x:e.clientX,y:e.clientY,left:r.left,top:r.top};
+        suppress=false;
+        handle.setPointerCapture(e.pointerId);
+      });
+      handle.addEventListener('pointermove',e=>{
+        if (drag?.id!==e.pointerId) return;
+        const dx=e.clientX-drag.x, dy=e.clientY-drag.y;
+        if (!suppress && Math.hypot(dx,dy)<5) return;
+        suppress=true;
+        place(drag.left+dx,drag.top+dy);
+      });
+      handle.addEventListener('lostpointercapture',()=>{
+        if (drag && suppress) {
+          const r=el.getBoundingClientRect(); saved={x:r.left,y:r.top};
+          try {localStorage.setItem(key,JSON.stringify(saved));} catch {}
+        }
+        drag=null;
+      });
+      handle.addEventListener('click',e=>{
+        if (suppress && e.detail) { e.preventDefault();e.stopImmediatePropagation(); }
+        suppress=false;
+      },true);
+      window.addEventListener('resize',restore);
+      restore();return restore;
+    }
+
+    const positionPanel = draggable(panel, header);
+    function openRadar() {
+      if (isRadarOpen()) return;
+      panel.hidden = false;
+      panel.setAttribute('open', '');
+      open.dataset.active = 'true';
+      render();
+      positionPanel();
+      clearInterval(refreshTimer);
+      refreshTimer = window.setInterval(() => {
+        if (isRadarOpen() && !document.hidden) render(captureBackground());
+      }, 30000);
+    }
+    function toggleRadar() {
+      if (isRadarOpen()) closeRadar();
+      else openRadar();
+    }
+
+    open.onclick = (e) => {
+      e.stopPropagation();
+      toggleRadar();
+    };
+    refresh.onclick = () => render();
+
+    document.addEventListener('pointerdown', (e) => {
+      if (!isRadarOpen()) return;
+      const target = e.target;
+      if (!(target instanceof Element)) return;
+      if (panel.contains(target) || open.contains(target) || target.closest('[data-roi-mvp-tab], #b-open-mvp-from-tab')) return;
+      closeRadar();
+    }, true);
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && isRadarOpen()) closeRadar();
+    });
+
+    captureBackground();
+    window.setInterval(() => { if (!document.hidden) captureBackground(); }, 15000);
+    document.addEventListener('visibilitychange', captureBackground);
+    window.addEventListener('pagehide', captureBackground);
+    document.addEventListener('click', event => {
+      const control = event.target.closest?.('button, [role="tab"], a');
+      if (control && !control.closest('#ro-helper-hud') && !panel.contains(control) && /掛機設定|尋找怪物|切換角色|回城|地圖/.test(control.textContent)) captureBackground();
+    }, true);
+    return open;
+  }
+
+  let mvpEntry;
+  if (!location.pathname.startsWith('/info')) {
+    try {
+      mvpEntry = createMvpSchedule();
+    } catch (error) {
+      console.warn('個人 MVP 時刻表初始化失敗', error);
+    }
+  }
+
   document.querySelectorAll('.log-window .log-line').forEach(parseLog);
   ensureHUD(); pollChars(); runPageRouter();
   setInterval(() => {
     if (document.hidden) return;
     ensureHUD(); updateHUD();
-    refreshRareHelper();
+    if (Date.now() - lastRouterAt > 1200) refreshRareHelper();
     const itemGroup = document.querySelector('[role="group"][aria-label="道具設定的複製與匯出匯入"]');
     if (itemGroup) lootSyncPanels.get(itemGroup)?.();
   }, 1500);
