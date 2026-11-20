@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.4.1
+// @version      3.4.3
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -1052,6 +1052,44 @@
     }
   }, true);
 
+  // Match by inventory item ID so this works with classic icons hidden and unidentified items.
+  document.addEventListener('click', (event) => {
+    const source = event.target;
+    if (event.button !== 0 || !(event.ctrlKey || event.metaKey) || event.defaultPrevented
+        || !(source instanceof HTMLInputElement) || source.disabled
+        || !source.matches('input[type="checkbox"][aria-label^="放入 "]')) return;
+
+    const field = source.closest('fieldset');
+    const legend = clean(field?.querySelector(':scope > legend')?.textContent);
+    if (!/^手推車(?:[ (]|$)/.test(legend)) return;
+    const list = source.closest('ul');
+    if (!list || !field.contains(list)) return;
+    const selector = 'input[type="checkbox"][aria-label^="放入 "]';
+    const snapshot = getCommittedProps(source, (props) => props.snap?.cart && Array.isArray(props.snap.inventory))?.snap;
+    if (!snapshot || snapshot.vend) return;
+
+    const items = new Map(snapshot.inventory.map((item) => [String(item.uid), item.itemId]));
+    const itemIdFor = (box) => items.get(getReactFiber(box.closest('li'))?.key);
+    const itemId = itemIdFor(source);
+    if (!itemId) return;
+    const next = source.checked;
+    const countSelected = () => list.querySelectorAll(selector + ':checked').length;
+    if (next && countSelected() > 100) {
+      event.preventDefault();
+      return;
+    }
+
+    setTimeout(() => {
+      if (event.defaultPrevented || !visible(list) || !list.contains(source) || source.disabled
+          || source.checked !== next || itemIdFor(source) !== itemId) return;
+      for (const box of list.querySelectorAll(selector)) {
+        if (next && countSelected() >= 100) break;
+        if (box === source || box.disabled || box.checked === next || !visible(box) || itemIdFor(box) !== itemId) continue;
+        box.click();
+      }
+    }, 0);
+  }, true);
+
   const rarePanels = new WeakMap(), rareKnownRoots = new Set(), rareLastMap = new WeakMap();
   let rareAutoMap = GM_getValue('roi-rare-auto-map-v1', true) !== false;
   const isRareHeading = (s) => /^必撿稀有掉落\s*\(\s*\d+\s*項\s*\)$/.test(clean(s));
@@ -1885,6 +1923,7 @@
             let accepted = true;
             try {
               page.confirm = (message) => {
+                if (refSkipConfirm) return true;
                 accepted = originalConfirm.call(page, message);
                 return accepted;
               };
@@ -2913,7 +2952,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.4.1</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.4.3</span>
           <span data-roi-mvp-entry style="display:inline-flex;align-items:center;margin-left:auto;"></span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
