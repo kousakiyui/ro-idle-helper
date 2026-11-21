@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.4.4.4
+// @version      3.4.4.5
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -17,6 +17,11 @@
 (() => {
   'use strict';
   const MAX_BACKUP_BYTES = 2 * 1024 * 1024;
+  const validMaterialBatch = (value) => Number.isSafeInteger(value) && value >= 1 && value <= 1000;
+  function validateMaterialBatch(value) {
+    if (!validMaterialBatch(value)) throw Error('每次領料數量須為 1～1000 的整數');
+    return value;
+  }
   function isPlainRecord(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value) &&
       (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
@@ -146,10 +151,7 @@
     for (const value of [data.favs, settings['roi-favorites-v1']]) add('roi-favorites-v1', value, validateFavorites);
     for (const value of [data.priceOptions, settings['warehouse-auto-protect-v1']]) add('warehouse-auto-protect-v1', value, validatePriceOptions);
     for (const batch of [data.refineMaterialBatch, settings['roi-refine-material-batch-v1']]) {
-      add('roi-refine-material-batch-v1', batch, (value) => {
-        if (!Number.isSafeInteger(value) || value < 1 || value > 1000) throw Error('每次領料數量須為 1～1000');
-        return value;
-      });
+      add('roi-refine-material-batch-v1', batch, validateMaterialBatch);
     }
     return [...new Map(writes)];
   }
@@ -1769,11 +1771,7 @@
     return Boolean(category && plus < 10 && steps?.[plus]);
   }
   let refPanel = null, refOpen = false, refBusy = false, refStop = false, refTargetPlus = 6, refMode = 'round_robin', refSkipConfirm = true, refAutoWh = true;
-  const validMaterialBatch = (value) => Number.isSafeInteger(value) && value >= 1 && value <= 1000;
-  let refMaterialBatch = readValidatedSetting('roi-refine-material-batch-v1', (value) => {
-    if (!validMaterialBatch(value)) throw Error('每次領料數量須為 1～1000');
-    return value;
-  }, 20);
+  let refMaterialBatch = readValidatedSetting('roi-refine-material-batch-v1', validateMaterialBatch, 20);
 
   function materialWithdrawalAmount(requested, stock, nativeMax = '') {
     if (!validMaterialBatch(requested) || !Number.isSafeInteger(stock) || stock < 1) throw Error('無法確認材料庫存或領取數量');
@@ -2047,9 +2045,9 @@
     return b;
   }
 
-  async function refineAwait(session, promise) {
+  async function refineAwait(session, promise, allowStopped = false) {
     const value = await promise;
-    assertRefineSession(session, session.restoring === true);
+    assertRefineSession(session, allowStopped || session.restoring === true);
     if (session.targetUid != null) assertRefineTarget(session, session.targetUid, true);
     return value;
   }
@@ -2091,11 +2089,12 @@
     assertRefineSession(session);
     const findWhField = () => [...document.querySelectorAll('fieldset')].find((f) => /^倉庫(?:\s*[（(]|$)/.test(clean([...f.children].find((c) => c.tagName === 'LEGEND')?.textContent)) && visible(f));
     let switchedTab = null;
+    let field = null;
     const selected = new Map();
     let submitted = false;
     visitingWarehouse = true;
     try {
-      let field = findWhField();
+      field = findWhField();
       if (!field) {
         const tabs = [...document.querySelectorAll('.xp-menu-item, button, a')].filter(visible);
         const whTab = tabs.find((el) => clean(el.textContent) === '倉庫');
@@ -2123,7 +2122,7 @@
         if (materialQuantity !== null) {
           const amount = li.querySelector('input[type="number"]');
           const stackText = clean(li.textContent).match(/×\s*([\d,]+)/)?.[1];
-          const stack = stackText ? Number(stackText.replace(/,/g, '')) : NaN;
+          const stack = stackText ? Number(stackText.replace(/,/g, '')) : amount ? NaN : 1;
           const quantity = materialWithdrawalAmount(materialQuantity, stack, amount?.max ?? '');
           if (amount) {
             assertRefineSession(session);
@@ -2163,15 +2162,27 @@
       setStatus(`📦 領取 ${selected.size} 項` + (materialQuantity !== null ? `（${[...selected.values()].reduce((sum, item) => sum + item.quantity, 0)} 個材料）` : ''));
       clickRefineControl(session, btn);
       submitted = true;
-      await refineAwait(session, sleep(450));
+      if (materialQuantity === null) await refineAwait(session, sleep(450));
       return [...selected.values()];
     } finally {
       try {
-        if (!submitted) for (const cb of selected.keys()) if (cb.isConnected && cb.checked) clickRefineControl(session, cb);
-        if (switchedTab) {
-          clickRefineControl(session, switchedTab);
-          for (let i = 0; i < 25; i++) { await refineAwait(session, sleep(100)); if (readBackpackContext(true)) break; }
+        const canClean = () => session.epoch === refineIdentityEpoch && !document.hidden &&
+          (state.activeCharId == null || Number(state.activeCharId) === session.characterId) &&
+          refineActor(null) === session.characterId && field?.isConnected && findWhField() === field;
+        if (!submitted) {
+          for (const cb of selected.keys()) {
+            if (canClean() && field.contains(cb) && cb.isConnected && cb.checked && !cb.disabled) cb.click();
+          }
         }
+        if (canClean() && switchedTab?.isConnected && !switchedTab.disabled) {
+          switchedTab.click();
+          for (let i = 0; i < 25; i++) {
+            await refineAwait(session, sleep(100), true);
+            if (readBackpackContext(true)) break;
+          }
+        }
+      } catch {
+        // 清理中斷時，保留原始領倉錯誤，不再點擊。
       } finally { visitingWarehouse = false; }
     }
   }
@@ -2179,6 +2190,17 @@
   const isWeaponRefineButton = (text) => /^武器精[練煉]\s*\(\s*技能(?:[,\s)]|$)/.test(text);
   const isNpcRefineButton = (text) => /^請.+精[煉練]$/.test(text);
   const weaponRefineLevel = (snapshot) => snapshot.character.skills?.WS_WEAPONREFINE ?? 0;
+  const materialCount = (inventory, id) => inventory.reduce((sum, item) =>
+    item.itemId === id && Number.isSafeInteger(item.qty) && item.qty > 0 ? sum + item.qty : sum, 0);
+
+  async function waitForRefineMaterial(session, id, beforeQty) {
+    for (let i = 0; i < 40; i++) {
+      await refineAwait(session, sleep(100));
+      const b = readBackpackContext(true);
+      if (b && materialCount(b.s.inventory, id) > beforeQty) return;
+    }
+    throw Error('等待材料入帳逾時，請確認背包與倉庫');
+  }
 
   async function runHybridRefine(modeType) {
     if (refBusy) return;
@@ -2339,9 +2361,13 @@
           const level = Math.min(4, Math.max(1, item.weaponLevel ?? 1));
           const steps = item.slots.includes('weapon') ? refinePack.refine.weapon[level] : refinePack.refine.armor;
           const material = steps?.[curPlus]?.material;
+          const beforeOreQty = materialCount(b.s.inventory, material);
+          session.targetUid = null;
           const pulledOres = material ? await tryWithdrawFromWarehouse(new Set([material]), limitPlus, setStatus, null, 1, session, refMaterialBatch) : [];
           assertRefineSession(session);
           if (pulledOres.length) {
+            await waitForRefineMaterial(session, material, beforeOreQty);
+            session.targetUid = uid;
             b = await refineAwait(session, selectBagItemRow(uid, session));
             if (!b || refStop || document.hidden) throw Error('已離開背包或中止精煉');
             skillBtn = findNativeDetailBtn(b.table, uid, isWeaponRefineButton);
@@ -2513,10 +2539,11 @@
       refPanel.querySelector('#ref-skip-cfm').onchange = (e) => { refSkipConfirm = e.target.checked; };
       refPanel.querySelector('#ref-auto-wh').onchange = (e) => { refAutoWh = e.target.checked; };
       refPanel.querySelector('#ref-material-batch').onchange = (e) => {
-        const value = Number(e.target.value);
-        if (!validMaterialBatch(value)) {
+        let value;
+        try { value = validateMaterialBatch(Number(e.target.value)); }
+        catch (error) {
           e.target.value = refMaterialBatch;
-          refPanel.querySelector('[data-ref-status]').textContent = '每次領料數量須為 1～1000 的整數';
+          refPanel.querySelector('[data-ref-status]').textContent = error.message;
           return;
         }
         refMaterialBatch = value;
@@ -3400,7 +3427,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.4.4.4 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.4.4.5 測試版</span>
           <span data-roi-mvp-entry style="display:inline-flex;align-items:center;margin-left:auto;"></span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
