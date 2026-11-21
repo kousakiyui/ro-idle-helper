@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.4.4.2
+// @version      3.4.4.3
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -145,6 +145,12 @@
     }
     for (const value of [data.favs, settings['roi-favorites-v1']]) add('roi-favorites-v1', value, validateFavorites);
     for (const value of [data.priceOptions, settings['warehouse-auto-protect-v1']]) add('warehouse-auto-protect-v1', value, validatePriceOptions);
+    for (const batch of [data.refineMaterialBatch, settings['roi-refine-material-batch-v1']]) {
+      add('roi-refine-material-batch-v1', batch, (value) => {
+        if (!Number.isSafeInteger(value) || value < 1 || value > 1000) throw Error('每次領料數量須為 1～1000');
+        return value;
+      });
+    }
     return [...new Map(writes)];
   }
   function commitBackupWrites(writes) {
@@ -1763,6 +1769,22 @@
     return Boolean(category && plus < 10 && steps?.[plus]);
   }
   let refPanel = null, refOpen = false, refBusy = false, refStop = false, refTargetPlus = 6, refMode = 'round_robin', refSkipConfirm = true, refAutoWh = true;
+  const validMaterialBatch = (value) => Number.isSafeInteger(value) && value >= 1 && value <= 1000;
+  let refMaterialBatch = readValidatedSetting('roi-refine-material-batch-v1', (value) => {
+    if (!validMaterialBatch(value)) throw Error('每次領料數量須為 1～1000');
+    return value;
+  }, 20);
+
+  function materialWithdrawalAmount(requested, stock, nativeMax = '') {
+    if (!validMaterialBatch(requested) || !Number.isSafeInteger(stock) || stock < 1) throw Error('無法確認材料庫存或領取數量');
+    let count = Math.min(requested, stock);
+    if (nativeMax !== '') {
+      const max = Number(nativeMax);
+      if (!Number.isSafeInteger(max) || max < 1) throw Error('原生領料數量上限不可用');
+      count = Math.min(count, max);
+    }
+    return count;
+  }
   let bagMemo = null;
   const bagFastMiss = new WeakSet();
   let visitingWarehouse = false;
@@ -1945,17 +1967,56 @@
   const positiveId = (value) => (typeof value === 'number' || (typeof value === 'string' && /^[1-9]\d*$/.test(value))) &&
     Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : null;
   const snapshotCharacterId = (s) => positiveId(s?.character?.id ?? s?.characterId ?? s?.character?.characterId);
+  let refineNativeStore = null;
+
+  function nativeStoreActor(store, snapshot) {
+    if (!store || typeof store.getState !== 'function' || typeof store.subscribe !== 'function' ||
+        typeof store.getInitialState !== 'function' || typeof store.setState !== 'function') return null;
+    try {
+      const state = store.getState();
+      if (!state?.snapshot?.character || !Array.isArray(state.snapshot.inventory) ||
+          (snapshot && state.snapshot !== snapshot)) return null;
+      return positiveId(state.characterId);
+    } catch { return null; }
+  }
+
+  function findRefineNativeStore(host, snapshot) {
+    const root = currentFiberRoot(host);
+    if (!root) return null;
+    const route = fiberRouteMap.get(host);
+    let fiber = root;
+    if (!route) return null;
+    for (const step of route) fiber = step === 'c' ? fiber?.child : fiber?.sibling;
+    if (fiber?.stateNode !== host) return null;
+    // 遊戲以 Zustand 分開保存 characterId 與 snapshot。
+    // 只讀目前背包／倉庫祖先的 Hook 依賴，並核對同一份 snapshot。
+    for (let depth = 0; fiber && depth < 80; depth++, fiber = fiber.return) {
+      if (typeof fiber.type !== 'function') continue;
+      let hook = fiber.memoizedState;
+      for (let count = 0; hook && count < 200; count++, hook = hook.next) {
+        const memo = hook.memoizedState;
+        const deps = Array.isArray(memo) && Array.isArray(memo[1]) ? memo[1] : [];
+        for (const candidate of deps) {
+          if (nativeStoreActor(candidate, snapshot)) return candidate;
+        }
+      }
+    }
+    return null;
+  }
 
   function refineActor(context) {
     const direct = snapshotCharacterId(context?.s);
     if (direct) return direct;
+    const cached = nativeStoreActor(refineNativeStore, context?.s);
+    if (cached) return cached;
     const host = context?.table || [...document.querySelectorAll('fieldset')].find((field) =>
       visible(field) && /^倉庫(?:\s*[（(]|$)/.test(clean(field.querySelector('legend')?.textContent)));
-    const props = host && getCommittedProps(host, (p) => {
-      const s = p?.s ?? p?.snap;
-      return Boolean(s?.character && (snapshotCharacterId(s) || positiveId(p.characterId ?? p.charId)));
-    });
-    return snapshotCharacterId(props?.s ?? props?.snap) || positiveId(props?.characterId ?? props?.charId);
+    const props = host && getCommittedProps(host, (p) => Boolean((p?.s ?? p?.snap)?.character));
+    const snapshot = context?.s ?? props?.s ?? props?.snap;
+    const actor = snapshotCharacterId(snapshot) || positiveId(props?.characterId ?? props?.charId);
+    if (actor) return actor;
+    refineNativeStore = host && findRefineNativeStore(host, snapshot);
+    return nativeStoreActor(refineNativeStore, snapshot);
   }
 
   const refineItemSignature = (item) => JSON.stringify([item.itemId, item.cards ?? [], item.forged ?? null]);
@@ -2018,7 +2079,7 @@
     throw Error('穿戴裝備逾時');
   }
 
-  async function tryWithdrawFromWarehouse(wantedItemIds, targetPlusLimit, setStatus, limitsById, maxItems = 15, session) {
+  async function tryWithdrawFromWarehouse(wantedItemIds, targetPlusLimit, setStatus, limitsById, maxItems = 15, session, materialQuantity = null) {
     assertRefineSession(session);
     const findWhField = () => [...document.querySelectorAll('fieldset')].find((f) => /^倉庫(?:\s*[（(]|$)/.test(clean([...f.children].find((c) => c.tagName === 'LEGEND')?.textContent)) && visible(f));
     let switchedTab = null;
@@ -2051,23 +2112,26 @@
         clickRefineControl(session, cb);
         selected.set(cb, { id, refine, name });
         await refineAwait(session, sleep(25));
-        if (maxItems === 1) {
+        if (materialQuantity !== null) {
           const amount = li.querySelector('input[type="number"]');
           const stackText = clean(li.textContent).match(/×\s*([\d,]+)/)?.[1];
           const stack = stackText ? Number(stackText.replace(/,/g, '')) : NaN;
+          const quantity = materialWithdrawalAmount(materialQuantity, stack, amount?.max ?? '');
           if (amount) {
             assertRefineSession(session);
             if (!li.contains(amount) || Number(warehouseItemId(li)) !== id) throw Error('領料項目已變動');
             const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
             if (!setter) throw Error('無法設定領料數量，已停止');
-            setter.call(amount, '1');
+            setter.call(amount, String(quantity));
             amount.dispatchEvent(new Event('input', { bubbles: true }));
             amount.dispatchEvent(new Event('change', { bubbles: true }));
             await refineAwait(session, sleep(100));
-            if (!amount.isConnected || Number(amount.value) !== 1) throw Error('遊戲未接受單件領料數量，已停止');
-          } else if (stack !== 1) {
-            throw Error('無法確認單件領料數量，已停止以避免取出整疊');
+            const currentAmount = cb.closest('li')?.querySelector('input[type="number"]');
+            if (!currentAmount?.isConnected || Number(currentAmount.value) !== quantity) throw Error('遊戲未接受領料數量，已停止');
+          } else if (stack !== 1 || quantity !== 1) {
+            throw Error('無法確認領料數量，已停止以避免取出整疊');
           }
+          selected.get(cb).quantity = quantity;
         }
         if (selected.size >= maxItems) break;
       }
@@ -2079,12 +2143,16 @@
             clean(row?.querySelector('button[aria-label$="的物品資訊"]')?.textContent) !== expected.name) {
           throw Error('領取物品已變動，已停止');
         }
+        if (expected.quantity !== undefined) {
+          const amount = row.querySelector('input[type="number"]');
+          if (amount ? Number(amount.value) !== expected.quantity : expected.quantity !== 1) throw Error('領料數量已變動，已停止');
+        }
       }
       const btn = [...field.querySelectorAll('button')].find((b) => Number(clean(b.textContent).match(/^(?:領出|取出)\s*(\d+)\s*項/)?.[1]) === selected.size);
       if (refStop || document.hidden || !field.isConnected || boxes.length !== selected.size || boxes.some((cb) => !selected.has(cb)) || !btn || btn.disabled) {
         throw Error('倉庫勾選已變動或無法領取，已中止領倉');
       }
-      setStatus(`📦 領取 ${selected.size} 項`);
+      setStatus(`📦 領取 ${selected.size} 項` + (materialQuantity !== null ? `（${[...selected.values()].reduce((sum, item) => sum + item.quantity, 0)} 個材料）` : ''));
       clickRefineControl(session, btn);
       submitted = true;
       await refineAwait(session, sleep(450));
@@ -2263,7 +2331,7 @@
           const level = Math.min(4, Math.max(1, item.weaponLevel ?? 1));
           const steps = item.slots.includes('weapon') ? refinePack.refine.weapon[level] : refinePack.refine.armor;
           const material = steps?.[curPlus]?.material;
-          const pulledOres = material ? await tryWithdrawFromWarehouse(new Set([material]), limitPlus, setStatus, null, 1, session) : [];
+          const pulledOres = material ? await tryWithdrawFromWarehouse(new Set([material]), limitPlus, setStatus, null, 1, session, refMaterialBatch) : [];
           assertRefineSession(session);
           if (pulledOres.length) {
             b = await refineAwait(session, selectBagItemRow(uid, session));
@@ -2386,6 +2454,7 @@
         <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:#cbd5e1;">
           <label style="cursor:pointer;"><input type="checkbox" id="ref-skip-cfm" ${refSkipConfirm ? 'checked' : ''}> ⚡ 免跳確認窗(自動點確定)</label>
           <label style="cursor:pointer;color:#fde047;"><input type="checkbox" id="ref-auto-wh" ${refAutoWh ? 'checked' : ''}> 📦 倉庫連動：缺礦或裝備衝完時自動從倉庫領取同名胚子/神金鋁</label>
+          <label>每次領料 <input type="number" id="ref-material-batch" aria-label="每次領料數量" class="xp-input" min="1" max="1000" step="1" value="${refMaterialBatch}" style="width:64px;"> 個</label>
         </div>
         <div data-ref-categories role="group" aria-label="精煉裝備分類" style="display:none;gap:6px;flex-wrap:wrap;"></div>
         <div data-ref-list style="display:none;max-height:210px;overflow:auto;gap:4px;padding:6px;background:#090d16;border-radius:6px;border:1px solid #1e293b;"></div>
@@ -2435,6 +2504,16 @@
       refPanel.querySelector('#ref-target').onchange = (e) => { refTargetPlus = Math.min(10, Math.max(1, parseInt(e.target.value, 10) || 6)); e.target.value = refTargetPlus; };
       refPanel.querySelector('#ref-skip-cfm').onchange = (e) => { refSkipConfirm = e.target.checked; };
       refPanel.querySelector('#ref-auto-wh').onchange = (e) => { refAutoWh = e.target.checked; };
+      refPanel.querySelector('#ref-material-batch').onchange = (e) => {
+        const value = Number(e.target.value);
+        if (!validMaterialBatch(value)) {
+          e.target.value = refMaterialBatch;
+          refPanel.querySelector('[data-ref-status]').textContent = '每次領料數量須為 1～1000 的整數';
+          return;
+        }
+        refMaterialBatch = value;
+        try { GM_setValue('roi-refine-material-batch-v1', value); } catch {}
+      };
       refPanel.querySelector('#ref-run-safe').onclick = () => runHybridRefine('safe_only');
       refPanel.querySelector('#ref-run-target').onclick = () => runHybridRefine('to_target');
       refPanel.querySelector('#ref-run-skill').onclick = () => runHybridRefine('skill_only');
@@ -2447,7 +2526,7 @@
     }
     refPanel.querySelector('#ref-toggle').textContent =
       `${refOpen ? '🔼 收合精煉清單' : '🔨 展開精煉清單'} (共選 ${refSelected.size} 件)`;
-    for (const el of refPanel.querySelectorAll('#ref-mode,#ref-target,#ref-auto-wh,#ref-skip-cfm')) el.disabled = refBusy;
+    for (const el of refPanel.querySelectorAll('#ref-mode,#ref-target,#ref-auto-wh,#ref-skip-cfm,#ref-material-batch')) el.disabled = refBusy;
     const skillButton = refPanel.querySelector('#ref-run-skill');
     const skillLevel = weaponRefineLevel(b.s);
     skillButton.hidden = skillLevel <= 0;
@@ -3313,7 +3392,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.4.4.2 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.4.4.3 測試版</span>
           <span data-roi-mvp-entry style="display:inline-flex;align-items:center;margin-left:auto;"></span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
@@ -3488,6 +3567,7 @@
         words: state.customProtectWords,
         wh: { marks: state.whMarks, autoLocks: state.whAutoLocks },
         priceOptions,
+        refineMaterialBatch: refMaterialBatch,
         favs: [...mktFavs]
       };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
