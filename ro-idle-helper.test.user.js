@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.4.3
+// @version      3.4.4
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -2504,67 +2504,120 @@
   mktPanel.querySelector('#roi-mkt-sort').onchange = () => renderMkt();
   mktPanel.querySelector('#roi-mkt-min').onchange = () => renderMkt();
 
+  const DEFAULT_429_COOLDOWN_MS = 30000;
   let crossRequest = 0;
   let crossBusy = false;
   let crossAbortCtrl = null;
+  let crossCooldownUntil = 0;
+  let mktAutoGeneration = 0;
+
+  function parseRetryAfterMs(headerVal, now = Date.now()) {
+    if (!headerVal) return DEFAULT_429_COOLDOWN_MS;
+    const raw = String(headerVal).trim();
+    if (!raw) return DEFAULT_429_COOLDOWN_MS;
+    if (/^\d+(?:\.\d+)?$/.test(raw)) {
+      const sec = Number(raw);
+      if (Number.isFinite(sec) && sec > 0) return Math.min(3600000, Math.max(1000, Math.round(sec * 1000)));
+    }
+    const parsedDate = Date.parse(raw);
+    if (Number.isFinite(parsedDate) && parsedDate > now) {
+      return Math.min(3600000, Math.max(1000, parsedDate - now));
+    }
+    return DEFAULT_429_COOLDOWN_MS;
+  }
+
+  function isCrossRequestCurrent(request, controller) {
+    return request === crossRequest && crossAbortCtrl === controller && !controller.signal.aborted && mktPanel.isConnected && !mktPanel.hidden;
+  }
+
   async function doCrossSearch(kw, automatic = false) {
-    if (!kw || (automatic && crossBusy)) return;
+    const st = mktPanel.querySelector('#roi-mkt-status');
+    if (!kw || (automatic && crossBusy)) return false;
+    const nowBefore = Date.now();
+    if (nowBefore < crossCooldownUntil) {
+      const remSec = Math.max(1, Math.ceil((crossCooldownUntil - nowBefore) / 1000));
+      if (!automatic && st) st.textContent = `⏳ 跨城查價冷卻中（剩餘約 ${remSec} 秒），請稍後再試`;
+      return false;
+    }
     crossAbortCtrl?.abort();
     const controller = new AbortController();
     crossAbortCtrl = controller;
     const request = ++crossRequest;
     crossBusy = true;
-    const st = mktPanel.querySelector('#roi-mkt-status');
-    st.textContent = `🛰️ 正在跨城補查「${kw}」...`;
+    if (st) st.textContent = `🛰️ 正在跨城補查「${kw}」...`;
     try {
       const r = await fetch('/api/vending?q=' + encodeURIComponent(kw), { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
+      if (!isCrossRequestCurrent(request, controller)) return false;
       if (r.status === 429) {
-        stopMktAuto('HTTP 429：自動整理已停止，請稍後手動啟動');
-        ++crossRequest;
-        crossBusy = false;
-        return;
+        const retryMs = parseRetryAfterMs(r.headers?.get?.('Retry-After'));
+        crossCooldownUntil = Date.now() + retryMs;
+        const sec = Math.max(1, Math.round(retryMs / 1000));
+        stopMktAuto(`HTTP 429：冷卻 ${sec} 秒，自動整理已停止`);
+        if (st) st.textContent = `🔴 HTTP 429：冷卻 ${sec} 秒，自動整理已停止`;
+        return false;
       }
       if (!r.ok) throw Error(`HTTP ${r.status}`);
       const d = await r.json();
+      if (!isCrossRequestCurrent(request, controller)) return false;
       const now = Date.now();
-      if (request !== crossRequest) return;
       for (const item of parseShopData(d.shops || [], '', null, now, 'cross')) mktCrossMap.set(item.key, item);
       rebuildPriceEvidence();
       refreshWarehouse();
-      st.textContent = `🟢 [${new Date().toLocaleTimeString()}] 跨城補查「${kw}」完成！累計跨城快照 ${mktCrossMap.size} 筆`;
+      if (st) st.textContent = `🟢 [${new Date().toLocaleTimeString()}] 跨城補查「${kw}」完成！累計跨城快照 ${mktCrossMap.size} 筆`;
       renderMkt();
-    } catch (e) { if (e.name !== 'AbortError' && request === crossRequest) st.textContent = '⚠️ 補查失敗：' + e.message; }
-    finally { if (request === crossRequest) crossBusy = false; if (crossAbortCtrl === controller) crossAbortCtrl = null; }
+      return true;
+    } catch (e) {
+      if (e?.name !== 'AbortError' && isCrossRequestCurrent(request, controller) && st) {
+        st.textContent = '⚠️ 補查失敗：' + e.message;
+      }
+      return false;
+    } finally {
+      if (crossAbortCtrl === controller) {
+        crossAbortCtrl = null;
+        crossBusy = false;
+      }
+    }
   }
 
   mktPanel.querySelector('#roi-mkt-cross').onclick = () => {
     const kw = mktPanel.querySelector('#roi-mkt-q').value.trim() || (mktFilter === 'card' ? '卡片' : mktSub !== 'all' ? SUB_LABELS[mktSub] : '');
     if (!kw) return alert('請在搜尋框輸入關鍵字（或先選擇卡片總類或武器／防具細分類）再點跨城補查！');
-    doCrossSearch(kw);
+    void doCrossSearch(kw);
   };
 
   async function mktAutoTick() {
-    if (!mktAuto15s || !mktView || document.hidden) return;
+    const generation = mktAutoGeneration;
+    const isCurrent = () => generation === mktAutoGeneration && mktAuto15s && mktView
+      && !document.hidden && mktPanel.isConnected && !mktPanel.hidden;
+    if (!isCurrent() || Date.now() < crossCooldownUntil) return;
     const runTask = async () => {
+      if (!isCurrent() || Date.now() < crossCooldownUntil) return;
       const cf = findCityVendingFieldset();
-      if (!cf) { stopMktAuto('已離開攤位頁'); return; }
+      if (!cf) {
+        stopMktAuto('已離開攤位頁');
+        return;
+      }
       const refBtn = [...cf.querySelectorAll('button')].find((b) => clean(b.textContent) === '重新整理' && !b.disabled);
       const st = mktPanel.querySelector('#roi-mkt-status');
       if (refBtn) {
         refBtn.click();
-        st.textContent = `🟢 [${new Date().toLocaleTimeString()}] 已觸發 15 秒原生重新整理...`;
+        if (st) st.textContent = `🟢 [${new Date().toLocaleTimeString()}] 已觸發 15 秒原生重新整理...`;
         await sleep(800);
+        if (!isCurrent() || findCityVendingFieldset() !== cf) return;
         const p = getCommittedProps(cf, (x) => Array.isArray(x.shops) && x.snap?.mapId);
         if (updateLocalListings(p)) renderMkt();
       }
       const kw = mktPanel.querySelector('#roi-mkt-q').value.trim() || (mktFilter === 'card' ? '卡片' : mktSub !== 'all' ? SUB_LABELS[mktSub] : '');
-      if (kw && mktAuto15s) {
+      if (kw && mktAuto15s && Date.now() >= crossCooldownUntil) {
         await sleep(2200);
-        if (mktAuto15s && !document.hidden) await doCrossSearch(kw, true);
+        if (isCurrent() && findCityVendingFieldset() === cf && Date.now() >= crossCooldownUntil) {
+          await doCrossSearch(kw, true);
+        }
       }
     };
     if (navigator.locks?.request) {
-      navigator.locks.request('roi-lean-market-lock', { ifAvailable: true }, async (lock) => {
+      await navigator.locks.request('roi-lean-market-lock', { ifAvailable: true }, async (lock) => {
+        if (!isCurrent()) return;
         if (!lock) {
           const st = mktPanel.querySelector('#roi-mkt-status');
           if (st) st.textContent = '⏸️ 另一分頁正在整理攤位，本分頁自動禮讓防 429';
@@ -2578,17 +2631,32 @@
   }
 
   function startMktAuto() {
+    if (Date.now() < crossCooldownUntil) {
+      const remSec = Math.max(1, Math.ceil((crossCooldownUntil - Date.now()) / 1000));
+      const st = mktPanel.querySelector('#roi-mkt-status');
+      if (st) st.textContent = `⏳ 跨城查價冷卻中（剩餘約 ${remSec} 秒），請稍後再啟動`;
+      return;
+    }
+    ++mktAutoGeneration;
     mktAuto15s = true;
     mktAutoBtn.textContent = '⏹ 停止 15s 自動整理';
     mktAutoBtn.style.background = '#dc2626';
     clearInterval(mktAutoTimer);
-    mktAutoTick();
-    mktAutoTimer = setInterval(mktAutoTick, 15000);
+    void mktAutoTick();
+    mktAutoTimer = setInterval(() => { void mktAutoTick(); }, 15000);
   }
 
   function stopMktAuto(reason = '') {
+    ++mktAutoGeneration;
     mktAuto15s = false;
     clearInterval(mktAutoTimer);
+    mktAutoTimer = null;
+    if (crossAbortCtrl) {
+      try { crossAbortCtrl.abort(); } catch {}
+      crossAbortCtrl = null;
+    }
+    crossBusy = false;
+    ++crossRequest;
     mktAutoBtn.textContent = '▶️ 啟動 15s 自動整理';
     mktAutoBtn.style.background = 'linear-gradient(135deg,#16a34a,#15803d)';
     if (reason && mktPanel.querySelector('#roi-mkt-status')) mktPanel.querySelector('#roi-mkt-status').textContent = `🔴 ${reason}`;
@@ -2885,7 +2953,7 @@
     const cf = findCityVendingFieldset();
     if (!cf) {
       mktPanel.remove();
-      if (mktAuto15s) stopMktAuto();
+      if (mktAuto15s || crossAbortCtrl) stopMktAuto('已離開攤位頁');
       document.querySelectorAll('[data-roi-browse-hidden]').forEach((el) => el.removeAttribute('data-roi-browse-hidden'));
       return;
     }
@@ -2952,7 +3020,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.4.3</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.4.4</span>
           <span data-roi-mvp-entry style="display:inline-flex;align-items:center;margin-left:auto;"></span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
