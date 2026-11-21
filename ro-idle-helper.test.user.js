@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.4.4.5
+// @version      3.4.5.1
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -629,6 +629,53 @@
       }
     }
     return null;
+  }
+
+  let townResultsTable = null;
+  let townResultsRows = [];
+  function sizeTownSearchResults() {
+    const table = townResultsTable;
+    const last = townResultsRows.at(-1);
+    if (!table?.isConnected || !table.contains(last)) return;
+    const height = last.getBoundingClientRect().bottom - table.getBoundingClientRect().top + table.scrollTop;
+    const maxHeight = height > 0 ? `${Math.ceil(height)}px` : '';
+    if (table.style.maxHeight !== maxHeight) table.style.maxHeight = maxHeight;
+  }
+  const townResultsObserver = new ResizeObserver(sizeTownSearchResults);
+
+  function refreshTownSearchResults(ui) {
+    const table = ui?.form.closest('fieldset')?.querySelector(':scope > table.xp-table');
+    const rows = table?.tBodies[0]?.rows;
+    const visibleRows = [];
+    let offers = 0;
+    for (const row of rows || []) {
+      // The game inserts a full-width equipment details row beneath an expanded offer.
+      if (row.cells.length > 1 && ++offers === 6) break;
+      visibleRows.push(row);
+    }
+    const next = offers === 6 && visible(table) ? table : null;
+    if (next === townResultsTable && (!next || (visibleRows.length === townResultsRows.length &&
+        visibleRows.every((row, i) => row === townResultsRows[i])))) return;
+
+    townResultsObserver.disconnect();
+    if (townResultsTable && townResultsTable !== next) {
+      townResultsTable.removeAttribute('data-roi-town-results');
+      townResultsTable.removeAttribute('tabindex');
+      townResultsTable.removeAttribute('role');
+      townResultsTable.removeAttribute('aria-label');
+      townResultsTable.style.maxHeight = '';
+    }
+    if (next && (next !== townResultsTable || visibleRows[0] !== townResultsRows[0])) next.scrollTop = 0;
+    townResultsTable = next;
+    townResultsRows = next ? visibleRows : [];
+    if (!next) return;
+    next.setAttribute('data-roi-town-results', '');
+    next.setAttribute('tabindex', '0');
+    next.setAttribute('role', 'table');
+    next.setAttribute('aria-label', '跨城搜尋結果');
+    sizeTownSearchResults();
+    if (next.tHead) townResultsObserver.observe(next.tHead);
+    for (const row of visibleRows) townResultsObserver.observe(row);
   }
 
   async function triggerNativeTownSearch(rawName) {
@@ -3342,6 +3389,7 @@
 
   function syncMktMount() {
     ensurePackItemsLoaded();
+    refreshTownSearchResults(findTownSearchUI());
     const allFields = [...document.querySelectorAll('fieldset')].filter((f) => f !== mktPanel);
     const searchField = allFields.find((f) => clean(roiPriceText([...f.children].find((e) => e.tagName === 'LEGEND') || document.createElement('span'))).startsWith('搜尋所有城鎮的攤位'));
     if (searchField) {
@@ -3381,6 +3429,8 @@
     const st = document.createElement('style');
     st.textContent = `
       [data-roi-browse-hidden], [data-roi-native-fold] { display: none !important; }
+      table[data-roi-town-results] { display: block; overflow: auto; }
+      table[data-roi-town-results] > :is(thead, tbody) > tr > :first-child:not([colspan]) { width: 100%; }
       .roi-mc-text { color: var(--roi-mc) !important; font-weight: bold !important; font-variant-numeric: tabular-nums; }
       html.night .roi-mc-text, html[data-info-night] .roi-mc-text, #roi-mkt-rows .roi-mc-text { color: var(--roi-mn) !important; -webkit-text-fill-color: currentColor !important; }
       .roi-mkt-row:hover { background:rgba(56,189,248,0.12) !important; }
@@ -3427,7 +3477,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.4.4.5 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.4.5.1 測試版</span>
           <span data-roi-mvp-entry style="display:inline-flex;align-items:center;margin-left:auto;"></span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
@@ -3725,7 +3775,7 @@
       legends.some((t) => /^必撿稀有掉落/.test(t))
     ) mountSettingsTools();
     if (legends.some((t) => /^倉庫/.test(t))) refreshWarehouse();
-    if (legends.some((t) => /的攤位/.test(t)) || mktPanel.isConnected) syncMktMount();
+    if (legends.some((t) => /的攤位/.test(t)) || mktPanel.isConnected || townResultsTable) syncMktMount();
     annotateAllRefinedEquipment();
   }
 
