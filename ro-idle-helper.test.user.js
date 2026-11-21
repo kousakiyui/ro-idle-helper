@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.4.4.3
+// @version      3.4.4.4
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -1983,10 +1983,18 @@
   function findRefineNativeStore(host, snapshot) {
     const root = currentFiberRoot(host);
     if (!root) return null;
-    const route = fiberRouteMap.get(host);
+    let route = fiberRouteMap.get(host);
     let fiber = root;
-    if (!route) return null;
-    for (const step of route) fiber = step === 'c' ? fiber?.child : fiber?.sibling;
+    for (const step of route ?? []) fiber = step === 'c' ? fiber?.child : fiber?.sibling;
+    if (fiber?.stateNode !== host) {
+      // 背包的 snapshot 可來自 Hook，未必存在符合條件的祖先 props，
+      // 因此不能假設 readBackpackContext 已建立這條 DOM 路徑快取。
+      getCommittedProps(host, () => true);
+      route = fiberRouteMap.get(host);
+      if (!route) return null;
+      fiber = root;
+      for (const step of route) fiber = step === 'c' ? fiber?.child : fiber?.sibling;
+    }
     if (fiber?.stateNode !== host) return null;
     // 遊戲以 Zustand 分開保存 characterId 與 snapshot。
     // 只讀目前背包／倉庫祖先的 Hook 依賴，並核對同一份 snapshot。
@@ -3392,7 +3400,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.4.4.3 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.4.4.4 測試版</span>
           <span data-roi-mvp-entry style="display:inline-flex;align-items:center;margin-left:auto;"></span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
