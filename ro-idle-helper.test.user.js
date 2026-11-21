@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.4.4
+// @version      3.4.4.2
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -16,6 +16,150 @@
 
 (() => {
   'use strict';
+  const MAX_BACKUP_BYTES = 2 * 1024 * 1024;
+  function isPlainRecord(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value) &&
+      (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+  }
+  function checkDataTree(value, depth = 0, budget = { keys: 0 }) {
+    if (depth > 12 || (typeof value === 'string' && value.length > 16384)) throw Error('資料結構超過上限');
+    if (value === null || typeof value !== 'object') return;
+    if (!Array.isArray(value) && !isPlainRecord(value)) throw Error('資料物件格式不符');
+    for (const key of Object.keys(value)) {
+      if (++budget.keys > 30000 || ['__proto__', 'prototype', 'constructor'].includes(key)) throw Error('資料包含不安全欄位或超過上限');
+      checkDataTree(value[key], depth + 1, budget);
+    }
+  }
+  function validatePrefs(value) {
+    if (!isPlainRecord(value)) throw Error('偏好設定格式不符');
+    const result = {};
+    for (const key of ['sound', 'notify', 'moneyColor', 'whProtect', 'whSaleReview', 'whAutoEquipCard', 'hudMin', 'mktUpperFold']) {
+      if (!Object.hasOwn(value, key)) continue;
+      if (typeof value[key] !== 'boolean') throw Error('偏好設定的 ' + key + ' 必須是開關');
+      result[key] = value[key];
+    }
+    if (Object.hasOwn(value, 'hudPos')) {
+      if (value.hudPos === null) result.hudPos = null;
+      else {
+        const pos = value.hudPos;
+        if (!isPlainRecord(pos) || !['left', 'top'].every((key) => Number.isFinite(pos[key]) && Math.abs(pos[key]) <= 1e6)) {
+          throw Error('浮窗位置格式不符');
+        }
+        result.hudPos = { left: pos.left, top: pos.top };
+      }
+    }
+    return result;
+  }
+  function validateWords(value) {
+    if (!Array.isArray(value) || value.length > 500 || value.some((word) => typeof word !== 'string' || word.length > 80)) {
+      throw Error('貴重詞清單格式或長度不符');
+    }
+    return [...new Set(value.map((word) => word.trim()).filter(Boolean))];
+  }
+  function validateFavorites(value) {
+    if (!Array.isArray(value) || value.length > 5000 || value.some((id) => !Number.isSafeInteger(id) || id <= 0 || id > 1e9)) {
+      throw Error('收藏清單格式或長度不符');
+    }
+    return [...new Set(value)];
+  }
+  function validateWarehouse(value) {
+    if (!isPlainRecord(value) || !isPlainRecord(value.marks) || !isPlainRecord(value.autoLocks)) throw Error('倉庫鎖定資料格式不符');
+    const result = { marks: {}, autoLocks: {} };
+    for (const field of ['marks', 'autoLocks']) {
+      const entries = Object.entries(value[field]);
+      if (entries.length > 5000) throw Error('倉庫鎖定資料超過上限');
+      for (const [id, reason] of entries) {
+        if (!/^[1-9]\d*$/.test(id) || Number(id) > 1e9) throw Error('倉庫道具 ID 格式不符');
+        if (field === 'marks' ? !['lock', 'neutral'].includes(reason) : typeof reason !== 'string' || reason.length > 256) {
+          throw Error('倉庫鎖定原因格式不符');
+        }
+        result[field][id] = reason;
+      }
+    }
+    return result;
+  }
+  function validatePriceOptions(value) {
+    if (!isPlainRecord(value) || typeof value.enabled !== 'boolean' ||
+        !Number.isSafeInteger(value.threshold) || value.threshold <= 0 || value.threshold > 1e12) throw Error('掛牌保護設定格式不符');
+    return { enabled: value.enabled, threshold: value.threshold };
+  }
+  function readValidatedSetting(key, validate, fallback, json = false) {
+    try {
+      let value = GM_getValue(key, undefined);
+      if (value === undefined) return fallback;
+      if (json && typeof value === 'string') {
+        if (value.length > MAX_BACKUP_BYTES) return fallback;
+        value = JSON.parse(value);
+      }
+      checkDataTree(value);
+      return validate(value);
+    } catch { return fallback; }
+  }
+  function validateLearnedItems(value) {
+    if (!isPlainRecord(value) || Object.keys(value).length > 3500) throw Error('道具快取超過上限');
+    const result = {};
+    for (const [id, info] of Object.entries(value)) {
+      if (!/^[1-9]\d*$/.test(id) || Number(id) > 1e9 || !isPlainRecord(info)) continue;
+      const item = {};
+      for (const key of ['name', 'desc']) {
+        if (typeof info[key] === 'string' && info[key].length <= (key === 'name' ? 160 : 1200)) item[key] = info[key];
+      }
+      for (const key of ['atk', 'matk', 'def', 'weight', 'wLv']) {
+        if (Number.isFinite(info[key]) && info[key] >= 0 && info[key] <= 1e6) item[key] = info[key];
+      }
+      result[id] = item;
+    }
+    return result;
+  }
+  function validateCategoryProfiles(value) {
+    if (!isPlainRecord(value) || Object.keys(value).length > 128) throw Error('分類設定超過上限');
+    const result = {};
+    for (const [id, profile] of Object.entries(value)) {
+      if (id.length > 80 || !isPlainRecord(profile) || typeof profile.enabled !== 'boolean' || !isPlainRecord(profile.modes)) throw Error('角色分類設定格式不符');
+      const modes = {};
+      for (const cat of ['consumable', 'equipment', 'card', 'other']) {
+        if (!['off', 'store', 'priority', 'valuable'].includes(profile.modes[cat])) throw Error('道具分類處理方式不符');
+        modes[cat] = profile.modes[cat];
+      }
+      result[id] = { enabled: profile.enabled, modes };
+    }
+    return result;
+  }
+  function prepareBackupWrites(data) {
+    checkDataTree(data);
+    if (!isPlainRecord(data) || !['ro-idle-lean-backup', 'ro-idle-helper-backup'].includes(data.format)) throw Error('備份格式不符');
+    if (data.version !== undefined && data.version !== 1) throw Error('不支援此備份版本');
+    if (data.settings !== undefined && !isPlainRecord(data.settings)) throw Error('舊版設定格式不符');
+    const settings = data.settings ?? {}, writes = [];
+    const add = (key, value, validate, json = false) => {
+      if (value === undefined) return;
+      const clean = validate(value);
+      writes.push([key, json ? JSON.stringify(clean) : clean]);
+    };
+    // 相同資料若同時出現在新舊欄位，兩份都須有效，寫入順序沿用舊版優先規則。
+    for (const value of [data.prefs, settings.ro_lean_prefs_v091]) add('ro_lean_prefs_v091', value, validatePrefs);
+    for (const value of [data.words, settings.ro_custom_protect_words_v091]) add('ro_custom_protect_words_v091', value, validateWords);
+    for (let value of [data.wh, settings['warehouse-helper-v1']]) {
+      if (typeof value === 'string') value = JSON.parse(value);
+      add('warehouse-helper-v1', value, validateWarehouse, true);
+    }
+    for (const value of [data.favs, settings['roi-favorites-v1']]) add('roi-favorites-v1', value, validateFavorites);
+    for (const value of [data.priceOptions, settings['warehouse-auto-protect-v1']]) add('warehouse-auto-protect-v1', value, validatePriceOptions);
+    return [...new Map(writes)];
+  }
+  function commitBackupWrites(writes) {
+    const originals = new Map(writes.map(([key]) => [key, GM_getValue(key, undefined)]));
+    const changed = [];
+    try {
+      for (const [key, value] of writes) { changed.push(key); GM_setValue(key, value); }
+    } catch (error) {
+      const failed = [];
+      for (const key of changed.reverse()) {
+        try { GM_setValue(key, originals.get(key)); } catch { failed.push(key); }
+      }
+      throw Error(failed.length ? '寫入失敗且部分設定無法還原，請檢查儲存權限' : '寫入失敗，已還原原設定');
+    }
+  }
   const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   if (page.top !== page.self) return;
 
@@ -98,7 +242,7 @@
   const ITEM_DETAIL_DB = new Map();
   const isPollutedDesc = (s) => typeof s === 'string' && /(?:\bZeny\b|🔍|剩\s*\d+|購買\s*\()/.test(s);
   try {
-    const savedDb = GM_getValue('roi_learned_item_db_v1', {});
+    const savedDb = readValidatedSetting('roi_learned_item_db_v1', validateLearnedItems, {});
     let cleanedPolluted = false;
     for (const [k, v] of Object.entries(savedDb)) {
       const numId = Number(k);
@@ -125,6 +269,7 @@
     if (!changed) return;
     const merged = old ? { ...old, ...info } : { ...info };
     ITEM_DETAIL_DB.set(numId, merged);
+    if (ITEM_DETAIL_DB.size > 3500) ITEM_DETAIL_DB.delete(ITEM_DETAIL_DB.keys().next().value);
     if (info.name) ITEM_NAME_CACHE.set(numId, info.name);
     if (!dbSaveTimer) {
       dbSaveTimer = setTimeout(() => {
@@ -432,7 +577,6 @@
 
   const plainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value) &&
     (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
-  const validWarehouseData = (value) => plainObject(value) && plainObject(value.marks) && plainObject(value.autoLocks);
 
   const state = {
     paused: false, accMs: 0, lastResumed: Date.now(),
@@ -449,15 +593,11 @@
     processedLines: new WeakMap(), lastNotifyAt: 0
   };
 
-  try {
-    const savedAlert = GM_getValue('ro_lean_prefs_v091', null);
-    if (savedAlert) Object.assign(state, savedAlert);
-    const savedWh = JSON.parse(GM_getValue('warehouse-helper-v1', '{}'));
-    state.whMarks = plainObject(savedWh?.marks) ? savedWh.marks : {};
-    state.whAutoLocks = plainObject(savedWh?.autoLocks) ? savedWh.autoLocks : {};
-    const savedWords = GM_getValue('ro_custom_protect_words_v091', []);
-    if (Array.isArray(savedWords)) state.customProtectWords = savedWords;
-  } catch {}
+  Object.assign(state, readValidatedSetting('ro_lean_prefs_v091', validatePrefs, {}));
+  const loadedWh = readValidatedSetting('warehouse-helper-v1', validateWarehouse, { marks: {}, autoLocks: {} }, true);
+  state.whMarks = loadedWh.marks;
+  state.whAutoLocks = loadedWh.autoLocks;
+  state.customProtectWords = readValidatedSetting('ro_custom_protect_words_v091', validateWords, []);
 
   function savePrefs() {
     try {
@@ -649,6 +789,10 @@
         if (state.charRosterLoaded && !state.myCharIds.has(cid)) return;
         const ch = d.snapshot.character;
         if (foreground) {
+          if (state.activeCharId !== cid) {
+            refineIdentityEpoch++;
+            refSelected.clear();
+          }
           state.activeCharId = cid;
           state.activeCharName = ch.name || d.name;
         }
@@ -734,7 +878,7 @@
   let whSaleApproval = null;
 
   const priceOptionKey = 'warehouse-auto-protect-v1';
-  const savedPriceOptions = GM_getValue(priceOptionKey, {});
+  const savedPriceOptions = readValidatedSetting(priceOptionKey, validatePriceOptions, {});
   const validThreshold = (n) => Number.isSafeInteger(n) && n > 0 && n <= 1e12;
   let priceOptions = { enabled: savedPriceOptions?.enabled !== false,
     threshold: validThreshold(savedPriceOptions?.threshold) ? savedPriceOptions.threshold : 100000 };
@@ -984,6 +1128,11 @@
 
   window.addEventListener('click', (e) => {
     if (!(e.target instanceof Element)) return;
+    const caption = clean(e.target.closest('button,a')?.textContent);
+    if (/^(?:換角色|切換角色|登出|登入)$/.test(caption)) {
+      refineIdentityEpoch++;
+      refSelected.clear();
+    }
     const f = e.target.closest('fieldset');
     if (!f) return;
     const btn = e.target.closest('button');
@@ -1091,7 +1240,10 @@
   }, true);
 
   const rarePanels = new WeakMap(), rareKnownRoots = new Set(), rareLastMap = new WeakMap();
-  let rareAutoMap = GM_getValue('roi-rare-auto-map-v1', true) !== false;
+  let rareAutoMap = readValidatedSetting('roi-rare-auto-map-v1', (value) => {
+    if (typeof value !== 'boolean') throw Error('稀有掉落開關格式不符');
+    return value;
+  }, true);
   const isRareHeading = (s) => /^必撿稀有掉落\s*\(\s*\d+\s*項\s*\)$/.test(clean(s));
   const isRareBoundary = (s) => /^不在這張地圖(?:的)?\s*[:：]?$/.test(clean(s));
 
@@ -1269,34 +1421,12 @@
     enabled: false, abovePercent: 70, ...(Array.isArray(rule) ? {} : rule), items: listItems(rule)
   });
 
-  function buildLootPatch(draft, ids, mode) {
-    const supplies = new Set([
+  function lootSupplyIds(draft) {
+    return new Set([
       ...itemIds(draft.restock), ...itemIds(draft.townBuy), ...itemIds(draft.cureItems),
       ...itemIds(draft.autoBuy?.potions), ...itemIds(draft.autoBuy?.gems), ...itemIds([draft.autoBuy?.arrows?.itemId]),
       ...[draft.hpPotion, draft.spPotion, draft.buffPotion].flatMap((rule) => [...listItems(rule), ...itemIds([rule?.itemId])])
     ]);
-    const selected = itemIds(ids).filter((id) => !supplies.has(id));
-    if (!selected.length) return null;
-
-    const autoStorage = storageRule(draft.autoStorage);
-    const storageItems = [...new Set([...autoStorage.items, ...selected])];
-    const priority = draft.lootPriority;
-    const priorityItems = [...new Set([...listItems(priority), ...selected])];
-    if (storageItems.length > 2000 || (mode === 'valuable' && priorityItems.length > 500)) {
-      throw Error('同步會超過存倉或優先撿取的清單上限，請先移除不需要的項目');
-    }
-
-    const autoSell = itemIds(draft.autoSell);
-    const stored = new Set(selected);
-    const patch = {
-      autoLoot: true,
-      autoStorage: { ...autoStorage, enabled: true, items: storageItems },
-      autoSell: autoSell.filter((id) => !stored.has(id))
-    };
-    if (mode === 'valuable') {
-      patch.lootPriority = { ...(priority?.rare ? { rare: true } : {}), items: priorityItems };
-    }
-    return { patch, count: selected.length };
   }
 
   let lootPack;
@@ -1353,6 +1483,66 @@
   const isValuableLoot = (id, name = '') => classifyItem(id, name).cat === 'card' || lootOres.has(id)
     || state.whMarks[id] === 'lock' || state.customProtectWords.some((word) => word && name.includes(word));
 
+  const lootCategoryLabels = { consumable: '消耗品', equipment: '裝備', card: '卡片', other: '其他' };
+  const lootCategoryModes = {
+    off: '保留原設定', store: '全部存倉', priority: '優先撿取＋存倉', valuable: '僅貴重物優先撿取＋存倉'
+  };
+  const categorySyncByCharacter = new Map();
+
+  function lootCategory(id, name, pack) {
+    const item = pack.items.get(id);
+    if (item?.category === 'card') return 'card';
+    if (item?.category === 'equipment') return 'equipment';
+    if (item?.category === 'consumable') return 'consumable';
+    const cat = classifyItem(id, name).cat;
+    return cat === 'weapon' || cat === 'armor' ? 'equipment'
+      : cat === 'card' || cat === 'consumable' ? cat : 'other';
+  }
+
+  function buildCategoryLootPatch(draft, loot, pack, modes, previous) {
+    const storage = storageRule(draft.autoStorage);
+    const priority = listItems(draft.lootPriority);
+    const storageBase = storage.items.filter((id) => !previous?.storage.has(id));
+    const priorityBase = priority.filter((id) => !previous?.priority.has(id));
+    const stored = new Set(), prioritized = new Set();
+    const supplies = lootSupplyIds(draft);
+    const counts = Object.fromEntries(Object.keys(lootCategoryLabels).map((cat) => [cat, 0]));
+    for (const [id, name] of loot) {
+      const category = lootCategory(id, name, pack);
+      const mode = modes[category];
+      if (mode === 'off' || !Object.hasOwn(lootCategoryModes, mode)) continue;
+      if (mode === 'valuable' && !isValuableLoot(id, name)) continue;
+      // 沿用既有補品、補給排除規則。
+      if (supplies.has(id)) continue;
+      counts[category]++;
+      stored.add(id);
+      if (mode === 'priority' || mode === 'valuable') prioritized.add(id);
+    }
+    const storageItems = [...new Set([...storageBase, ...stored])];
+    const priorityItems = [...new Set([...priorityBase, ...prioritized])];
+    if (storageItems.length > 2000 || priorityItems.length > 500) {
+      throw Error('分類設定會超過存倉或優先撿取上限，請縮小範圍');
+    }
+    const patch = {};
+    if (stored.size || JSON.stringify(storageItems) !== JSON.stringify(storage.items)) {
+      patch.autoStorage = { ...storage, ...(stored.size ? { enabled: true } : {}), items: storageItems };
+    }
+    if (prioritized.size || JSON.stringify(priorityItems) !== JSON.stringify(priority)) {
+      patch.lootPriority = { ...(draft.lootPriority?.rare ? { rare: true } : {}), items: priorityItems };
+    }
+    if (stored.size) {
+      patch.autoLoot = true;
+      patch.autoSell = itemIds(draft.autoSell).filter((id) => !stored.has(id));
+    }
+    return {
+      patch, counts,
+      tracked: {
+        storage: new Set([...stored].filter((id) => !storageBase.includes(id))),
+        priority: new Set([...prioritized].filter((id) => !priorityBase.includes(id)))
+      }
+    };
+  }
+
   function mountSettingsTools() {
     const itemGroup = document.querySelector('[role="group"][aria-label="道具設定的複製與匯出匯入"]');
     if (itemGroup && !itemGroup.querySelector('[data-roi-settings-tools]')) {
@@ -1360,117 +1550,130 @@
       box.dataset.roiSettingsTools = '';
       box.style.cssText = 'flex-basis:100%;display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px;padding:6px 10px;background:linear-gradient(90deg,rgba(30,41,59,0.9),rgba(15,23,42,0.75));border-left:3px solid #38bdf8;border-radius:6px;font-size:11.5px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
       const status = document.createElement('span'); status.style.color = '#4ade80';
-      const mk = (t, fn, bg = '') => {
-        const b = document.createElement('button'); b.type = 'button'; b.className = 'xp-btn small'; b.textContent = t;
-        if (bg) b.style.cssText = `background:${bg};color:#fff;font-weight:bold;border:none;`;
-        b.onclick = () => { try { fn(); } catch (e) { status.textContent = '⚠️ ' + e.message; } };
-        return b;
-      };
+      box.style.display = 'grid';
+      box.style.gridTemplateColumns = 'minmax(56px,auto) minmax(0,1fr) auto';
+      box.style.width = '100%';
+      box.style.boxSizing = 'border-box';
       const getProps = () => {
         const p = getCommittedProps(itemGroup, (x) => typeof x.update === 'function' && x.draft && x.snap?.character);
         if (!p) throw Error('無法讀取設定草稿');
         return p;
       };
-
-      const applyLoot = (p, ids, mode, previous) => {
-        const draft = p.draft;
-        const storage = storageRule(draft.autoStorage);
-        const priority = listItems(draft.lootPriority);
-        const storageBase = storage.items.filter((id) => !previous?.storage.has(id));
-        const priorityBase = priority.filter((id) => !previous?.priority.has(id));
-        const nextPriority = { ...(draft.lootPriority?.rare ? { rare: true } : {}), items: priorityBase };
-        const result = buildLootPatch(previous ? {
-          ...draft,
-          autoStorage: { ...storage, items: storageBase },
-          lootPriority: nextPriority
-        } : draft, ids, mode);
-        if (!result) {
-          const patch = {};
-          if (storageBase.length !== storage.items.length) patch.autoStorage = { ...storage, items: storageBase };
-          if (priorityBase.length !== priority.length) patch.lootPriority = nextPriority;
-          if (Object.keys(patch).length) {
-            p.update(patch);
-            status.textContent = '已移除前次同步項目，請按「套用設定」';
-          } else {
-            status.textContent = '沒有符合條件的戰利品';
-          }
-          return { storage: new Set(), priority: new Set() };
-        }
-        if (mode === 'store' && previous?.priority.size) {
-          result.patch.lootPriority = nextPriority;
-        }
-        p.update(result.patch);
-        const action = mode === 'valuable' ? '優先撿取＋存倉' : '自動存倉';
-        status.textContent = `已設定 ${result.count} 種道具為「${action}」，請按「套用設定」`;
-        return {
-          storage: new Set(result.patch.autoStorage.items.filter((id) => !storageBase.includes(id))),
-          priority: new Set(listItems(result.patch.lootPriority).filter((id) => !priorityBase.includes(id)))
-        };
+      const settingsKey = 'roi-loot-category-map-v1';
+      const selects = new Map(), counters = new Map();
+      const auto = element('input');
+      auto.type = 'checkbox';
+      const autoLabel = element('label', '隨地圖自動設定 ');
+      autoLabel.style.gridColumn = '1 / -1';
+      autoLabel.prepend(auto);
+      box.append(autoLabel);
+      let boundCharacter = null, preferences = null, lastAutoKey = null, request = 0;
+      const characterKey = (p) => String(p.snap.character.id ?? p.snap.character.name);
+      const getPreferences = (key) => {
+        const all = readValidatedSetting(settingsKey, validateCategoryProfiles, {});
+        const saved = plainObject(all) && plainObject(all[key]) ? all[key] : null;
+        const legacy = GM_getValue('roi-loot-auto-map', 'off');
+        const legacyMode = lootModes.includes(legacy) ? legacy : 'off';
+        const modes = Object.fromEntries(Object.keys(lootCategoryLabels).map((cat) => [
+          cat, saved && Object.hasOwn(lootCategoryModes, saved.modes?.[cat]) ? saved.modes[cat] : legacyMode
+        ]));
+        return { enabled: saved ? saved.enabled === true : legacyMode !== 'off', modes };
       };
-      const configuredIds = (d) => [
-        ...listItems(d.lootFilter), ...listItems(d.lootPriority), ...listItems(d.autoStorage), ...itemIds(d.autoSell)
-      ];
-      const inventoryIds = (snap) => {
-        const equipped = new Set(Object.values(snap.equipment ?? {}));
-        return itemIds((snap.inventory ?? []).filter((i) => !i.equipped && !equipped.has(i.uid)));
+      const bindCharacter = (p) => {
+        const key = characterKey(p);
+        if (boundCharacter === key) return;
+        boundCharacter = key;
+        preferences = getPreferences(key);
+        auto.checked = preferences.enabled;
+        for (const [cat, select] of selects) select.value = preferences.modes[cat];
+        for (const counter of counters.values()) counter.textContent = '—';
+        lastAutoKey = null;
+        request++;
       };
-      const auto = element('select');
-      auto.className = 'xp-input';
-      for (const [value, label] of [['off', '關閉'], ['store', '本圖戰利品存倉'], ['valuable', '本圖貴重物優先撿＋存倉']]) {
-        const option = element('option', label);
-        option.value = value;
-        auto.append(option);
-      }
-      const savedMode = GM_getValue('roi-loot-auto-map', 'off');
-      auto.value = lootModes.includes(savedMode) ? savedMode : 'off';
-      const autoLabel = element('label', '隨地圖同步 ');
-      autoLabel.append(auto);
-
-      const getMapKey = (p) => JSON.stringify([p.snap.character.id ?? p.snap.character.name, p.draft.lockMap]);
-      let lastAutoKey;
-      const syncedByCharacter = new Map();
-      const syncMapLoot = async (mode, automatic = false) => {
+      const saveSettings = () => {
+        const all = readValidatedSetting(settingsKey, validateCategoryProfiles, {});
+        const next = plainObject(all) ? { ...all } : {};
+        next[boundCharacter] = preferences;
+        GM_setValue(settingsKey, validateCategoryProfiles(next));
+      };
+      const sync = async (automatic = false) => {
+        let pendingKey = null;
         try {
-          const p = getProps(), mapKey = getMapKey(p);
-          const key = JSON.stringify([mode, mapKey]);
-          if (automatic) {
-            if (key === lastAutoKey) return;
-            lastAutoKey = key;
-          }
+          const before = getProps();
+          bindCharacter(before);
+          const id = boundCharacter, mapId = before.draft.lockMap;
+          const modes = { ...preferences.modes };
+          pendingKey = JSON.stringify([id, mapId, modes, preferences.enabled]);
+          if (automatic && (!preferences.enabled || pendingKey === lastAutoKey)) return;
+          const token = ++request;
+          lastAutoKey = pendingKey;
+          status.textContent = '讀取本圖掉落…';
           const pack = await loadLootPack();
-          if (!itemGroup.isConnected || (automatic && (auto.value !== mode || lastAutoKey !== key))) return;
+          if (token !== request || !itemGroup.isConnected) return;
           const current = getProps();
-          if (mapKey !== getMapKey(current)) return;
-          const loot = getMapLoot(pack, current.draft.lockMap);
-          const ids = [...loot].filter(([id, name]) => mode === 'store' || isValuableLoot(id, name)).map(([id]) => id);
-          const character = current.snap.character;
-          const characterKey = character.id ?? character.name;
-          const next = applyLoot(current, ids, mode, syncedByCharacter.get(characterKey));
-          if (next) syncedByCharacter.set(characterKey, next);
-        } catch (e) { status.textContent = '⚠️ ' + e.message; }
+          if (characterKey(current) !== id || current.draft.lockMap !== mapId) {
+            lastAutoKey = null;
+            return;
+          }
+          const loot = getMapLoot(pack, mapId);
+          const result = buildCategoryLootPatch(current.draft, loot, pack, modes, categorySyncByCharacter.get(id));
+          if (Object.keys(result.patch).length) current.update(result.patch);
+          categorySyncByCharacter.set(id, result.tracked);
+          for (const [cat, count] of Object.entries(result.counts)) counters.get(cat).textContent = count + ' 種';
+          status.textContent = Object.keys(result.patch).length ? '已更新草稿，請按「套用設定」' : '分類設定已同步';
+        } catch (error) {
+          if (pendingKey === lastAutoKey) lastAutoKey = null;
+          status.textContent = '⚠️ ' + error.message;
+        }
       };
-      const syncAutomatically = () => { if (auto.value !== 'off') void syncMapLoot(auto.value, true); };
-      lootSyncPanels.set(itemGroup, syncAutomatically);
+      for (const [cat, label] of Object.entries(lootCategoryLabels)) {
+        const select = element('select');
+        select.className = 'xp-input';
+        select.style.cssText = 'width:100%;min-width:0;max-width:100%';
+        select.setAttribute('aria-label', label + '自動設定');
+        for (const [value, text] of Object.entries(lootCategoryModes)) {
+          const option = element('option', text); option.value = value; select.append(option);
+        }
+        const counter = element('span', '—', 'white-space:nowrap;color:var(--text-dim)');
+        counters.set(cat, counter); selects.set(cat, select);
+        const categoryLabel = element('label', label);
+        select.id = 'roi-loot-category-' + cat;
+        categoryLabel.htmlFor = select.id;
+        box.append(categoryLabel, select, counter);
+        select.onchange = () => {
+          try {
+            const p = getProps();
+            if (characterKey(p) !== boundCharacter) { bindCharacter(p); return; }
+            preferences.modes[cat] = select.value;
+            saveSettings(); lastAutoKey = null; request++;
+            if (preferences.enabled) void sync(true);
+            else status.textContent = '設定已記住，按「設定本圖」寫入草稿';
+          } catch (error) { status.textContent = '⚠️ ' + error.message; }
+        };
+      }
+      const syncNow = element('button', '設定本圖');
+      syncNow.type = 'button'; syncNow.className = 'xp-btn small';
+      syncNow.onclick = () => { void sync(); };
       auto.onchange = () => {
-        GM_setValue('roi-loot-auto-map', auto.value);
-        lastAutoKey = undefined;
-        syncAutomatically();
+        try {
+          const p = getProps();
+          if (characterKey(p) !== boundCharacter) { bindCharacter(p); return; }
+          preferences.enabled = auto.checked;
+          saveSettings(); lastAutoKey = null; request++;
+          if (preferences.enabled) void sync(true);
+          else status.textContent = '已關閉自動設定';
+        } catch (error) { status.textContent = '⚠️ ' + error.message; }
       };
-
-      box.append(
-        mk('📦 戰利品全存倉 (給商人賣)', () => {
-          const p = getProps();
-          applyLoot(p, [...configuredIds(p.draft), ...inventoryIds(p.snap).filter((id) => classifyItem(id).cat !== 'consumable')], 'store');
-        }, 'linear-gradient(135deg,#e11d48,#be123c)'),
-        mk('💎 卡片/神金鋁/貴重詞 ➔ 優先撿+存倉', () => {
-          const p = getProps();
-          const candidates = [...configuredIds(p.draft), ...inventoryIds(p.snap), ...lootOres, ...Object.keys(state.whMarks).map(Number)];
-          applyLoot(p, candidates.filter((id) => isValuableLoot(id, ITEM_NAME_CACHE.get(id))), 'valuable');
-        }, 'linear-gradient(135deg,#d97706,#b45309)'),
-        mk('同步本圖戰利品存倉', () => syncMapLoot('store')),
-        autoLabel,
-        status
-      );
+      const note = element('span', '依本圖掉落設定；已指定的補品與補給會排除。', 'grid-column:1 / -1;color:var(--text-dim)');
+      status.style.gridColumn = '2 / -1';
+      box.append(note, syncNow, status);
+      const tick = () => {
+        try {
+          bindCharacter(getProps());
+          if (preferences.enabled) void sync(true);
+        } catch {}
+      };
+      lootSyncPanels.set(itemGroup, tick);
       itemGroup.append(box);
     }
     lootSyncPanels.get(itemGroup)?.();
@@ -1738,31 +1941,85 @@
     return (local && search(local, 10000)) || search(tree, 80000);
   }
 
-  async function selectBagItemRow(uid) {
+  let refineIdentityEpoch = 0;
+  const positiveId = (value) => (typeof value === 'number' || (typeof value === 'string' && /^[1-9]\d*$/.test(value))) &&
+    Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : null;
+  const snapshotCharacterId = (s) => positiveId(s?.character?.id ?? s?.characterId ?? s?.character?.characterId);
+
+  function refineActor(context) {
+    const direct = snapshotCharacterId(context?.s);
+    if (direct) return direct;
+    const host = context?.table || [...document.querySelectorAll('fieldset')].find((field) =>
+      visible(field) && /^倉庫(?:\s*[（(]|$)/.test(clean(field.querySelector('legend')?.textContent)));
+    const props = host && getCommittedProps(host, (p) => {
+      const s = p?.s ?? p?.snap;
+      return Boolean(s?.character && (snapshotCharacterId(s) || positiveId(p.characterId ?? p.charId)));
+    });
+    return snapshotCharacterId(props?.s ?? props?.snap) || positiveId(props?.characterId ?? props?.charId);
+  }
+
+  const refineItemSignature = (item) => JSON.stringify([item.itemId, item.cards ?? [], item.forged ?? null]);
+  function assertRefineSession(session, allowStopped = false) {
+    if (!session || session.epoch !== refineIdentityEpoch || document.hidden || (!allowStopped && refStop)) {
+      throw Error('角色已變更或流程已停止');
+    }
+    const actor = refineActor(readBackpackContext(true));
+    if (actor !== session.characterId || (state.activeCharId != null && Number(state.activeCharId) !== actor)) {
+      throw Error('無法確認仍是起始角色，已停止');
+    }
+  }
+
+  function assertRefineTarget(session, uid, allowMissing = false) {
+    assertRefineSession(session, session.restoring === true);
+    const b = readBackpackContext(true);
+    const item = b?.s.inventory.find((stack) => stack.uid === uid);
+    if (!item && allowMissing) return b;
+    if (!item || session.items.get(uid) !== refineItemSignature(item)) throw Error('目標裝備已變動，已停止');
+    return b;
+  }
+
+  async function refineAwait(session, promise) {
+    const value = await promise;
+    assertRefineSession(session, session.restoring === true);
+    if (session.targetUid != null) assertRefineTarget(session, session.targetUid, true);
+    return value;
+  }
+
+  function clickRefineControl(session, button, uid) {
+    assertRefineSession(session, session.restoring === true);
+    if (uid != null) assertRefineTarget(session, uid);
+    if (!button?.isConnected || button.disabled) throw Error('原生操作按鈕已變動，已停止');
+    button.click();
+  }
+
+  async function selectBagItemRow(uid, session) {
+    assertRefineTarget(session, uid);
     const b = readBackpackContext(true);
     const row = b?.rows.find((r) => r.uid === uid);
     const btn = row && [...row.row.querySelectorAll('td button')].find((x) => !x.disabled && !x.closest('[data-roi-refine-helper]'));
     if (!btn) throw Error('找不到該裝備列');
-    btn.click();
-    await sleep(90);
-    return readBackpackContext(true);
+    clickRefineControl(session, btn, uid);
+    await refineAwait(session, sleep(90));
+    return assertRefineTarget(session, uid);
   }
 
-  async function equipItemByUid(uid) {
-    let b = await selectBagItemRow(uid);
+  async function equipItemByUid(uid, session) {
+    let b = await refineAwait(session, selectBagItemRow(uid, session));
+    b = assertRefineTarget(session, uid);
     if (Object.values(b.s.equipment || {}).includes(uid)) return b;
     const eqBtn = findNativeDetailBtn(b.table, uid, (t) => t === '裝備');
     if (!eqBtn || eqBtn.disabled) throw Error('此職業無法穿戴該裝備進行忽克連精煉');
-    eqBtn.click();
+    clickRefineControl(session, eqBtn, uid);
     for (let i = 0; i < 40; i++) {
-      await sleep(100);
-      b = readBackpackContext(true);
+      await refineAwait(session, sleep(100));
+      b = assertRefineTarget(session, uid);
       if (b && Object.values(b.s.equipment || {}).includes(uid)) return b;
     }
     throw Error('穿戴裝備逾時');
   }
 
-  async function tryWithdrawFromWarehouse(wantedItemIds, targetPlusLimit, setStatus, limitsById, maxItems = 15) {
+  async function tryWithdrawFromWarehouse(wantedItemIds, targetPlusLimit, setStatus, limitsById, maxItems = 15, session) {
+    assertRefineSession(session);
     const findWhField = () => [...document.querySelectorAll('fieldset')].find((f) => /^倉庫(?:\s*[（(]|$)/.test(clean([...f.children].find((c) => c.tagName === 'LEGEND')?.textContent)) && visible(f));
     let switchedTab = null;
     const selected = new Map();
@@ -1775,8 +2032,8 @@
         const whTab = tabs.find((el) => clean(el.textContent) === '倉庫');
         switchedTab = tabs.find((el) => clean(el.textContent) === '背包');
         if (!whTab || !switchedTab) return [];
-        whTab.click();
-        for (let i = 0; i < 25 && !field; i++) { await sleep(100); field = findWhField(); }
+        clickRefineControl(session, whTab);
+        for (let i = 0; i < 25 && !field; i++) { await refineAwait(session, sleep(100)); field = findWhField(); }
         if (!field) throw Error('開啟倉庫逾時');
       }
       const checked = () => [...field.querySelectorAll('input[type="checkbox"]:checked')];
@@ -1791,20 +2048,22 @@
         const refine = Number(name.match(/^\+\s*(\d+)/)?.[1] || 0);
         if (!name || refine >= (limitsById ? limitsById.get(id) || 0 : targetPlusLimit)) continue;
         if (refStop || document.hidden) throw Error('已中止領倉');
-        cb.click();
-        selected.set(cb, { id, refine });
-        await sleep(25);
+        clickRefineControl(session, cb);
+        selected.set(cb, { id, refine, name });
+        await refineAwait(session, sleep(25));
         if (maxItems === 1) {
           const amount = li.querySelector('input[type="number"]');
           const stackText = clean(li.textContent).match(/×\s*([\d,]+)/)?.[1];
           const stack = stackText ? Number(stackText.replace(/,/g, '')) : NaN;
           if (amount) {
+            assertRefineSession(session);
+            if (!li.contains(amount) || Number(warehouseItemId(li)) !== id) throw Error('領料項目已變動');
             const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
             if (!setter) throw Error('無法設定領料數量，已停止');
             setter.call(amount, '1');
             amount.dispatchEvent(new Event('input', { bubbles: true }));
             amount.dispatchEvent(new Event('change', { bubbles: true }));
-            await sleep(100);
+            await refineAwait(session, sleep(100));
             if (!amount.isConnected || Number(amount.value) !== 1) throw Error('遊戲未接受單件領料數量，已停止');
           } else if (stack !== 1) {
             throw Error('無法確認單件領料數量，已停止以避免取出整疊');
@@ -1814,21 +2073,28 @@
       }
       if (!selected.size) return [];
       const boxes = checked();
+      for (const [cb, expected] of selected) {
+        const row = cb.closest('li');
+        if (!field.contains(cb) || Number(warehouseItemId(row)) !== expected.id ||
+            clean(row?.querySelector('button[aria-label$="的物品資訊"]')?.textContent) !== expected.name) {
+          throw Error('領取物品已變動，已停止');
+        }
+      }
       const btn = [...field.querySelectorAll('button')].find((b) => Number(clean(b.textContent).match(/^(?:領出|取出)\s*(\d+)\s*項/)?.[1]) === selected.size);
       if (refStop || document.hidden || !field.isConnected || boxes.length !== selected.size || boxes.some((cb) => !selected.has(cb)) || !btn || btn.disabled) {
         throw Error('倉庫勾選已變動或無法領取，已中止領倉');
       }
       setStatus(`📦 領取 ${selected.size} 項`);
-      btn.click();
+      clickRefineControl(session, btn);
       submitted = true;
-      await sleep(450);
+      await refineAwait(session, sleep(450));
       return [...selected.values()];
     } finally {
       try {
-        if (!submitted) for (const cb of selected.keys()) if (cb.isConnected && cb.checked) cb.click();
+        if (!submitted) for (const cb of selected.keys()) if (cb.isConnected && cb.checked) clickRefineControl(session, cb);
         if (switchedTab) {
-          switchedTab.click();
-          for (let i = 0; i < 25; i++) { await sleep(100); if (readBackpackContext(true)) break; }
+          clickRefineControl(session, switchedTab);
+          for (let i = 0; i < 25; i++) { await refineAwait(session, sleep(100)); if (readBackpackContext(true)) break; }
         }
       } finally { visitingWarehouse = false; }
     }
@@ -1840,14 +2106,27 @@
 
   async function runHybridRefine(modeType) {
     if (refBusy) return;
+    refStop = false;
     let b = readBackpackContext(true);
     if (!b) return;
     const setStatus = (msg) => { if (!refPanel?.isConnected && readBackpackContext(true)) refreshRefinePanel(); const el = refPanel?.querySelector('[data-ref-status]'); if (el) el.textContent = msg; };
+    const characterId = refineActor(b);
+    if (!characterId) return setStatus('⚠️ 無法確認目前角色 ID，已停止');
+    const session = {
+      characterId, epoch: refineIdentityEpoch, targetUid: null,
+      items: new Map(b.s.inventory.map((item) => [item.uid, refineItemSignature(item)]))
+    };
+    try { assertRefineSession(session); }
+    catch (error) { setStatus('⚠️ ' + error.message); return; }
 
     if (!refinePack) {
-      try { refinePack = await loadLootPack(); }
+      refBusy = true;
+      try { refinePack = await refineAwait(session, loadLootPack()); }
       catch (e) { setStatus('⚠️ 無法載入精煉資料：' + e.message); return; }
+      finally { refBusy = false; }
     }
+    b = readBackpackContext(true);
+    if (!b) return setStatus('⚠️ 背包已關閉');
 
     const skillOnly = modeType === 'skill_only';
     const limitPlus = modeType === 'safe_only' ? 10
@@ -1870,6 +2149,7 @@
 
     try {
       while (!refStop) {
+        assertRefineSession(session);
         b = readBackpackContext(true);
         if (!b || document.hidden) throw Error('已離開背包頁面');
 
@@ -1877,8 +2157,10 @@
         pool = pool.filter((r) => !skipped.has(r.uid) && (r.st.refine || 0) < limitPlus);
 
         if (!pool.length && refAutoWh) {
+          session.targetUid = null;
           const before = new Set(b.s.inventory.map((x) => x.uid));
-          const picked = await tryWithdrawFromWarehouse(trackedItemIds, limitPlus, setStatus, modeType === 'safe_only' ? safeLimits : null);
+          const picked = await tryWithdrawFromWarehouse(trackedItemIds, limitPlus, setStatus, modeType === 'safe_only' ? safeLimits : null, 15, session);
+          assertRefineSession(session);
           if (picked.length) {
             const expected = picked.map((x) => `${x.id}:${x.refine}`).sort().join(',');
             let received = false;
@@ -1887,12 +2169,13 @@
               const added = b?.s.inventory.filter((x) => !before.has(x.uid) && trackedItemIds.has(x.itemId)) || [];
               if (added.map((x) => `${x.itemId}:${x.refine || 0}`).sort().join(',') === expected) {
                 for (const x of added.filter((item) => canRefine(item) && (item.refine || 0) < limitPlus)) {
+                  session.items.set(x.uid, refineItemSignature(x));
                   runUids.add(x.uid); refSelected.add(x.uid);
                 }
                 received = true;
                 break;
               }
-              await sleep(100);
+              await refineAwait(session, sleep(100));
             }
             if (!received) throw Error('領取後背包新增的裝備與本批不符，請確認背包');
             if (!b.rows.some((r) => runUids.has(r.uid) && refSelected.has(r.uid) && isEligibleEquip(r) && (r.st.refine || 0) < limitPlus)) {
@@ -1907,7 +2190,8 @@
         else pool.sort((a, b) => (a.st.refine || 0) - (b.st.refine || 0));
 
         const target = pool[0], uid = target.uid, curPlus = target.st.refine || 0;
-        b = await selectBagItemRow(uid);
+        session.targetUid = uid;
+        b = await refineAwait(session, selectBagItemRow(uid, session));
         if (!b || refStop || document.hidden) throw Error('已離開背包或中止精煉');
 
         const safeBtn = !skillOnly && findNativeDetailBtn(b.table, uid, (t) => /^一鍵精煉到安全值\s*\+\d+/.test(t));
@@ -1927,14 +2211,15 @@
                 accepted = originalConfirm.call(page, message);
                 return accepted;
               };
-              safeBtn.click();
+              if ((assertRefineTarget(session, uid).s.inventory.find((item) => item.uid === uid).refine || 0) !== curPlus) throw Error('精煉值已變動');
+              clickRefineControl(session, safeBtn, uid);
             } finally {
               page.confirm = originalConfirm;
             }
             if (!accepted) throw Error('已取消原生安全精煉');
             let missingContext = 0;
             for (let i = 0; i < 60; i++) {
-              await sleep(100);
+              await refineAwait(session, sleep(100));
               if (refStop || document.hidden) throw Error('已中止精煉');
               b = readBackpackContext(true);
               if (!b) {
@@ -1947,7 +2232,7 @@
             }
             if (!confirmed) throw Error(`【${target.name}】安全精煉結果逾時，請確認裝備`);
             if (modeType === 'safe_only' || safeTarget === refTargetPlus) refSelected.delete(uid);
-            await sleep(250);
+            await refineAwait(session, sleep(250));
             continue;
           }
         }
@@ -1961,13 +2246,13 @@
         let npcBtn = skillOnly ? null : findNativeDetailBtn(b.table, uid, isNpcRefineButton);
 
         if (skillOnly && !skillBtn) {
-          b = await equipItemByUid(uid);
           changedEquip = true;
+          b = await refineAwait(session, equipItemByUid(uid, session));
           skillBtn = findNativeDetailBtn(b.table, uid, isWeaponRefineButton);
         }
         if (!skillOnly && !skillBtn && !npcBtn) {
-          b = await equipItemByUid(uid);
           changedEquip = true;
+          b = await refineAwait(session, equipItemByUid(uid, session));
           npcBtn = findNativeDetailBtn(b.table, uid, isNpcRefineButton);
         }
 
@@ -1978,9 +2263,10 @@
           const level = Math.min(4, Math.max(1, item.weaponLevel ?? 1));
           const steps = item.slots.includes('weapon') ? refinePack.refine.weapon[level] : refinePack.refine.armor;
           const material = steps?.[curPlus]?.material;
-          const pulledOres = material ? await tryWithdrawFromWarehouse(new Set([material]), limitPlus, setStatus, null, 1) : [];
+          const pulledOres = material ? await tryWithdrawFromWarehouse(new Set([material]), limitPlus, setStatus, null, 1, session) : [];
+          assertRefineSession(session);
           if (pulledOres.length) {
-            b = await selectBagItemRow(uid);
+            b = await refineAwait(session, selectBagItemRow(uid, session));
             if (!b || refStop || document.hidden) throw Error('已離開背包或中止精煉');
             skillBtn = findNativeDetailBtn(b.table, uid, isWeaponRefineButton);
             npcBtn = skillOnly ? null : findNativeDetailBtn(b.table, uid, isNpcRefineButton);
@@ -2003,7 +2289,8 @@
             userAccepted = origConfirm.call(page, msg);
             return userAccepted;
           };
-          activeBtn.click();
+          if ((assertRefineTarget(session, uid).s.inventory.find((item) => item.uid === uid).refine || 0) !== curPlus) throw Error('精煉值已變動');
+          clickRefineControl(session, activeBtn, uid);
         } finally {
           page.confirm = origConfirm;
         }
@@ -2011,7 +2298,7 @@
 
         let resolved = false, missingContext = 0;
         for (let i = 0; i < 80; i++) {
-          await sleep(100);
+          await refineAwait(session, sleep(100));
           b = readBackpackContext(true);
           if (refStop || document.hidden) throw Error('已中止精煉');
           if (!b) {
@@ -2027,7 +2314,7 @@
               refSelected.delete(uid);
               if (refAutoWh && nowSt.refine >= refTargetPlus && !refStop && !document.hidden) {
                 const stBtn = findNativeDetailBtn(b.table, uid, (t) => /^存入倉庫|^存倉$/.test(t));
-                if (stBtn && !stBtn.disabled) { stBtn.click(); await sleep(150); }
+                if (stBtn && !stBtn.disabled) { clickRefineControl(session, stBtn, uid); await refineAwait(session, sleep(150)); }
               }
             }
             break;
@@ -2038,7 +2325,7 @@
           }
         }
         if (!resolved) throw Error('等待伺服器精煉結果逾時');
-        await sleep(320);
+        await refineAwait(session, sleep(320));
       }
       if (refStop) throw Error('已中止精煉');
       setStatus(`🎉 精煉完成！累計成功升階 ${successCnt} 次，損壞 ${brokenCnt} 件，略過 ${skipped.size} 件。`);
@@ -2047,15 +2334,21 @@
       setStatus(`🛑 已停止：${e.message} (成功:${successCnt} 爆:${brokenCnt})`);
     } finally {
       if (changedEquip) {
+        session.targetUid = null;
+        session.restoring = true;
         const restoreOrder = [origEquip.weapon, ...Object.values(origEquip)];
         const failed = [];
         for (const uid of new Set(restoreOrder.filter(Boolean))) {
           try {
+            assertRefineSession(session, true);
             b = readBackpackContext(true);
             if (b?.s.inventory.some((x) => x.uid === uid) && !Object.values(b.s.equipment || {}).includes(uid)) {
-              await equipItemByUid(uid);
+              await refineAwait(session, equipItemByUid(uid, session));
             }
-          } catch { failed.push(uid); }
+          } catch {
+            failed.push(uid);
+            if (refineActor(readBackpackContext(true)) !== session.characterId || session.epoch !== refineIdentityEpoch) break;
+          }
         }
         if (failed.length) setStatus('⚠️ 有裝備未能穿回，請檢查人物裝備欄');
       }
@@ -2206,7 +2499,7 @@
 
   let mktView = false, mktAuto15s = false, mktAutoTimer = null;
   let mktListings = [], mktCrossMap = new Map(), mktPrevPrices = new Map(), mktKeyMap = new Map(), mktFilter = 'all', mktSub = 'all';
-  let mktFavs = new Set(GM_getValue('roi-favorites-v1', []).filter(Number.isSafeInteger));
+  let mktFavs = new Set(readValidatedSetting('roi-favorites-v1', validateFavorites, []));
   const mktPanel = document.createElement('fieldset');
   mktPanel.className = 'xp-group'; mktPanel.dataset.roiMarketBrowser = ''; mktPanel.style.cssText = 'grid-column:1/-1;min-width:0;'; mktPanel.hidden = true;
 
@@ -3020,7 +3313,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.4.4</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.4.4.2 測試版</span>
           <span data-roi-mvp-entry style="display:inline-flex;align-items:center;margin-left:auto;"></span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
@@ -3191,7 +3484,7 @@
     document.getElementById('b-exp-json').onclick = () => {
       const payload = {
         format: 'ro-idle-lean-backup', version: 1,
-        prefs: GM_getValue('ro_lean_prefs_v091', {}),
+        prefs: readValidatedSetting('ro_lean_prefs_v091', validatePrefs, {}),
         words: state.customProtectWords,
         wh: { marks: state.whMarks, autoLocks: state.whAutoLocks },
         priceOptions,
@@ -3208,17 +3501,12 @@
     fileInp.onchange = async () => {
       try {
         const f = fileInp.files[0]; if (!f) return;
-        const d = JSON.parse(await f.text());
-        if (d.format !== 'ro-idle-lean-backup' && d.format !== 'ro-idle-helper-backup') throw Error('備份格式不符');
-        const importedWh = d.settings?.['warehouse-helper-v1'] ?? d.wh;
-        if (importedWh !== undefined && !validWarehouseData(importedWh)) throw Error('倉庫鎖定資料格式不符');
-        const options = d.priceOptions ?? d.settings?.[priceOptionKey];
-        if (options && validThreshold(options.threshold) && typeof options.enabled === 'boolean') GM_setValue(priceOptionKey, options);
-        if (d.words) GM_setValue('ro_custom_protect_words_v091', d.words);
-        if (importedWh !== undefined) GM_setValue('warehouse-helper-v1', JSON.stringify(importedWh));
-        if (d.favs) GM_setValue('roi-favorites-v1', d.favs);
-        if (d.prefs) GM_setValue('ro_lean_prefs_v091', d.prefs);
-        if (d.settings?.['roi-favorites-v1']) GM_setValue('roi-favorites-v1', d.settings['roi-favorites-v1']);
+        if (!Number.isSafeInteger(f.size) || f.size < 1 || f.size > MAX_BACKUP_BYTES) throw Error('備份大小上限為 2 MB');
+        const text = await f.text();
+        if (fileInp.files[0] !== f) return;
+        if (new TextEncoder().encode(text).length > MAX_BACKUP_BYTES) throw Error('備份大小上限為 2 MB');
+        const writes = prepareBackupWrites(JSON.parse(text));
+        commitBackupWrites(writes);
         alert('✅ 備份匯入成功，即將重新載入頁面！');
         location.reload();
       } catch (e) { alert('⚠️ 匯入失敗：' + e.message); }
