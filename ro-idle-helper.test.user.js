@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.4.5.3
+// @version      3.4.5.4
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -618,6 +618,13 @@
     } catch {}
   }
 
+  function setWarehouseSaleReview(enabled) {
+    state.whSaleReview = enabled;
+    savePrefs();
+    for (const input of document.querySelectorAll('[data-roi-wh-sale-review]')) input.checked = enabled;
+    syncHudSettings();
+  }
+
   function findTownSearchUI() {
     for (const f of document.querySelectorAll('fieldset')) {
       const leg = [...f.children].find((c) => c.tagName === 'LEGEND');
@@ -1060,6 +1067,13 @@
         };
         const stSpan = document.createElement('span');
         stSpan.dataset.roWhStatus = ''; stSpan.style.color = '#fde047';
+        const review = document.createElement('input');
+        review.type = 'checkbox';
+        review.dataset.roiWhSaleReview = '';
+        review.checked = state.whSaleReview;
+        review.onchange = () => setWarehouseSaleReview(review.checked);
+        const reviewLabel = document.createElement('label');
+        reviewLabel.append(review, ' 出售前清單核對');
         bar.append(
           mkBtn('💰 勾選本頁未鎖定項目 (上限100)', async () => {
             const lis = [...f.querySelectorAll('li')].filter(visible);
@@ -1075,6 +1089,7 @@
           }, 'linear-gradient(135deg,#d97706,#b45309)'),
           mkBtn('🔒 本頁全鎖', () => bulkWhLock(f, true)),
           mkBtn('🔓 本頁全解', () => bulkWhLock(f, false)),
+          reviewLabel,
           stSpan
         );
         f.insertBefore(bar, [...f.children].find((c) => c.tagName === 'UL') || null);
@@ -2457,7 +2472,51 @@
     }
   }
 
+  function syncRefineSettings(container) {
+    if (!container) return;
+    const confirm = container.querySelector('[data-roi-ref-confirm]');
+    const warehouse = container.querySelector('[data-roi-ref-warehouse]');
+    const batch = container.querySelector('[data-roi-ref-batch]');
+    confirm.checked = refSkipConfirm;
+    warehouse.checked = refAutoWh;
+    if (batch !== document.activeElement) batch.value = refMaterialBatch;
+    for (const control of [confirm, warehouse, batch]) control.disabled = refBusy;
+  }
+
+  function bindRefineSettings(container, status) {
+    const confirm = container.querySelector('[data-roi-ref-confirm]');
+    const warehouse = container.querySelector('[data-roi-ref-warehouse]');
+    const batch = container.querySelector('[data-roi-ref-batch]');
+    confirm.onchange = () => {
+      if (!refBusy) refSkipConfirm = confirm.checked;
+      syncRefineSettings(refPanel);
+      syncRefineSettings(document.getElementById('pane-cfg'));
+    };
+    warehouse.onchange = () => {
+      if (!refBusy) refAutoWh = warehouse.checked;
+      syncRefineSettings(refPanel);
+      syncRefineSettings(document.getElementById('pane-cfg'));
+    };
+    batch.onchange = () => {
+      status.textContent = '';
+      try {
+        if (!refBusy) {
+          const value = validateMaterialBatch(Number(batch.value));
+          GM_setValue('roi-refine-material-batch-v1', value);
+          refMaterialBatch = value;
+        }
+      } catch (error) {
+        status.textContent = error.message;
+      } finally {
+        batch.value = refMaterialBatch;
+        syncRefineSettings(refPanel);
+        syncRefineSettings(document.getElementById('pane-cfg'));
+      }
+    };
+  }
+
   function refreshRefinePanel() {
+    syncRefineSettings(document.getElementById('pane-cfg'));
     const b = readBackpackContext();
     if (!b) {
       if (refBusy && !visitingWarehouse) refStop = true;
@@ -2483,11 +2542,18 @@
           <button type="button" class="xp-btn small" id="ref-run-skill" hidden>神工匠武器精練</button>
           <button type="button" class="xp-btn small" id="ref-stop" style="background:#dc2626;color:#fff;display:none;border:none;">⏹ 停止</button>
         </div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <label><input type="checkbox" data-roi-ref-confirm> 精煉時略過確認窗</label>
+          <label><input type="checkbox" data-roi-ref-warehouse> 自動領料及存倉</label>
+          <label>每次領料 <input type="number" data-roi-ref-batch class="xp-input" min="1" max="1000" step="1" style="width:64px;"> 個</label>
+        </div>
+        <span data-roi-ref-settings-status role="status" style="color:#fde047;"></span>
         <div data-ref-categories role="group" aria-label="精煉裝備分類" style="display:none;gap:6px;flex-wrap:wrap;"></div>
         <div data-ref-list style="display:none;max-height:210px;overflow:auto;gap:4px;padding:6px;background:#090d16;border-radius:6px;border:1px solid #1e293b;"></div>
         <div data-ref-status style="font-size:11.5px;color:#4ade80;">💡 支援 Ctrl / ⌘ 點擊勾選全部同名裝備；安全值後神工匠用技能，一般職業自動穿戴找忽克連並在結束後穿回原裝。</div>
       `;
       b.host.insertBefore(refPanel, b.table.closest('.xp-sunken') || b.table);
+      bindRefineSettings(refPanel, refPanel.querySelector('[data-roi-ref-settings-status]'));
 
       const loadRefineData = async () => {
         if (refinePack) return;
@@ -2542,6 +2608,7 @@
     refPanel.querySelector('#ref-toggle').textContent =
       `${refOpen ? '🔼 收合精煉清單' : '🔨 展開精煉清單'} (共選 ${refSelected.size} 件)`;
     for (const el of refPanel.querySelectorAll('#ref-mode,#ref-target')) el.disabled = refBusy;
+    syncRefineSettings(refPanel);
     const skillButton = refPanel.querySelector('#ref-run-skill');
     const skillLevel = weaponRefineLevel(b.s);
     skillButton.hidden = skillLevel <= 0;
@@ -3377,9 +3444,7 @@
     auto.checked = mktAuto15s;
     auto.disabled = !mktAuto15s && (!mktPanel.isConnected || mktPanel.hidden);
     pane.querySelector('#c-market-min').checked = mktPanel.querySelector('#roi-mkt-min').checked;
-    pane.querySelector('#ref-skip-cfm').checked = refSkipConfirm;
-    pane.querySelector('#ref-auto-wh').checked = refAutoWh;
-    for (const input of pane.querySelectorAll('#ref-skip-cfm,#ref-auto-wh,#ref-material-batch')) input.disabled = refBusy;
+    syncRefineSettings(pane);
   }
 
   function ensureHUD() {
@@ -3440,13 +3505,12 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.4.5.3 測試版</span>
-          <span data-roi-mvp-entry style="display:inline-flex;align-items:center;margin-left:auto;"></span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.4.5.4 測試版</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
           <div class="ro-tab active" data-t="tel">📊 效率</div>
-          <div class="ro-tab" data-t="mvp" data-roi-mvp-tab>🧭 MVP</div>
+          <span data-roi-mvp-slot></span>
           <div class="ro-tab" data-t="chr">👥 分身</div>
           <div class="ro-tab" data-t="lot">🎒 掉寶</div>
           <div class="ro-tab" data-t="cfg">⚙️ 設定</div>
@@ -3482,6 +3546,7 @@
           <div id="u-llist" style="background:#090d16;padding:7px;border-radius:6px;border:1px solid #1e293b;max-height:190px;overflow:auto;font-size:11px;">尚無撿取紀錄...</div>
         </div>
         <div class="ro-pane" id="pane-cfg">
+          <div data-roi-browser-menu hidden style="margin-bottom:8px;"></div>
           <fieldset class="ro-box"><legend>顯示與通知</legend>
             <label><input type="checkbox" data-ro-pref="itemHover"> 背包與倉庫物品懸浮提示</label>
             <label><input type="checkbox" data-ro-pref="marketHover"> 攤位商品懸浮提示</label>
@@ -3496,9 +3561,9 @@
             <label>保護門檻 <input type="number" id="c-price-threshold" min="1" max="1000000000000" step="1" value="${priceOptions.threshold}"> Zeny</label>
           </fieldset>
           <fieldset class="ro-box"><legend>精煉</legend>
-            <label><input type="checkbox" id="ref-skip-cfm"> 精煉時略過確認窗</label>
-            <label><input type="checkbox" id="ref-auto-wh"> 自動領料及存倉</label>
-            <label>每次領料 <input type="number" id="ref-material-batch" min="1" max="1000" step="1" value="${refMaterialBatch}"> 個</label>
+            <label><input type="checkbox" id="ref-skip-cfm" data-roi-ref-confirm> 精煉時略過確認窗</label>
+            <label><input type="checkbox" id="ref-auto-wh" data-roi-ref-warehouse> 自動領料及存倉</label>
+            <label>每次領料 <input type="number" id="ref-material-batch" data-roi-ref-batch min="1" max="1000" step="1"> 個</label>
           </fieldset>
           <fieldset class="ro-box"><legend>攤位</legend>
             <label><input type="checkbox" data-ro-pref="mktUpperFold"> 收折手推車、開攤及紀錄</label>
@@ -3519,35 +3584,30 @@
             <input type="file" id="i-imp-file" accept=".json" style="display:none;">
           </div>
         </div>
-        <div class="ro-pane" id="pane-mvp">
-          <div class="ro-box" style="display:flex;flex-direction:column;gap:8px;align-items:flex-start;">
-            <div style="font-weight:bold;color:#fbbf24;">🧭 個人 MVP 雷達</div>
-            <div style="font-size:11.5px;color:#cbd5e1;line-height:1.5;">高頻查閱重生時段、搜尋地圖與一鍵帶入掛機設定；開啟雷達視窗後，點選視窗外畫面即可自動收合。</div>
-            <button type="button" id="b-open-mvp-from-tab" style="background:linear-gradient(135deg,#d97706,#b45309);color:#fff;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-weight:bold;">開啟 MVP 雷達視窗</button>
-          </div>
-        </div>
       </div>
     `;
     hud.querySelector('#i-words').value = state.customProtectWords.join(', ');
     state.renderedLootRev = -1;
     document.body.appendChild(hud);
-    if (mvpEntry) hud.querySelector('[data-roi-mvp-entry]').append(mvpEntry);
+    const mvpSlot = hud.querySelector('[data-roi-mvp-slot]');
+    if (mvpEntry) mvpSlot.replaceWith(mvpEntry);
+    else mvpSlot.remove();
 
     function attachBrowserMenu() {
       const menu = document.getElementById('mgm-userscript-menu');
-      const header = hud.querySelector('#ro-drag');
-      if (!menu || !header || menu.parentElement === header) return;
-      menu.style.cssText = 'position:relative;top:auto;right:auto;z-index:2;font:12px system-ui;color:#eee;margin-right:4px;';
-      header.insertBefore(menu, header.querySelector('[data-roi-mvp-entry]'));
+      const slot = hud.querySelector('[data-roi-browser-menu]');
+      if (!menu || menu.parentElement === slot) return Boolean(menu);
+      menu.style.cssText = 'position:relative;top:auto;right:auto;z-index:2;font:12px system-ui;color:#eee;';
+      slot.append(menu);
+      slot.hidden = false;
+      return true;
     }
-    attachBrowserMenu();
-    const browserMenuObserver = new MutationObserver(() => {
-      if (document.getElementById('mgm-userscript-menu')) {
-        attachBrowserMenu();
-        browserMenuObserver.disconnect();
-      }
-    });
-    browserMenuObserver.observe(document.body, { childList: true });
+    if (!attachBrowserMenu()) {
+      const browserMenuObserver = new MutationObserver(() => {
+        if (attachBrowserMenu()) browserMenuObserver.disconnect();
+      });
+      browserMenuObserver.observe(document.body, { childList: true });
+    }
 
     function placeHud(left, top) {
       const { width, height } = hud.getBoundingClientRect();
@@ -3609,19 +3669,21 @@
     bindDrag(document.getElementById('ro-fab'), () => setMin(false));
     document.getElementById('ro-min-btn').onclick = () => setMin(true);
 
-    hud.querySelectorAll('.ro-tab').forEach((t) => t.onclick = () => {
+    hud.querySelectorAll('.ro-tab[data-t]').forEach((t) => t.onclick = () => {
       hud.querySelectorAll('.ro-tab,.ro-pane').forEach((x) => x.classList.remove('active'));
       t.classList.add('active'); document.getElementById('pane-' + t.dataset.t).classList.add('active');
-      if (t.dataset.t === 'mvp') mvpEntry?.click();
       if (t.dataset.t === 'cfg') syncHudSettings();
     });
-    document.getElementById('b-open-mvp-from-tab').onclick = () => mvpEntry?.click();
 
     const settings = hud.querySelector('#pane-cfg');
     const settingsStatus = settings.querySelector('#c-settings-status');
     for (const input of settings.querySelectorAll('[data-ro-pref]')) {
       input.onchange = () => {
         const key = input.dataset.roPref;
+        if (key === 'whSaleReview') {
+          setWarehouseSaleReview(input.checked);
+          return;
+        }
         state[key] = input.checked;
         savePrefs();
         if (key === 'itemHover' || key === 'marketHover') hideTooltip();
@@ -3664,16 +3726,7 @@
       if (mktAuto15s && !input.checked) stopMktAuto('已手動停止 15s 自動整理');
       else if (!mktAuto15s && input.checked && mktPanel.isConnected && !mktPanel.hidden) startMktAuto();
     });
-    bindSetting('ref-skip-cfm', (input) => { if (!refBusy) refSkipConfirm = input.checked; });
-    bindSetting('ref-auto-wh', (input) => { if (!refBusy) refAutoWh = input.checked; });
-    bindSetting('ref-material-batch', (input) => {
-      try {
-        if (refBusy) return;
-        const value = validateMaterialBatch(Number(input.value));
-        GM_setValue('roi-refine-material-batch-v1', value);
-        refMaterialBatch = value;
-      } finally { input.value = refMaterialBatch; }
-    });
+    bindRefineSettings(settings, settingsStatus);
 
     document.getElementById('b-save-words').onclick = () => {
       state.customProtectWords = document.getElementById('i-words').value.split(/[,，、\n]/).map((s) => s.trim()).filter(Boolean);
@@ -3926,25 +3979,17 @@
       #roi-helper-mvp-open {
         display: inline-flex;
         align-items: center;
-        gap: 5px;
-        padding: 3px 8px;
-        border: 1px solid rgba(251, 191, 36, 0.55);
-        border-radius: 6px;
-        background: linear-gradient(135deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.95));
-        color: #fde68a;
-        font: 700 11px/1.2 system-ui, -apple-system, "Microsoft JhengHei", sans-serif;
-        cursor: pointer;
-        transition: transform .15s ease, border-color .15s ease, background .15s ease;
+        justify-content: center;
+        gap: 4px;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        background: transparent;
       }
-      #roi-helper-mvp-open:hover {
-        border-color: #fbbf24;
-        background: linear-gradient(135deg, #2b3f57, #1e293b);
-        color: #fff;
-      }
-      #roi-helper-mvp-open[data-active="true"] {
-        border-color: #38bdf8;
-        background: linear-gradient(135deg, #1d4ed8, #1e3a8a);
-        color: #fff;
+      #roi-helper-mvp-open:hover,
+      #roi-helper-mvp-open[aria-expanded="true"] {
+        border-bottom-color: #fbbf24;
+        color: #fbbf24;
+        background: rgba(30, 41, 59, 0.9);
       }
       #roi-helper-mvp-open .badge {
         display: inline-flex;
@@ -4435,8 +4480,11 @@
     const open = document.createElement('button');
     open.id = 'roi-helper-mvp-open';
     open.type = 'button';
+    open.className = 'ro-tab';
+    open.setAttribute('aria-expanded', 'false');
+    open.setAttribute('aria-controls', 'roi-helper-mvp-panel');
     open.title = '開啟／收合 MVP 雷達（開啟時點視窗外畫面可自動關閉）';
-    const openLabel = node('span', '🧭 雷達');
+    const openLabel = node('span', '🧭 MVP');
     const openBadge = node('span', '', 'badge');
     openBadge.title = '目前處於預估重生時段的 MVP 數量';
     open.append(openLabel, openBadge);
@@ -4468,7 +4516,7 @@
       if (!isRadarOpen()) return;
       panel.removeAttribute('open');
       panel.hidden = true;
-      open.dataset.active = 'false';
+      open.setAttribute('aria-expanded', 'false');
       clearInterval(refreshTimer);
       portraits.disconnect();
     }
@@ -4677,6 +4725,12 @@
     function prefixFor(profile) {
       return cacheRoot + encodeURIComponent(profile) + '/';
     }
+
+    function mvpBossName(name) {
+      const trimmed = name.trim();
+      return /^詛咒蠅王?(?:\s*[/／]\s*詛咒蠅王?)?$/.test(trimmed) ? '詛咒蠅王' : trimmed;
+    }
+
     function remember(profile, name, at) {
       const key = prefixFor(profile) + name;
       const previous = memory.get(key) || 0;
@@ -4694,7 +4748,7 @@
       const kills = new Map();
       function merge(key, at) {
         if (!key?.startsWith(prefix) || !at) return;
-        const name = key.slice(prefix.length);
+        const name = mvpBossName(key.slice(prefix.length));
         kills.set(name, Math.max(kills.get(name) || 0, at));
       }
       for (const [key, at] of memory) merge(key, at);
@@ -4719,8 +4773,10 @@
       const live = new Map();
       function record(name, at) {
         if (typeof name !== 'string' || !name || !at) return;
-        live.set(name, Math.max(live.get(name) || 0, at));
-        if (profile) remember(profile, name, at);
+        const boss = mvpBossName(name);
+        if (!boss) return;
+        live.set(boss, Math.max(live.get(boss) || 0, at));
+        if (profile) remember(profile, boss, at);
       }
       const list = [...document.querySelectorAll('ul[aria-label="MVP 最後一次擊殺"]')].find(visible);
       if (list) {
@@ -4847,7 +4903,7 @@
         if (activeFilter === 'upcoming' && item.state !== 'upcoming') return false;
         if (activeFilter === 'recorded' && !Number.isFinite(item.at)) return false;
         if (searchQuery) {
-          const hitName = item.name.toLowerCase().includes(searchQuery);
+          const hitName = item.name.toLowerCase().includes(mvpBossName(searchQuery));
           const hitMap = item.maps.some(([m, id]) => m.toLowerCase().includes(searchQuery) || id.toLowerCase().includes(searchQuery));
           if (!hitName && !hitMap) return false;
         }
@@ -5039,7 +5095,7 @@
       if (isRadarOpen()) return;
       panel.hidden = false;
       panel.setAttribute('open', '');
-      open.dataset.active = 'true';
+      open.setAttribute('aria-expanded', 'true');
       render();
       positionPanel();
       clearInterval(refreshTimer);
@@ -5062,7 +5118,7 @@
       if (!isRadarOpen()) return;
       const target = e.target;
       if (!(target instanceof Element)) return;
-      if (panel.contains(target) || open.contains(target) || target.closest('[data-roi-mvp-tab], #b-open-mvp-from-tab')) return;
+      if (panel.contains(target) || open.contains(target)) return;
       closeRadar();
     }, true);
 
