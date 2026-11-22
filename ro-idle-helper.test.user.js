@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.4.6.3
+// @version      3.4.7.1
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
 // @grant        unsafeWindow
 // @grant        GM_getValue
+// @grant        GM_addValueChangeListener
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
 // @grant        GM_notification
@@ -38,7 +39,7 @@
   function validatePrefs(value) {
     if (!isPlainRecord(value)) throw Error('偏好設定格式不符');
     const result = {};
-    for (const key of ['sound', 'notify', 'moneyColor', 'itemHover', 'marketHover', 'whProtect', 'whSaleReview', 'whAutoEquipCard', 'hudMin', 'mktUpperFold']) {
+    for (const key of ['sound', 'notify', 'moneyColor', 'itemHover', 'marketHover', 'whProtectPins', 'mvpMergeRoster', 'whProtect', 'whSaleReview', 'whAutoEquipCard', 'hudMin', 'mktUpperFold']) {
       if (!Object.hasOwn(value, key)) continue;
       if (typeof value[key] !== 'boolean') throw Error('偏好設定的 ' + key + ' 必須是開關');
       result[key] = value[key];
@@ -578,7 +579,9 @@
     }
     const stack = [{ f: root, found: null, route: [] }];
     let guard = 0;
+    const deadline = performance.now() + 8;
     while (stack.length && ++guard < 80000) {
+      if (performance.now() >= deadline) return null;
       const { f: node, found, route } = stack.pop();
       const p = node.memoizedProps;
       const next = p && matcher(p) ? p : found;
@@ -604,7 +607,7 @@
     rares: [], rareRev: 0,
     missed: 0,
     sound: false, notify: false, moneyColor: true, itemHover: true, marketHover: true,
-    whProtect: true, whSaleReview: true, whAutoEquipCard: true,
+    whProtectPins: true, mvpMergeRoster: false, charAlerts: {}, whProtect: true, whSaleReview: true, whAutoEquipCard: true,
     whMarks: {}, whAutoLocks: {}, customProtectWords: [],
     hudMin: false, hudPos: null, mktUpperFold: false,
     processedLines: new WeakMap(), lastNotifyAt: 0
@@ -617,12 +620,46 @@
   state.whPins = loadedWh.pins ?? {};
   state.customProtectWords = readValidatedSetting('ro_custom_protect_words_v091', validateWords, []);
 
+  let applyingRemote = false;
+  function listenSharedSettings() {
+    if (typeof GM_addValueChangeListener !== 'function') return;
+    function listen(key, apply) {
+      GM_addValueChangeListener(key, (_key, _old, value, remote) => {
+        if (remote !== true) return;
+        applyingRemote = true;
+        try { apply(value); } catch (error) { console.warn('便利助手設定同步', key, error.message); }
+        finally { applyingRemote = false; }
+      });
+    }
+    listen('warehouse-helper-v1', value => {
+      const data = validateWarehouse(typeof value === 'string' ? JSON.parse(value) : value);
+      applyWarehouseData(mergeWarehouseChanges(data));
+      refreshWarehouse();
+    });
+    listen('ro_custom_protect_words_v091', value => {
+      state.customProtectWords = validateWords(value);
+      const input = document.querySelector('#i-words');
+      if (input && document.activeElement !== input) input.value = state.customProtectWords.join(', ');
+      refreshWarehouse(true);
+    });
+    listen('ro_lean_prefs_v091', value => {
+      const { hudMin, hudPos, ...prefs } = validatePrefs(value);
+      Object.assign(state, prefs);
+      document.documentElement.toggleAttribute('data-roi-money-off', !state.moneyColor);
+      hideTooltip();
+      refreshWarehouse();
+      syncMktMount();
+      mvpRadar?.refreshPreferences();
+      syncHudSettings();
+    });
+  }
+
   function savePrefs() {
     try {
       GM_setValue('ro_lean_prefs_v091', {
         sound: state.sound, notify: state.notify,
         moneyColor: state.moneyColor, itemHover: state.itemHover, marketHover: state.marketHover,
-        whProtect: state.whProtect, whSaleReview: state.whSaleReview, whAutoEquipCard: state.whAutoEquipCard,
+        whProtectPins: state.whProtectPins, mvpMergeRoster: state.mvpMergeRoster, whProtect: state.whProtect, whSaleReview: state.whSaleReview, whAutoEquipCard: state.whAutoEquipCard,
         hudMin: state.hudMin, hudPos: state.hudPos, mktUpperFold: state.mktUpperFold
       });
     } catch {}
@@ -635,14 +672,14 @@
     syncHudSettings();
   }
 
-  function findTownSearchUI() {
+  function findTownSearchUI(visibleOnly = false) {
     for (const f of document.querySelectorAll('fieldset')) {
       const leg = [...f.children].find((c) => c.tagName === 'LEGEND');
       if (!leg || clean(roiPriceText(leg)) !== '搜尋所有城鎮的攤位') continue;
       for (const form of f.querySelectorAll('form')) {
         const inp = form.querySelector('input[type="text"],input[type="search"],input:not([type])');
         const btn = [...form.querySelectorAll('button')].find((b) => clean(b.textContent) === '搜尋');
-        if (inp && btn) return { form, input: inp, button: btn };
+        if (inp && btn && (!visibleOnly || visible(inp))) return { form, input: inp, button: btn };
       }
     }
     return null;
@@ -702,12 +739,12 @@
     }
   }, true);
 
-  async function triggerNativeTownSearch(rawName) {
+  async function triggerNativeTownSearch(rawName, visibleOnly = false) {
     const baseName = clean(rawName).replace(/（.*?）|\(.*?\)/g, '').replace(/^\+\s*\d+\s*/, '').replace(/\s*\[\d+\]\s*$/, '').trim();
     if (!baseName) return;
     if (mktView) { mktView = false; syncMktMount(); await sleep(50); }
 
-    const target = findTownSearchUI();
+    const target = findTownSearchUI(visibleOnly);
     if (target && !target.input.disabled) {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
       setter?.call(target.input, baseName);
@@ -854,12 +891,14 @@
         const prevRun = new Set(state.chars.filter((c) => c.running).map((c) => c.id));
         if (state.chars.length > 0) {
           const stopped = d.characters.filter((c) => !c.running && prevRun.has(c.id));
+          for (const c of stopped) recordCharAlert(c.id, '已停止掛機');
           if (stopped.length) alertUser('🚨 分身停機警告', `${stopped.map((c) => c.name).join('、')} 已停止掛機`, true);
         }
         state.chars = d.characters;
         state.myCharIds = new Set(d.characters.map((c) => Number(c.id)));
         state.charRosterLoaded = true;
-        for (const cache of [state.charZenyMap, state.initZenyMap]) {
+        for (const c of d.characters) if (c.running && !prevRun.has(c.id)) delete state.charAlerts[c.id];
+        for (const cache of [state.charZenyMap, state.initZenyMap, state.charAlerts]) {
           for (const id of Object.keys(cache)) {
             if (!state.myCharIds.has(Number(id))) delete cache[id];
           }
@@ -871,6 +910,7 @@
         const ch = d.snapshot.character;
         if (foreground) {
           if (state.activeCharId !== cid) {
+            if (state.activeCharId != null) clearQueuedCharacterLogs();
             refineIdentityEpoch++;
             refSelected.clear();
           }
@@ -907,12 +947,21 @@
     }
   } catch {}
 
+  let polledRoster = false;
   async function pollChars() {
     if (document.hidden) return;
     try {
+      if (polledRoster && !document.hasFocus()) {
+        let elapsed = Infinity;
+        try { elapsed = Date.now() - Number(localStorage.getItem('roi-last-chars-poll-at')); } catch {}
+        if (elapsed >= 0 && elapsed < 12000) return;
+      }
       const r = await pollFetch('/api/characters');
+      if (!r.ok) return;
       const d = await r.json();
       if (Array.isArray(d.characters)) {
+        polledRoster = true;
+        try { localStorage.setItem('roi-last-chars-poll-at', String(Date.now())); } catch {}
         onApiData('/api/characters', JSON.stringify(d));
         for (const c of d.characters) {
           if (state.charZenyMap[c.id] === undefined) {
@@ -930,9 +979,7 @@
   const rxDmgLog = /造成\s*([\d,]+)\s*點傷害/;
   const rxExpLog = /獲得\s*Base EXP\s*([\d,]+)(?:\s*\(\s*\d+(?:\.\d+)?\s*%\s*\))?\s*\/\s*Job EXP\s*([\d,]+)/;
   const rxLootLog = /撿取物品\s*[:：]\s*(.+?)\s*[×xX*]\s*(\d+)/;
-  function parseLog(el) {
-    if (!el) return;
-    const t = clean(el.textContent);
+  function parseLog(el, t) {
     if (!t || state.processedLines.get(el) === t) return;
     state.processedLines.set(el, t);
     if (rxRareDrop.test(t)) {
@@ -941,7 +988,11 @@
       state.rareRev++;
       alertUser('✨ 稀有掉落', t, false);
     }
-    if (rxDangerLog.test(t)) alertUser('⚠️ 掛機異常', t, true);
+    if (rxDangerLog.test(t)) {
+      recordCharAlert(state.activeCharId, t.includes('負重') ? '負重停止' : '戰鬥不能');
+      renderChars();
+      alertUser('⚠️ 掛機異常', t, true);
+    }
     if (state.paused) return;
     const dm = t.match(rxDmgLog);
     if (dm) { const v = parseInt(dm[1].replace(/,/g, ''), 10); if (v) { state.dmgSum += v; state.hits++; if (v > state.maxDmg) state.maxDmg = v; } }
@@ -1029,6 +1080,7 @@
   function getLockReason(id, name, text) {
     if (state.whMarks[id] === 'lock') return '手動上鎖';
     if (state.whMarks[id] === 'neutral') return '';
+    if (state.whProtectPins && Object.hasOwn(state.whPins, id)) return '自選保護（★）';
     if (state.whAutoLocks[id] && !instanceLockReasons.has(state.whAutoLocks[id])) return state.whAutoLocks[id];
     if (state.whAutoEquipCard) {
       if (/卡片$/.test(name)) return '自動保護：卡片';
@@ -1046,12 +1098,57 @@
   }
 
   let whSaveTimer = null;
+  const warehouseFields = { marks: 'whMarks', autoLocks: 'whAutoLocks', pins: 'whPins' };
+  const pendingWhChanges = Object.fromEntries(Object.keys(warehouseFields).map(key => [key, new Map()]));
+
+  function setWarehouseEntry(field, id, value) {
+    const entries = state[warehouseFields[field]];
+    if (value === null ? !Object.hasOwn(entries, id) : entries[id] === value) return;
+    if (value === null) delete entries[id];
+    else entries[id] = value;
+    if (!applyingRemote) {
+      pendingWhChanges[field].set(id, value);
+      saveWarehouseSoon();
+    }
+  }
+
+  function mergeWarehouseChanges(data) {
+    for (const [field, changes] of Object.entries(pendingWhChanges)) {
+      const entries = data[field] ??= {};
+      for (const [id, value] of changes) {
+        if (value === null) delete entries[id];
+        else entries[id] = value;
+      }
+    }
+    return data;
+  }
+
+  function applyWarehouseData(data) {
+    for (const [field, key] of Object.entries(warehouseFields)) state[key] = data[field] || {};
+  }
+
   function flushWarehouseSave() {
     if (whSaveTimer) { clearTimeout(whSaveTimer); whSaveTimer = null; }
-    try { GM_setValue('warehouse-helper-v1', JSON.stringify({ marks: state.whMarks, autoLocks: state.whAutoLocks, pins: state.whPins })); } catch {}
+    function persist() {
+      if (!Object.values(pendingWhChanges).some(changes => changes.size)) return;
+      const raw = GM_getValue('warehouse-helper-v1', { marks: {}, autoLocks: {} });
+      const latest = validateWarehouse(typeof raw === 'string' ? JSON.parse(raw) : raw);
+      const merged = validateWarehouse(mergeWarehouseChanges(latest));
+      GM_setValue('warehouse-helper-v1', JSON.stringify(merged));
+      for (const changes of Object.values(pendingWhChanges)) changes.clear();
+      applyWarehouseData(merged);
+    }
+    try {
+      if (typeof navigator.locks?.request === 'function') {
+        return navigator.locks.request('roi-wh-save-lock', persist).catch(error => console.warn('倉庫寫入鎖失敗', error));
+      }
+      persist();
+    } catch (error) {
+      console.warn('便利助手倉庫設定儲存失敗', error);
+    }
   }
   function saveWarehouseSoon() {
-    if (!whSaveTimer) whSaveTimer = setTimeout(flushWarehouseSave, 400);
+    if (!applyingRemote && !whSaveTimer) whSaveTimer = setTimeout(flushWarehouseSave, 400);
   }
   window.addEventListener('pagehide', () => { if (whSaveTimer) flushWarehouseSave(); });
   document.addEventListener('visibilitychange', () => { if (document.hidden && whSaveTimer) flushWarehouseSave(); });
@@ -1182,6 +1279,7 @@
     dlg.showModal();
   }
 
+  let whSearchBusy = false;
   function refreshWarehouse(rescanCustom = false) {
     if (!state.whProtect) return;
     const fields = [...document.querySelectorAll('fieldset')].filter((f) => {
@@ -1210,6 +1308,17 @@
         review.onchange = () => setWarehouseSaleReview(review.checked);
         const reviewLabel = document.createElement('label');
         reviewLabel.append(review, ' 出售前清單核對');
+        const pinsLabel = document.createElement('label');
+        const pinsSwitch = document.createElement('input');
+        pinsSwitch.type = 'checkbox';
+        pinsSwitch.dataset.roiProtectPins = '';
+        pinsSwitch.onchange = () => {
+          state.whProtectPins = pinsSwitch.checked;
+          savePrefs();
+          refreshWarehouse();
+          syncHudSettings();
+        };
+        pinsLabel.append(pinsSwitch, ' 清倉排除自選（★）');
         bar.append(
           mkBtn('💰 勾選本頁未鎖定項目 (上限100)', async () => {
             const lis = [...f.querySelectorAll('li')].filter(visible);
@@ -1225,13 +1334,14 @@
           }, 'linear-gradient(135deg,#d97706,#b45309)'),
           mkBtn('🔒 本頁全鎖', () => bulkWhLock(f, true)),
           mkBtn('🔓 本頁全解', () => bulkWhLock(f, false)),
-          reviewLabel,
+          pinsLabel, reviewLabel,
           stSpan
         );
         f.insertBefore(bar, [...f.children].find((c) => c.tagName === 'UL') || null);
       }
 
-      let dirty = false;
+      bar.querySelector('[data-roi-protect-pins]').checked = state.whProtectPins;
+      bar.querySelector('[data-roi-wh-sale-review]').checked = state.whSaleReview;
       const list = f.querySelector(':scope > ul');
       if (!list) continue;
       for (const li of list.children) {
@@ -1253,17 +1363,43 @@
             event.stopPropagation();
             const itemId = warehouseItemId(li);
             if (!itemId) return;
-            if (Object.hasOwn(state.whPins, itemId)) delete state.whPins[itemId];
+            if (Object.hasOwn(state.whPins, itemId)) setWarehouseEntry('pins', itemId, null);
             else if (Object.keys(state.whPins).length < 5000) {
               const label = clean(li.querySelector('button[aria-label$="的物品資訊"]')?.textContent)
                 .replace(/^\+\s*\d+\s*/, '').replace(/\s*\[\d+\].*$/, '').trim();
               if (!label || label.length > 160) return;
-              state.whPins[itemId] = label;
+              setWarehouseEntry('pins', itemId, label);
             }
-            saveWarehouseSoon();
             refreshWarehouse();
           };
           li.insertBefore(pin, cb.nextSibling);
+        }
+        if (!li.querySelector('.roi-warehouse-pin-search')) {
+          const search = document.createElement('button');
+          search.type = 'button';
+          search.textContent = '🔍';
+          search.title = '跨城查價';
+          search.className = 'roi-warehouse-pin-search';
+          search.onclick = async event => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (whSearchBusy) return;
+            whSearchBusy = true;
+            try {
+              const baseName = clean(li.querySelector('button[aria-label$="的物品資訊"]')?.textContent);
+              if (!findTownSearchUI(true)) {
+                const tab = [...document.querySelectorAll('nav[aria-label="主選單"] button')].find(b => clean(b.textContent) === '攤位');
+                if (!tab) return;
+                tab.click();
+                for (let i = 0; i < 30 && !findTownSearchUI(true); i++) await sleep(50);
+              }
+              if (findTownSearchUI(true)) {
+                syncMktMount();
+                await triggerNativeTownSearch(baseName, true);
+              }
+            } finally { whSearchBusy = false; }
+          };
+          pin.after(search);
         }
         const icon = pinned ? '★' : '☆';
         if (pin.textContent !== icon) pin.textContent = icon;
@@ -1271,10 +1407,10 @@
         pin.setAttribute('aria-label', pin.title + '：' + name);
         pin.setAttribute('aria-pressed', String(pinned));
         ITEM_NAME_CACHE.set(Number(id), name.replace(/^\+\d+\s*/, ''));
-        if (rescanCustom && !String(state.whAutoLocks[id] || '').startsWith('已載入攤位普通同規格掛牌') && state.whMarks[id] !== 'lock') delete state.whAutoLocks[id];
-        if (instanceLockReasons.has(state.whAutoLocks[id])) { delete state.whAutoLocks[id]; dirty = true; }
+        if (rescanCustom && !String(state.whAutoLocks[id] || '').startsWith('已載入攤位普通同規格掛牌') && state.whMarks[id] !== 'lock') setWarehouseEntry('autoLocks', id, null);
+        if (instanceLockReasons.has(state.whAutoLocks[id])) { setWarehouseEntry('autoLocks', id, null); }
         const reason = getLockReason(id, name, txt);
-        if (reason && !instanceLockReasons.has(reason) && !state.whMarks[id] && !state.whAutoLocks[id]) { state.whAutoLocks[id] = reason; dirty = true; }
+        if (reason && reason !== '自選保護（★）' && !instanceLockReasons.has(reason) && !state.whMarks[id] && !state.whAutoLocks[id]) { setWarehouseEntry('autoLocks', id, reason); }
         const locked = Boolean(reason);
         if (locked && clean(cb.getAttribute('aria-label')).startsWith('賣掉 ') && cb.checked) cb.click();
         li.classList.toggle('ro-wh-locked', locked);
@@ -1288,9 +1424,8 @@
             const id = warehouseItemId(li);
             if (!id) return;
             const nowLocked = Boolean(getLockReason(id, clean(li.querySelector('button[aria-label$="的物品資訊"]')?.textContent), clean(li.textContent)));
-            state.whMarks[id] = nowLocked ? 'neutral' : 'lock';
-            if (nowLocked) delete state.whAutoLocks[id];
-            saveWarehouseSoon();
+            setWarehouseEntry('marks', id, nowLocked ? 'neutral' : 'lock');
+            if (nowLocked) setWarehouseEntry('autoLocks', id, null);
             refreshWarehouse();
           };
           li.insertBefore(lBtn, cb.nextSibling);
@@ -1302,15 +1437,13 @@
         lBtn.title = locked ? `${name} (#${id})｜${reason}\n點擊解鎖` : `點擊鎖定 ${name}`;
       }
       syncWarehouseCustomView(f, list);
-      if (dirty) saveWarehouseSoon();
     }
   }
 
   function bulkWhLock(f, lock) {
     const ids = [...new Set([...f.querySelectorAll('li')].filter(visible).map((li) => warehouseItemId(li)).filter(Boolean))];
     if (!ids.length || !confirm(`確定將目前可見的 ${ids.length} 種物品全部${lock ? '上鎖' : '解鎖'}？`)) return;
-    ids.forEach((id) => { state.whMarks[id] = lock ? 'lock' : 'neutral'; if (!lock) delete state.whAutoLocks[id]; });
-    saveWarehouseSoon();
+    ids.forEach((id) => { setWarehouseEntry('marks', id, lock ? 'lock' : 'neutral'); if (!lock) setWarehouseEntry('autoLocks', id, null); });
     refreshWarehouse();
   }
 
@@ -2010,7 +2143,9 @@
       bagFastMiss.add(table);
       const stack = [tree];
       let guard = 0;
+      const deadline = performance.now() + 8;
       while (stack.length && ++guard < 80000) {
+        if (performance.now() >= deadline) return null;
         const f = stack.pop(); if (!f) continue;
         if (rowNodes.has(f.stateNode) && /^\d+$/.test(f.key || '')) rows.push({ uid: Number(f.key), row: f.stateNode });
         const p = f.memoizedProps;
@@ -2136,7 +2271,9 @@
     if (!tree) return null;
     const search = (root, limit) => {
       const stack = [{ fiber: root, matching: false }];
+      const deadline = performance.now() + 8;
       while (stack.length && limit-- > 0) {
+        if (performance.now() >= deadline) return null;
         const { fiber, matching } = stack.pop();
         const props = fiber.memoizedProps;
         const inDetail = matching || (props?.uid === uid &&
@@ -2451,7 +2588,7 @@
 
     const origEquip = { ...(b.s.equipment || {}) };
     const safeLimits = new Map(), skipped = new Set();
-    let changedEquip = false, successCnt = 0, brokenCnt = 0;
+    let changedEquip = false, successCnt = 0, brokenCnt = 0, failedCnt = 0;
     refBusy = true; refStop = false; refreshRefinePanel();
 
     try {
@@ -2564,12 +2701,12 @@
         }
 
         let activeBtn = skillBtn && !skillBtn.disabled ? skillBtn : npcBtn;
+        const recipeItem = refinePack?.items?.get(target.st.itemId);
+        const weaponLevel = Math.min(4, Math.max(1, recipeItem?.weaponLevel ?? 1));
+        const steps = recipeItem?.slots?.includes('weapon') ? refinePack?.refine?.weapon?.[weaponLevel] : refinePack?.refine?.armor;
+        const material = steps?.[curPlus]?.material;
         if ((!activeBtn || activeBtn.disabled) && refAutoWh && (!skillOnly || (skillBtn && b.s.character.sp >= 5))) {
-          const item = refinePack?.items?.get(target.st.itemId);
-          if (!item) throw Error(`【${target.name}】找不到精煉材料資料`);
-          const level = Math.min(4, Math.max(1, item.weaponLevel ?? 1));
-          const steps = item.slots.includes('weapon') ? refinePack.refine.weapon[level] : refinePack.refine.armor;
-          const material = steps?.[curPlus]?.material;
+          if (!material) throw Error(`【${target.name}】找不到精煉材料資料`);
           const beforeOreQty = materialCount(b.s.inventory, material);
           session.targetUid = null;
           const pulledOres = material ? await tryWithdrawFromWarehouse(new Set([material]), limitPlus, setStatus, null, 1, session, refMaterialBatch) : [];
@@ -2590,6 +2727,7 @@
           : `【${target.name}】精煉按鈕不可用（礦石已用盡、Zeny/SP不足或不在主城）`);
 
         if (refStop || document.hidden) throw Error('已中止精煉');
+        const beforeMatQty = material ? materialCount(b.s.inventory, material) : 0;
         const beforeZeny = b.s.character.zeny, beforeSp = b.s.character.sp;
         setStatus(`🔨 衝裝中：【${target.name}】+${curPlus} ➔ +${curPlus + 1} (成功:${successCnt} 爆:${brokenCnt})`);
 
@@ -2608,18 +2746,21 @@
         }
         if (!userAccepted) throw Error('玩家手動取消精煉');
 
-        let resolved = false, missingContext = 0;
+        let resolved = false, missingContext = 0, confirmedNoUpgrade = false;
         for (let i = 0; i < 80; i++) {
           await refineAwait(session, sleep(100));
           b = readBackpackContext(true);
           if (refStop || document.hidden) throw Error('已中止精煉');
           if (!b) {
+            confirmedNoUpgrade = false;
             if (++missingContext >= 5) throw Error('背包介面持續無法讀取，請確認精煉結果');
             continue;
           }
           missingContext = 0;
           const nowSt = b.s.inventory.find((x) => x.uid === uid);
           const paid = activeBtn === skillBtn ? (b.s.character.sp <= beforeSp - 5) : (b.s.character.zeny < beforeZeny);
+          confirmedNoUpgrade = Boolean(nowSt && paid && (nowSt.refine || 0) <= curPlus &&
+            (!material || materialCount(b.s.inventory, material) < beforeMatQty));
           if (nowSt && (nowSt.refine || 0) === curPlus + 1) {
             successCnt++; resolved = true;
             if (nowSt.refine >= limitPlus) {
@@ -2636,12 +2777,20 @@
             break;
           }
         }
-        if (!resolved) throw Error('等待伺服器精煉結果逾時');
+        if (!resolved && confirmedNoUpgrade) {
+          // Wait through the result window before treating an unchanged upgrade as a failed attempt.
+          failedCnt++;
+          skipped.add(uid);
+          refSelected.delete(uid);
+          setStatus(`⚠️ 【${target.name}】已確認消耗，精煉未升階，繼續下一件`);
+          resolved = true;
+        }
+        if (!resolved) throw Error('精煉結果不明，請核對裝備與消耗');
         await refineAwait(session, sleep(320));
       }
       if (refStop) throw Error('已中止精煉');
-      setStatus(`🎉 精煉完成！累計成功升階 ${successCnt} 次，損壞 ${brokenCnt} 件，略過 ${skipped.size} 件。`);
-      alertUser('🎉 背包精煉完成', `成功 ${successCnt} 次 / 損壞 ${brokenCnt} 件`, false);
+      setStatus(`🎉 精煉完成！累計成功升階 ${successCnt} 次，損壞 ${brokenCnt} 件，未升階 ${failedCnt} 件，略過 ${skipped.size - failedCnt} 件。`);
+      alertUser('🎉 背包精煉完成', `成功 ${successCnt} 次 / 損壞 ${brokenCnt} 件 / 未升階 ${failedCnt} 件`, false);
     } catch (e) {
       setStatus(`🛑 已停止：${e.message} (成功:${successCnt} 爆:${brokenCnt})`);
     } finally {
@@ -3586,6 +3735,23 @@
     });
   }
 
+  function syncMarketBalance(snapshot, actorId) {
+    const character = snapshot?.character;
+    const id = snapshotCharacterId(snapshot) ?? positiveId(actorId);
+    const ownerMatches = id ? id === state.activeCharId :
+      Boolean(character?.name && character.name === state.activeCharName &&
+        state.chars.filter(c => c.name === character.name).length === 1 &&
+        state.chars.some(c => Number(c.id) === state.activeCharId && c.name === character.name));
+    const balance = character?.zeny;
+    if (!state.activeCharId || !ownerMatches || !Number.isSafeInteger(balance) || balance < 0) return;
+    if (state.curZeny === balance && state.charZenyMap[state.activeCharId] === balance) return;
+    state.initZenyMap[state.activeCharId] ??= balance;
+    state.curZeny = balance;
+    state.charZenyMap[state.activeCharId] = balance;
+    updateHUD();
+    renderChars();
+  }
+
   function syncMktMount() {
     ensurePackItemsLoaded();
     refreshTownSearchResults(findTownSearchUI());
@@ -3620,6 +3786,7 @@
     const leg = mktView ? mktPanel.querySelector('#roi-mkt-leg') : [...cf.children].find((e) => e.tagName === 'LEGEND');
     if (leg && mktSwitch.parentElement !== leg) leg.appendChild(mktSwitch);
     const p = getCommittedProps(cf, (x) => Array.isArray(x.shops) && x.snap?.mapId);
+    syncMarketBalance(p?.snap, p?.characterId);
     if ((updateLocalListings(p) || opening) && mktView) renderMkt();
   }
 
@@ -3660,7 +3827,10 @@
       [data-roi-wh-custom-tabs] > input { display:none !important; }
       [data-roi-wh-custom-tabs] > button:not([data-roi-wh-custom-tab])[aria-selected="true"] { background:var(--face-2) !important; font-weight:normal !important; }
       [data-roi-wh-custom-tab][aria-selected="true"] { background:var(--tab-on,#d4d0c8); font-weight:bold; }
-      .roi-warehouse-pin { flex:none; inline-size:16px; padding:0; border:0; background:transparent; color:inherit; line-height:1; cursor:pointer; }
+      @keyframes roi-stop-pulse { to { outline-offset:4px; outline-color:transparent; } }
+      #ro-fab.roi-stop-alert { outline:3px solid #ef4444; animation:roi-stop-pulse 1.2s ease-out infinite; }
+      @media (prefers-reduced-motion:reduce) { #ro-fab.roi-stop-alert { animation:none; } }
+      .roi-warehouse-pin, .roi-warehouse-pin-search { flex:none; inline-size:16px; padding:0; border:0; background:transparent; color:inherit; line-height:1; cursor:pointer; }
       .roi-warehouse-pin[aria-pressed="true"] { color:#b45309; }
       html.night [data-roi-wh-pin][aria-pressed="true"] { color:#fbbf24; }
       html:not([data-roi-money-off]) .roi-mc-text { color: var(--roi-mc) !important; font-weight: bold !important; font-variant-numeric: tabular-nums; }
@@ -3716,7 +3886,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.4.6.3 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.4.7.1 測試版</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -3766,6 +3936,7 @@
             <label><input type="checkbox" data-ro-pref="notify"> 桌面通知</label>
           </fieldset>
           <fieldset class="ro-box"><legend>倉庫</legend>
+            <label><input type="checkbox" data-ro-pref="whProtectPins"> 清倉排除自選（★）</label>
             <label><input type="checkbox" data-ro-pref="whSaleReview"> 出售前清單核對</label>
             <label><input type="checkbox" data-ro-pref="whAutoEquipCard"> 自動保護卡片、精煉或有洞裝備</label>
             <label><input type="checkbox" id="c-price-lock"> 掛牌價自動保護</label>
@@ -3871,6 +4042,7 @@
     };
 
     const setMin = (m) => {
+      if (!m) document.getElementById('ro-fab').classList.remove('roi-stop-alert');
       state.hudMin = m; savePrefs();
       document.getElementById('ro-hud-card').style.display = m ? 'none' : 'block';
       document.getElementById('ro-fab').style.display = m ? 'flex' : 'none';
@@ -3902,6 +4074,7 @@
           document.documentElement.toggleAttribute('data-roi-money-off', !state.moneyColor);
           if (state.moneyColor) alignAndColorizeNativeMarkets();
         }
+        if (key === 'whProtectPins') refreshWarehouse();
         if (key === 'whAutoEquipCard') refreshWarehouse(true);
         if (key === 'mktUpperFold') syncMktMount();
       };
@@ -4050,6 +4223,11 @@
     }
   }
 
+  function recordCharAlert(id, reason) {
+    if (!id) return;
+    if (reason !== '已停止掛機' || !state.charAlerts[id]) state.charAlerts[id] = reason;
+    if (state.hudMin) document.getElementById('ro-fab')?.classList.add('roi-stop-alert');
+  }
   function renderChars() {
     const box = document.getElementById('u-clist'); if (!box) return;
     const sum = [...state.myCharIds].reduce((total, id) => total + (state.charZenyMap[id] || 0), 0);
@@ -4059,16 +4237,53 @@
       const detail = element('div');
       detail.append(element('b', c.name), element('small', ` (Lv.${c.baseLv}/${c.jobLv})`, 'color:#94a3b8'),
         element('div', `📍 ${c.mapId} ｜ 💰 ${(state.charZenyMap[c.id] || 0).toLocaleString()} Z`, 'font-size:11px;color:#93c5fd;margin-top:2px'));
+      if (state.charAlerts[c.id]) detail.append(element('small', '⚠ ' + state.charAlerts[c.id], 'color:#f87171'));
       row.append(detail, element('b', c.running ? '🟢掛機' : '🔴停止', `color:${c.running ? '#4ade80' : '#f87171'}`));
       return row;
     }));
+  }
+
+  const isActiveWindow = () => document.hasFocus() || refBusy || cartShortcutBusy || visitingWarehouse;
+  const pendingLogLines = new Map();
+  const logSnapshots = [];
+  let logTimer = null;
+  function scheduleLogBatch() {
+    if (logTimer !== null || !logSnapshots.length) return;
+    logTimer = setTimeout(() => {
+      logTimer = null;
+      for (const [line, text] of logSnapshots.splice(0, 200)) {
+        const texts = pendingLogLines.get(line);
+        texts.shift();
+        if (!texts.length) pendingLogLines.delete(line);
+        parseLog(line, text);
+      }
+      scheduleLogBatch();
+    }, isActiveWindow() ? 120 : 250);
+  }
+  function queueLogLine(line) {
+    if (!line) return;
+    const text = clean(line.textContent);
+    const texts = pendingLogLines.get(line) || [];
+    if (!text || text === (texts.at(-1) ?? state.processedLines.get(line))) return;
+    texts.push(text);
+    pendingLogLines.set(line, texts);
+    logSnapshots.push([line, text]);
+    scheduleLogBatch();
+  }
+  function clearQueuedCharacterLogs() {
+    for (const [, text] of logSnapshots) {
+      if (rxRareDrop.test(text)) alertUser('✨ 稀有掉落', text, false);
+      if (rxDangerLog.test(text)) alertUser('⚠️ 掛機異常', text, true);
+    }
+    logSnapshots.length = 0;
+    pendingLogLines.clear();
   }
 
   let lastRouterAt = 0;
   function runPageRouter() {
     lastRouterAt = Date.now();
     refreshRareHelper();
-    if (document.querySelector('table.xp-table')) alignAndColorizeNativeMarkets();
+    if (isActiveWindow() && document.querySelector('table.xp-table')) alignAndColorizeNativeMarkets();
     if (document.querySelector('input[aria-label="搜尋物品"]') || refPanel) refreshRefinePanel();
     const legends = [...document.querySelectorAll('fieldset > legend')].map((l) => clean(l.textContent));
     if (
@@ -4078,7 +4293,7 @@
     ) mountSettingsTools();
     if (legends.some((t) => /^倉庫/.test(t))) refreshWarehouse();
     if (legends.some((t) => /的攤位/.test(t)) || mktPanel.isConnected || townResultsTable) syncMktMount();
-    annotateAllRefinedEquipment();
+    if (isActiveWindow()) annotateAllRefinedEquipment();
     syncHudSettings();
     mvpRadar?.syncFromStats();
   }
@@ -4091,22 +4306,22 @@
       if (!el || !el.isConnected || el.closest('#ro-helper-hud,#roi-helper-mvp-panel,#roi-item-hover-tooltip,[data-roi-market-browser],[data-ro-wh-bar],[data-ro-rare-helper],[data-roi-settings-tools],[data-roi-refine-helper],[data-roi-price-search],[data-roi-upper-fold]')) continue;
       if (r.type === 'attributes' && !el.matches('fieldset') && !el.querySelector('fieldset')) continue;
       if (el.closest('.log-window')) {
-        if (r.type === 'characterData' || r.type === 'childList') parseLog(el.closest('.log-line'));
+        if (r.type === 'characterData' || r.type === 'childList') queueLogLine(el.closest('.log-line'));
         r.addedNodes.forEach((n) => {
           if (n.nodeType !== 1) return;
-          if (n.matches?.('.log-line')) parseLog(n);
-          n.querySelectorAll?.('.log-line').forEach(parseLog);
+          if (n.matches?.('.log-line')) queueLogLine(n);
+          n.querySelectorAll?.('.log-line').forEach(queueLogLine);
         });
         continue;
       }
       if (r.type === 'childList') r.addedNodes.forEach((n) => {
         if (n.nodeType !== 1) return;
-        n.querySelectorAll?.('.log-window .log-line').forEach(parseLog);
+        n.querySelectorAll?.('.log-window .log-line').forEach(queueLogLine);
       });
       domChanged = true;
     }
     if (domChanged && !uiTimer) {
-      uiTimer = setTimeout(() => { uiTimer = null; runPageRouter(); }, 160);
+      uiTimer = setTimeout(() => { uiTimer = null; runPageRouter(); }, isActiveWindow() ? 160 : 700);
     }
   }).observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes:true, attributeFilter:['hidden','aria-hidden','inert','class','style'] });
 
@@ -4795,7 +5010,17 @@
     searchWrap.append(searchInput, searchClear);
 
     const toolbar = node('div', null, 'toolbar');
-    toolbar.append(filterBar, searchWrap);
+    const mergeLabel = document.createElement('label');
+    const mergeSwitch = document.createElement('input');
+    mergeSwitch.type = 'checkbox';
+    mergeSwitch.checked = state.mvpMergeRoster;
+    mergeSwitch.onchange = () => {
+      state.mvpMergeRoster = mergeSwitch.checked;
+      savePrefs();
+      refreshPreferences();
+    };
+    mergeLabel.append(mergeSwitch, ' 合併同帳號分身紀錄');
+    toolbar.append(filterBar, mergeLabel, searchWrap);
 
     const results = document.createElement('main');
     const footer = document.createElement('footer');
@@ -5055,14 +5280,34 @@
       return { state: 'unknown', sortTime: Infinity, badgeText: '時間未知' };
     }
 
+    function displayKills(owner, live) {
+      const kills = owner ? savedKills(owner) : new Map();
+      for (const [name, at] of live) kills.set(name, Math.max(kills.get(name) || 0, at));
+      const sources = new Map();
+      if (state.mvpMergeRoster && owner && state.chars.some(c => c.name === owner)) {
+        for (const c of state.chars) {
+          if (!c.name || c.name === owner) continue;
+          for (const [name, at] of savedKills(c.name)) {
+            if (at <= (kills.get(name) || 0)) continue;
+            kills.set(name, at);
+            sources.set(name, c.name);
+          }
+        }
+      }
+      return { kills, sources };
+    }
+    function refreshPreferences() {
+      mergeSwitch.checked = state.mvpMergeRoster;
+      if (isRadarOpen()) render();
+      else if (latestData) updateFloatingBadge(latestData);
+    }
     function updateFloatingBadge(data) {
       if (!data) return;
       const now = Date.now();
       const { profile, live, hasList } = data;
       const historical = !profile && !hasList && lastProfile;
       const owner = profile || historical;
-      const kills = owner ? savedKills(owner) : new Map();
-      for (const [name, at] of live) kills.set(name, Math.max(kills.get(name) || 0, at));
+      const { kills } = displayKills(owner, live);
       let windowCount = 0;
       for (const [name, maps] of Object.entries(schedules)) {
         const info = evaluateBoss(name, kills.get(name), maps, now);
@@ -5105,8 +5350,7 @@
       const { profile, live, hasList } = data;
       const historical = !profile && !hasList && lastProfile;
       const owner = profile || historical;
-      const kills = owner ? savedKills(owner) : new Map();
-      for (const [name, at] of live) kills.set(name, Math.max(kills.get(name) || 0, at));
+      const { kills, sources } = displayKills(owner, live);
 
       meta.textContent = historical
         ? `角色：${owner}（本機離線紀錄）`
@@ -5214,7 +5458,7 @@
             const isLive = live.get(name) === at;
             killMeta.append(
               node('span', (isLive ? '最後擊殺 ' : '上次紀錄 ') + format.format(at)),
-              node('span', isLive ? '即時' : '快取', 'source-tag')
+              node('span', sources.has(name) ? '快取 · ' + sources.get(name) : isLive ? '即時' : '快取', 'source-tag')
             );
           } else {
             killMeta.append(node('span', missing ? '目前清單無擊殺紀錄' : '尚未讀取到擊殺時間'));
@@ -5377,7 +5621,7 @@
       const control = event.target.closest?.('button, [role="tab"], a');
       if (control && !control.closest('#ro-helper-hud') && !panel.contains(control) && /掛機設定|尋找怪物|切換角色|回城|地圖/.test(control.textContent)) captureBackground();
     }, true);
-    return { button: open, syncFromStats };
+    return { button: open, syncFromStats, refreshPreferences };
   }
 
   let mvpRadar;
@@ -5389,7 +5633,9 @@
     }
   }
 
-  document.querySelectorAll('.log-window .log-line').forEach(parseLog);
+  document.querySelectorAll('.log-window .log-line').forEach(queueLogLine);
+  listenSharedSettings();
+  window.addEventListener('focus', runPageRouter);
   ensureHUD(); pollChars(); runPageRouter();
   setInterval(() => {
     if (document.hidden) return;
