@@ -397,7 +397,7 @@
       if (refBtn) {
         refBtn.click();
         if (st) st.textContent = `🟢 [${new Date().toLocaleTimeString()}] 已觸發 15 秒原生重新整理...`;
-        await sleep(800);
+        await sleep(TIMING.marketSnapshotWait);
         if (!isCurrent() || findCityVendingFieldset() !== cf) return;
         const p = readFiberForUi(() => getCommittedProps(cf, (x) => Array.isArray(x.shops) && x.snap?.mapId));
         if (p === undefined) return;
@@ -405,7 +405,7 @@
       }
       const kw = mktPanel.querySelector('#roi-mkt-q').value.trim() || (mktFilter === 'card' ? '卡片' : mktSub !== 'all' ? SUB_LABELS[mktSub] : '');
       if (kw && mktAuto15s && Date.now() >= crossCooldownUntil) {
-        await sleep(2200);
+        await sleep(TIMING.marketCrossSearchGap);
         if (isCurrent() && findCityVendingFieldset() === cf && Date.now() >= crossCooldownUntil) {
           await doCrossSearch(kw, true);
         }
@@ -439,7 +439,7 @@
     mktAutoBtn.style.background = '#dc2626';
     clearInterval(mktAutoTimer);
     void mktAutoTick();
-    mktAutoTimer = setInterval(() => { void mktAutoTick(); }, 15000);
+    mktAutoTimer = setInterval(() => { void mktAutoTick(); }, TIMING.marketRefresh);
   }
 
   function stopMktAuto(reason = '') {
@@ -448,7 +448,7 @@
     clearInterval(mktAutoTimer);
     mktAutoTimer = null;
     if (crossAbortCtrl) {
-      try { crossAbortCtrl.abort(); } catch {}
+      try { crossAbortCtrl.abort(); } catch { log("market", "無法取消補查"); }
       crossAbortCtrl = null;
     }
     crossBusy = false;
@@ -718,7 +718,7 @@
           if (adding) next.add(r.id); else next.delete(r.id);
           return [...next];
         }));
-      } catch (error) { console.warn('便利助手收藏儲存失敗', error); }
+      } catch (error) { log('market', '收藏儲存失敗', error.name); }
       renderMkt();
     } else if (btn.dataset.act === 'find') {
       triggerNativeTownSearch(r.base);

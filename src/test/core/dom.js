@@ -1,6 +1,29 @@
   const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   if (page.top !== page.self) return;
 
+  const TIMING = Object.freeze({
+    // Network reuse, expiry and notification cadence in milliseconds.
+    charPollInterval: 45000, charPollReuseMargin: 5000,
+    notifyCooldown: 5000, notifyDuration: 5000,
+    // Background UI, battle log and temporary character alerts.
+    hudRefresh: 1500, charAlertExpiry: 600000, recentInteraction: 5000, pointerSample: 100,
+    activeRouter: 160, visibleRouter: 300, hiddenRouter: 700, textRouter: 1500,
+    activeLogFlush: 120, idleLogFlush: 250, alertRenderGap: 250,
+    // MVP background and render cadence.
+    mvpCaptureGap: 1000, mvpBackground: 15000, mvpRender: 30000,
+    // Market refresh and query spacing.
+    marketRefresh: 15000, marketSnapshotWait: 800, marketCrossSearchGap: 2200
+  });
+
+  function debugEnabled() {
+    try { return localStorage.getItem('roi-debug') === '1'; }
+    catch { return false; }
+  }
+
+  function log(scope, ...details) {
+    if (debugEnabled()) console.debug('[ROI ' + scope + ']', ...details);
+  }
+
   function element(tag, content, style) {
     const node = document.createElement(tag);
     if (content != null) node.textContent = content;

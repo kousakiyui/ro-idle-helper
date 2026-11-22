@@ -1,12 +1,12 @@
 
   const hasActiveOperation = () => refBusy || cartShortcutBusy || visitingWarehouse || partyMoveActive !== null;
   const isActiveWindow = () => hasActiveOperation() ||
-    (!document.hidden && (document.hasFocus() || performance.now() - lastInteractionAt <= 5000));
+    (!document.hidden && (document.hasFocus() || performance.now() - lastInteractionAt <= TIMING.recentInteraction));
 
   function trackRouterInteraction() {
     if (document.hidden) return;
     const now = performance.now();
-    if (now - lastInteractionAt >= 100) lastInteractionAt = now;
+    if (now - lastInteractionAt >= TIMING.pointerSample) lastInteractionAt = now;
   }
 
   for (const event of ['pointermove', 'keydown', 'pointerdown']) {
@@ -14,8 +14,8 @@
   }
 
   function routerDelay() {
-    if (isActiveWindow()) return 160;
-    return document.hidden ? 700 : 300;
+    if (isActiveWindow()) return TIMING.activeRouter;
+    return document.hidden ? TIMING.hiddenRouter : TIMING.visibleRouter;
   }
   const logSnapshots = [];
   let logTimer = null;
@@ -23,7 +23,7 @@
   let alertRenderTimer = null;
   function renderLogAlertChars() {
     if (alertRenderTimer !== null) return;
-    const remaining = 250 - (performance.now() - lastAlertRender);
+    const remaining = TIMING.alertRenderGap - (performance.now() - lastAlertRender);
     if (remaining > 0) {
       alertRenderTimer = setTimeout(() => {
         alertRenderTimer = null;
@@ -44,7 +44,7 @@
       logTimer = null;
       flushLogBatch(document.hidden ? 800 : 200);
       scheduleLogBatch();
-    }, isActiveWindow() ? 120 : 250);
+    }, isActiveWindow() ? TIMING.activeLogFlush : TIMING.idleLogFlush);
   }
   function queueLogLine(line) {
     if (!line) return;
@@ -105,7 +105,7 @@
     if (canShareCharPoll()) void pollChars();
   });
   const ROUTER_TEXT_SCOPE = 'fieldset,table,legend,.xp-sunken,[role="dialog"],select,label';
-  const ROUTER_SLOW_DELAY = 1500;
+  const ROUTER_SLOW_DELAY = TIMING.textRouter;
   let slowTimer = null;
   new MutationObserver((records) => {
     let domChanged = false, slowChanged = false, sawLog = false;

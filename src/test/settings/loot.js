@@ -33,7 +33,7 @@
   let PACK_ITEMS_MAP = null;
   function ensurePackItemsLoaded() {
     if (PACK_ITEMS_MAP) return;
-    try { void loadLootPack().catch(() => {}); } catch {}
+    try { void loadLootPack().catch(() => log("loot", "無法預載掉落資料")); } catch { log("loot", "無法開始預載掉落資料"); }
   }
   function loadLootPack() {
     const link = document.querySelector('link[rel="modulepreload"][href^="/assets/pack-"]');

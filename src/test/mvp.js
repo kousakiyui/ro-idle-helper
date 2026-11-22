@@ -747,10 +747,10 @@
       return Number.isFinite(at) && at > 0 && Number.isFinite(new Date(at).getTime()) ? at : null;
     }
 
-    const visible = el => el && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
+    const visibleIgnoringAria = el => el && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
     function namedButton(label) {
       return [...document.querySelectorAll('button,[role="tab"]')].find(el =>
-        visible(el) && !el.disabled && [el.textContent.trim(),el.getAttribute('aria-label'),el.title].includes(label));
+        visibleIgnoringAria(el) && !el.disabled && [el.textContent.trim(),el.getAttribute('aria-label'),el.title].includes(label));
     }
     function setSearch(input, value) {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);
@@ -760,7 +760,7 @@
     function until(read, shouldAbort, root) {
       return waitForUi(read, { root, timeout: 8000, shouldAbort });
     }
-    const mapGroup = () => [...document.querySelectorAll('[role="group"][aria-label="掛機地圖"]')].find(visible);
+    const mapGroup = () => [...document.querySelectorAll('[role="group"][aria-label="掛機地圖"]')].find(visibleIgnoringAria);
     function reactFiber(el) {
       const key = Object.keys(el).find(name => name.startsWith('__reactFiber$'));
       return key && el[key];
@@ -790,7 +790,7 @@
           tab?.click();
         }
         const findFilter = () => [...document.querySelectorAll('input[type="search"]')].find(el =>
-          visible(el) && el.closest('label')?.textContent.includes('搜尋設定'));
+          visibleIgnoringAria(el) && el.closest('label')?.textContent.includes('搜尋設定'));
         await until(() => mapGroup() || findFilter(), shouldAbort);
         if (!mapGroup() && findFilter()) setSearch(findFilter(),'掛機地圖');
         const field = await until(() => mapGroup()?.querySelector('input[aria-label="掛機地圖：搜尋"]'), shouldAbort);
@@ -803,7 +803,7 @@
         const choice = () => {
           const group = mapGroup();
           if (group?.querySelector('input[aria-label="掛機地圖：搜尋"]')?.value !== query) return null;
-          const buttons = [...group.querySelectorAll('button[aria-pressed]')].filter(visible);
+          const buttons = [...group.querySelectorAll('button[aria-pressed]')].filter(visibleIgnoringAria);
           const exact = buttons.filter(button => reactFiber(button)?.key === id);
           if (exact.length > 1) return null;
           let button = exact[0];
@@ -839,7 +839,7 @@
     const mvpChangeKey = 'roi-mvp-record-change-v1';
     let lastProfile = '';
     let storageFailed = false;
-    try { lastProfile = sessionStorage.getItem(profileKey) || ''; } catch {}
+    try { lastProfile = sessionStorage.getItem(profileKey) || ''; } catch { log("mvp", "無法取得或同步本機 MVP 設定"); }
 
     function prefixFor(profile) {
       return cacheRoot + encodeURIComponent(profile) + '/';
@@ -861,7 +861,7 @@
         if (at > stored) {
           localStorage.setItem(key, String(at));
           if (typeof GM_addValueChangeListener === 'function') {
-            try { GM_setValue(mvpChangeKey, validateMvpChange({ key, at })); } catch {}
+            try { GM_setValue(mvpChangeKey, validateMvpChange({ key, at })); } catch { log("mvp", "無法取得或同步本機 MVP 設定"); }
           }
         }
       } catch { storageFailed = true; }
@@ -911,7 +911,7 @@
     let lastBackgroundAt = -Infinity;
     let latestData;
     const findStatsList = () => [...document.querySelectorAll('ul[aria-label="MVP 最後一次擊殺"]')]
-      .find((list) => visible(list) && !list.closest('[hidden],[inert],[aria-hidden="true"]'));
+      .find((list) => visibleIgnoringAria(list) && !list.closest('[hidden],[inert],[aria-hidden="true"]'));
     function capture(list = findStatsList()) {
       const nativeName = nativeProfileName();
       const snap = currentSnapshot(nativeName);
@@ -919,7 +919,7 @@
       const api = profile && foregroundMvpSnapshot?.character.name?.trim() === profile ? foregroundMvpSnapshot : null;
       if (profile && profile !== lastProfile) {
         lastProfile = profile;
-        try { sessionStorage.setItem(profileKey, profile); } catch {}
+        try { sessionStorage.setItem(profileKey, profile); } catch { log("mvp", "無法取得或同步本機 MVP 設定"); }
       }
       const live = new Map();
       function record(name, at) {
@@ -1020,7 +1020,7 @@
 
     function captureBackground() {
       const now = performance.now();
-      if (now - lastBackgroundAt >= 1000) {
+      if (now - lastBackgroundAt >= TIMING.mvpCaptureGap) {
         capture();
         lastBackgroundAt = now;
       }
@@ -1238,7 +1238,7 @@
     function draggable(el, handle) {
       const key = el.id + '-position-v1';
       let saved, drag, suppress = false;
-      try { saved = JSON.parse(localStorage.getItem(key)); } catch {}
+      try { saved = JSON.parse(localStorage.getItem(key)); } catch { log("mvp", "無法取得或同步本機 MVP 設定"); }
       function place(x,y) {
         const rect = el.getBoundingClientRect();
         Object.assign(el.style, {margin:'0',right:'auto',bottom:'auto',
@@ -1267,7 +1267,7 @@
       handle.addEventListener('lostpointercapture',()=>{
         if (drag && suppress) {
           const r=el.getBoundingClientRect(); saved={x:r.left,y:r.top};
-          try {localStorage.setItem(key,JSON.stringify(saved));} catch {}
+          try {localStorage.setItem(key,JSON.stringify(saved));} catch { log("mvp", "無法取得或同步本機 MVP 設定"); }
         }
         drag=null;
       });
@@ -1290,7 +1290,7 @@
       clearInterval(refreshTimer);
       refreshTimer = window.setInterval(() => {
         if (isRadarOpen() && !document.hidden) render(captureBackground());
-      }, 30000);
+      }, TIMING.mvpRender);
     }
     function toggleRadar() {
       if (isRadarOpen()) closeRadar();
@@ -1316,7 +1316,7 @@
     });
 
     captureBackground();
-    window.setInterval(() => { if (!document.hidden) captureBackground(); }, 15000);
+    window.setInterval(() => { if (!document.hidden) captureBackground(); }, TIMING.mvpBackground);
     document.addEventListener('visibilitychange', captureBackground);
     window.addEventListener('pagehide', captureBackground);
     document.addEventListener('click', event => {

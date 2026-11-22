@@ -19,9 +19,9 @@
   const alertUser = (title, text, isDanger = false) => {
     if (isDanger) { playTone(220, 'sawtooth', 0.2, 0); playTone(165, 'sawtooth', 0.3, 0.2); }
     else { playTone(880, 'sine', 0.15, 0); playTone(1318, 'triangle', 0.25, 0.15); }
-    if (state.notify && Date.now() - state.lastNotifyAt > 5000 && typeof GM_notification === 'function') {
+    if (state.notify && Date.now() - state.lastNotifyAt > TIMING.notifyCooldown && typeof GM_notification === 'function') {
       state.lastNotifyAt = Date.now();
-      GM_notification({ title, text, timeout: 5000 });
+      GM_notification({ title, text, timeout: TIMING.notifyDuration });
     }
   };
 
@@ -126,9 +126,9 @@
   let lastSharedCharPollAt = 0;
   let polledRoster = false;
   let charPollBusy = false;
-  const charPollInterval = 45000;
+  const charPollInterval = TIMING.charPollInterval;
   // 重用門檻須小於輪詢間隔，否則計時器準時觸發時會跳過自己上一輪的結果，實際週期變成 90 秒。
-  const charPollReuseMs = charPollInterval - 5000;
+  const charPollReuseMs = charPollInterval - TIMING.charPollReuseMargin;
   const localZenyAt = new Map();
 
   function validateCharPoll(data) {

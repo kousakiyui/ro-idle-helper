@@ -18,7 +18,7 @@
   }
   let rareAutoMap = readValidatedSetting('roi-rare-auto-map-v1', validateRareAutoMap, true);
   function setRareAutoMap(enabled) {
-    try { GM_setValue('roi-rare-auto-map-v1', validateRareAutoMap(enabled)); } catch {}
+    try { GM_setValue('roi-rare-auto-map-v1', validateRareAutoMap(enabled)); } catch { log("rare", "無法保存或讀取稀有掉落設定"); }
     applyRareAutoMap(enabled);
   }
   function applyRareAutoMap(enabled) {
@@ -158,7 +158,7 @@
     // 頁面沒有「必撿稀有掉落」文字時，略過整頁 div/span 掃描（原生 XPath 單次比對）。
     try {
       if (![...document.body.children].some((c) => !c.matches('#ro-helper-hud,#roi-helper-mvp-panel,#roi-item-hover-tooltip,script,style') && c.textContent.includes('必撿稀有掉落'))) return;
-    } catch {}
+    } catch { log("rare", "無法保存或讀取稀有掉落設定"); }
     for (const root of findRareRoots()) {
       let panel = rarePanels.get(root);
       if (!panel?.isConnected || !root.contains(panel)) {

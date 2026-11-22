@@ -161,7 +161,7 @@
     if (!isPlainRecord(value)) throw Error('分類設定格式不符');
     const result = {};
     for (const [id, profile] of Object.entries(value).slice(0, 128)) {
-      try { Object.assign(result, validateCategoryProfiles({ [id]: profile })); } catch {}
+      try { Object.assign(result, validateCategoryProfiles({ [id]: profile })); } catch { /* Preserve other valid profiles. */ }
     }
     return result;
   }
@@ -173,8 +173,8 @@
     const settings = data.settings ?? {}, writes = [];
     const add = (key, value, validate, json = false) => {
       if (value === undefined) return;
-      const clean = validate(value);
-      writes.push([key, json ? JSON.stringify(clean) : clean]);
+      const validatedValue = validate(value);
+      writes.push([key, json ? JSON.stringify(validatedValue) : validatedValue]);
     };
     // 相同資料若同時出現在新舊欄位，兩份都須有效，寫入順序沿用舊版優先規則。
     for (const value of [data.prefs, settings.ro_lean_prefs_v091]) add('ro_lean_prefs_v091', value, validatePrefs);
@@ -205,6 +205,29 @@
   }
   const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   if (page.top !== page.self) return;
+
+  const TIMING = Object.freeze({
+    // Network reuse, expiry and notification cadence in milliseconds.
+    charPollInterval: 45000, charPollReuseMargin: 5000,
+    notifyCooldown: 5000, notifyDuration: 5000,
+    // Background UI, battle log and temporary character alerts.
+    hudRefresh: 1500, charAlertExpiry: 600000, recentInteraction: 5000, pointerSample: 100,
+    activeRouter: 160, visibleRouter: 300, hiddenRouter: 700, textRouter: 1500,
+    activeLogFlush: 120, idleLogFlush: 250, alertRenderGap: 250,
+    // MVP background and render cadence.
+    mvpCaptureGap: 1000, mvpBackground: 15000, mvpRender: 30000,
+    // Market refresh and query spacing.
+    marketRefresh: 15000, marketSnapshotWait: 800, marketCrossSearchGap: 2200
+  });
+
+  function debugEnabled() {
+    try { return localStorage.getItem('roi-debug') === '1'; }
+    catch { return false; }
+  }
+
+  function log(scope, ...details) {
+    if (debugEnabled()) console.debug('[ROI ' + scope + ']', ...details);
+  }
 
   function element(tag, content, style) {
     const node = document.createElement(tag);
@@ -297,7 +320,7 @@
       if (v?.name) ITEM_NAME_CACHE.set(numId, v.name);
     }
     if (cleanedPolluted) GM_setValue('roi_learned_item_db_v1', validateLearnedItems(Object.fromEntries(ITEM_DETAIL_DB)));
-  } catch {}
+  } catch { log("items", "無法讀寫本機道具資料"); }
   let dbSaveTimer = null;
   function recordItemDetail(id, info) {
     const numId = Number(id);
@@ -328,7 +351,7 @@
             for (const id of keep.slice(0, Math.max(0, keep.length - 3500))) delete merged[id];
             return merged;
           });
-        } catch {}
+        } catch { log("items", "無法讀寫本機道具資料"); }
       }, 2000);
     }
   }
@@ -993,9 +1016,9 @@
   const alertUser = (title, text, isDanger = false) => {
     if (isDanger) { playTone(220, 'sawtooth', 0.2, 0); playTone(165, 'sawtooth', 0.3, 0.2); }
     else { playTone(880, 'sine', 0.15, 0); playTone(1318, 'triangle', 0.25, 0.15); }
-    if (state.notify && Date.now() - state.lastNotifyAt > 5000 && typeof GM_notification === 'function') {
+    if (state.notify && Date.now() - state.lastNotifyAt > TIMING.notifyCooldown && typeof GM_notification === 'function') {
       state.lastNotifyAt = Date.now();
-      GM_notification({ title, text, timeout: 5000 });
+      GM_notification({ title, text, timeout: TIMING.notifyDuration });
     }
   };
 
@@ -1100,9 +1123,9 @@
   let lastSharedCharPollAt = 0;
   let polledRoster = false;
   let charPollBusy = false;
-  const charPollInterval = 45000;
+  const charPollInterval = TIMING.charPollInterval;
   // 重用門檻須小於輪詢間隔，否則計時器準時觸發時會跳過自己上一輪的結果，實際週期變成 90 秒。
-  const charPollReuseMs = charPollInterval - 5000;
+  const charPollReuseMs = charPollInterval - TIMING.charPollReuseMargin;
   const localZenyAt = new Map();
 
   function validateCharPoll(data) {
@@ -1848,7 +1871,7 @@
   }
   let rareAutoMap = readValidatedSetting('roi-rare-auto-map-v1', validateRareAutoMap, true);
   function setRareAutoMap(enabled) {
-    try { GM_setValue('roi-rare-auto-map-v1', validateRareAutoMap(enabled)); } catch {}
+    try { GM_setValue('roi-rare-auto-map-v1', validateRareAutoMap(enabled)); } catch { log("rare", "無法保存或讀取稀有掉落設定"); }
     applyRareAutoMap(enabled);
   }
   function applyRareAutoMap(enabled) {
@@ -1988,7 +2011,7 @@
     // 頁面沒有「必撿稀有掉落」文字時，略過整頁 div/span 掃描（原生 XPath 單次比對）。
     try {
       if (![...document.body.children].some((c) => !c.matches('#ro-helper-hud,#roi-helper-mvp-panel,#roi-item-hover-tooltip,script,style') && c.textContent.includes('必撿稀有掉落'))) return;
-    } catch {}
+    } catch { log("rare", "無法保存或讀取稀有掉落設定"); }
     for (const root of findRareRoots()) {
       let panel = rarePanels.get(root);
       if (!panel?.isConnected || !root.contains(panel)) {
@@ -2052,7 +2075,7 @@
   let PACK_ITEMS_MAP = null;
   function ensurePackItemsLoaded() {
     if (PACK_ITEMS_MAP) return;
-    try { void loadLootPack().catch(() => {}); } catch {}
+    try { void loadLootPack().catch(() => log("loot", "無法預載掉落資料")); } catch { log("loot", "無法開始預載掉落資料"); }
   }
   function loadLootPack() {
     const link = document.querySelector('link[rel="modulepreload"][href^="/assets/pack-"]');
@@ -3806,7 +3829,7 @@
       if (refBtn) {
         refBtn.click();
         if (st) st.textContent = `🟢 [${new Date().toLocaleTimeString()}] 已觸發 15 秒原生重新整理...`;
-        await sleep(800);
+        await sleep(TIMING.marketSnapshotWait);
         if (!isCurrent() || findCityVendingFieldset() !== cf) return;
         const p = readFiberForUi(() => getCommittedProps(cf, (x) => Array.isArray(x.shops) && x.snap?.mapId));
         if (p === undefined) return;
@@ -3814,7 +3837,7 @@
       }
       const kw = mktPanel.querySelector('#roi-mkt-q').value.trim() || (mktFilter === 'card' ? '卡片' : mktSub !== 'all' ? SUB_LABELS[mktSub] : '');
       if (kw && mktAuto15s && Date.now() >= crossCooldownUntil) {
-        await sleep(2200);
+        await sleep(TIMING.marketCrossSearchGap);
         if (isCurrent() && findCityVendingFieldset() === cf && Date.now() >= crossCooldownUntil) {
           await doCrossSearch(kw, true);
         }
@@ -3848,7 +3871,7 @@
     mktAutoBtn.style.background = '#dc2626';
     clearInterval(mktAutoTimer);
     void mktAutoTick();
-    mktAutoTimer = setInterval(() => { void mktAutoTick(); }, 15000);
+    mktAutoTimer = setInterval(() => { void mktAutoTick(); }, TIMING.marketRefresh);
   }
 
   function stopMktAuto(reason = '') {
@@ -3857,7 +3880,7 @@
     clearInterval(mktAutoTimer);
     mktAutoTimer = null;
     if (crossAbortCtrl) {
-      try { crossAbortCtrl.abort(); } catch {}
+      try { crossAbortCtrl.abort(); } catch { log("market", "無法取消補查"); }
       crossAbortCtrl = null;
     }
     crossBusy = false;
@@ -4127,7 +4150,7 @@
           if (adding) next.add(r.id); else next.delete(r.id);
           return [...next];
         }));
-      } catch (error) { console.warn('便利助手收藏儲存失敗', error); }
+      } catch (error) { log('market', '收藏儲存失敗', error.name); }
       renderMkt();
     } else if (btn.dataset.act === 'find') {
       triggerNativeTownSearch(r.base);
@@ -4613,7 +4636,7 @@
       try { words = validateWords(document.getElementById('i-words').value.split(/[,，、\n]/).map((s) => s.trim()).filter(Boolean)); }
       catch (error) { alert('⚠️ ' + error.message); return; }
       state.customProtectWords = words;
-      try { GM_setValue('ro_custom_protect_words_v091', words); } catch {}
+      try { GM_setValue('ro_custom_protect_words_v091', words); } catch { log("hud", "自訂貴重詞儲存失敗"); }
       refreshWarehouse(true);
       alert(`✅ 已更新自訂貴重詞 (${state.customProtectWords.length} 項)！`);
     };
@@ -4968,8 +4991,7 @@
   //   └ 分頁容器 props {on, draft, advanced}（draft = 目前草稿，沒有 update）
   //     └ … └ 地圖選單 props {label:'掛機地圖', maps, value: draft.lockMap, onChange} → role=group 的 DOM
   //   有 {draft, update} 的元件是「藥水與補給」等兄弟區塊，不是地圖選單的祖先，所以不能用它來找。
-  const roiDebug = () => { try { return localStorage.getItem('roi-debug') === '1'; } catch { return false; } };
-  const partyLog = (...args) => { if (roiDebug()) console.debug('[ROI party-move]', ...args); };
+  const partyLog = (...args) => { log('party-move', ...args); };
   function partyReadSettings(group) {
     const read = (matcher) => readFiberForUi(() => getCommittedProps(group, matcher)) || null;
     const picker = read((x) => x?.label === '掛機地圖' && Object.hasOwn(x, 'value'));
@@ -5038,7 +5060,7 @@
       rare = partyRareCoupling(info.draft, config, me, target);
       if (rare.ok) extra = extra.filter((k) => k !== 'rarePickup');
     }
-    if (extra.length || rare || roiDebug()) {
+    if (extra.length || rare || debugEnabled()) {
       const diff = partyDraftDiffKeys(info.draft, config).map((k) => ({ key: k, before: partyShape(config[k]), after: partyShape(info.draft[k]) }));
       partyLog('草稿差異', { target, applied: config.lockMap, diff, rare, blocking: extra });
     }
@@ -5191,12 +5213,12 @@
 
   const hasActiveOperation = () => refBusy || cartShortcutBusy || visitingWarehouse || partyMoveActive !== null;
   const isActiveWindow = () => hasActiveOperation() ||
-    (!document.hidden && (document.hasFocus() || performance.now() - lastInteractionAt <= 5000));
+    (!document.hidden && (document.hasFocus() || performance.now() - lastInteractionAt <= TIMING.recentInteraction));
 
   function trackRouterInteraction() {
     if (document.hidden) return;
     const now = performance.now();
-    if (now - lastInteractionAt >= 100) lastInteractionAt = now;
+    if (now - lastInteractionAt >= TIMING.pointerSample) lastInteractionAt = now;
   }
 
   for (const event of ['pointermove', 'keydown', 'pointerdown']) {
@@ -5204,8 +5226,8 @@
   }
 
   function routerDelay() {
-    if (isActiveWindow()) return 160;
-    return document.hidden ? 700 : 300;
+    if (isActiveWindow()) return TIMING.activeRouter;
+    return document.hidden ? TIMING.hiddenRouter : TIMING.visibleRouter;
   }
   const logSnapshots = [];
   let logTimer = null;
@@ -5213,7 +5235,7 @@
   let alertRenderTimer = null;
   function renderLogAlertChars() {
     if (alertRenderTimer !== null) return;
-    const remaining = 250 - (performance.now() - lastAlertRender);
+    const remaining = TIMING.alertRenderGap - (performance.now() - lastAlertRender);
     if (remaining > 0) {
       alertRenderTimer = setTimeout(() => {
         alertRenderTimer = null;
@@ -5234,7 +5256,7 @@
       logTimer = null;
       flushLogBatch(document.hidden ? 800 : 200);
       scheduleLogBatch();
-    }, isActiveWindow() ? 120 : 250);
+    }, isActiveWindow() ? TIMING.activeLogFlush : TIMING.idleLogFlush);
   }
   function queueLogLine(line) {
     if (!line) return;
@@ -5295,7 +5317,7 @@
     if (canShareCharPoll()) void pollChars();
   });
   const ROUTER_TEXT_SCOPE = 'fieldset,table,legend,.xp-sunken,[role="dialog"],select,label';
-  const ROUTER_SLOW_DELAY = 1500;
+  const ROUTER_SLOW_DELAY = TIMING.textRouter;
   let slowTimer = null;
   new MutationObserver((records) => {
     let domChanged = false, slowChanged = false, sawLog = false;
@@ -6081,10 +6103,10 @@
       return Number.isFinite(at) && at > 0 && Number.isFinite(new Date(at).getTime()) ? at : null;
     }
 
-    const visible = el => el && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
+    const visibleIgnoringAria = el => el && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
     function namedButton(label) {
       return [...document.querySelectorAll('button,[role="tab"]')].find(el =>
-        visible(el) && !el.disabled && [el.textContent.trim(),el.getAttribute('aria-label'),el.title].includes(label));
+        visibleIgnoringAria(el) && !el.disabled && [el.textContent.trim(),el.getAttribute('aria-label'),el.title].includes(label));
     }
     function setSearch(input, value) {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);
@@ -6094,7 +6116,7 @@
     function until(read, shouldAbort, root) {
       return waitForUi(read, { root, timeout: 8000, shouldAbort });
     }
-    const mapGroup = () => [...document.querySelectorAll('[role="group"][aria-label="掛機地圖"]')].find(visible);
+    const mapGroup = () => [...document.querySelectorAll('[role="group"][aria-label="掛機地圖"]')].find(visibleIgnoringAria);
     function reactFiber(el) {
       const key = Object.keys(el).find(name => name.startsWith('__reactFiber$'));
       return key && el[key];
@@ -6124,7 +6146,7 @@
           tab?.click();
         }
         const findFilter = () => [...document.querySelectorAll('input[type="search"]')].find(el =>
-          visible(el) && el.closest('label')?.textContent.includes('搜尋設定'));
+          visibleIgnoringAria(el) && el.closest('label')?.textContent.includes('搜尋設定'));
         await until(() => mapGroup() || findFilter(), shouldAbort);
         if (!mapGroup() && findFilter()) setSearch(findFilter(),'掛機地圖');
         const field = await until(() => mapGroup()?.querySelector('input[aria-label="掛機地圖：搜尋"]'), shouldAbort);
@@ -6137,7 +6159,7 @@
         const choice = () => {
           const group = mapGroup();
           if (group?.querySelector('input[aria-label="掛機地圖：搜尋"]')?.value !== query) return null;
-          const buttons = [...group.querySelectorAll('button[aria-pressed]')].filter(visible);
+          const buttons = [...group.querySelectorAll('button[aria-pressed]')].filter(visibleIgnoringAria);
           const exact = buttons.filter(button => reactFiber(button)?.key === id);
           if (exact.length > 1) return null;
           let button = exact[0];
@@ -6173,7 +6195,7 @@
     const mvpChangeKey = 'roi-mvp-record-change-v1';
     let lastProfile = '';
     let storageFailed = false;
-    try { lastProfile = sessionStorage.getItem(profileKey) || ''; } catch {}
+    try { lastProfile = sessionStorage.getItem(profileKey) || ''; } catch { log("mvp", "無法取得或同步本機 MVP 設定"); }
 
     function prefixFor(profile) {
       return cacheRoot + encodeURIComponent(profile) + '/';
@@ -6195,7 +6217,7 @@
         if (at > stored) {
           localStorage.setItem(key, String(at));
           if (typeof GM_addValueChangeListener === 'function') {
-            try { GM_setValue(mvpChangeKey, validateMvpChange({ key, at })); } catch {}
+            try { GM_setValue(mvpChangeKey, validateMvpChange({ key, at })); } catch { log("mvp", "無法取得或同步本機 MVP 設定"); }
           }
         }
       } catch { storageFailed = true; }
@@ -6245,7 +6267,7 @@
     let lastBackgroundAt = -Infinity;
     let latestData;
     const findStatsList = () => [...document.querySelectorAll('ul[aria-label="MVP 最後一次擊殺"]')]
-      .find((list) => visible(list) && !list.closest('[hidden],[inert],[aria-hidden="true"]'));
+      .find((list) => visibleIgnoringAria(list) && !list.closest('[hidden],[inert],[aria-hidden="true"]'));
     function capture(list = findStatsList()) {
       const nativeName = nativeProfileName();
       const snap = currentSnapshot(nativeName);
@@ -6253,7 +6275,7 @@
       const api = profile && foregroundMvpSnapshot?.character.name?.trim() === profile ? foregroundMvpSnapshot : null;
       if (profile && profile !== lastProfile) {
         lastProfile = profile;
-        try { sessionStorage.setItem(profileKey, profile); } catch {}
+        try { sessionStorage.setItem(profileKey, profile); } catch { log("mvp", "無法取得或同步本機 MVP 設定"); }
       }
       const live = new Map();
       function record(name, at) {
@@ -6354,7 +6376,7 @@
 
     function captureBackground() {
       const now = performance.now();
-      if (now - lastBackgroundAt >= 1000) {
+      if (now - lastBackgroundAt >= TIMING.mvpCaptureGap) {
         capture();
         lastBackgroundAt = now;
       }
@@ -6572,7 +6594,7 @@
     function draggable(el, handle) {
       const key = el.id + '-position-v1';
       let saved, drag, suppress = false;
-      try { saved = JSON.parse(localStorage.getItem(key)); } catch {}
+      try { saved = JSON.parse(localStorage.getItem(key)); } catch { log("mvp", "無法取得或同步本機 MVP 設定"); }
       function place(x,y) {
         const rect = el.getBoundingClientRect();
         Object.assign(el.style, {margin:'0',right:'auto',bottom:'auto',
@@ -6601,7 +6623,7 @@
       handle.addEventListener('lostpointercapture',()=>{
         if (drag && suppress) {
           const r=el.getBoundingClientRect(); saved={x:r.left,y:r.top};
-          try {localStorage.setItem(key,JSON.stringify(saved));} catch {}
+          try {localStorage.setItem(key,JSON.stringify(saved));} catch { log("mvp", "無法取得或同步本機 MVP 設定"); }
         }
         drag=null;
       });
@@ -6624,7 +6646,7 @@
       clearInterval(refreshTimer);
       refreshTimer = window.setInterval(() => {
         if (isRadarOpen() && !document.hidden) render(captureBackground());
-      }, 30000);
+      }, TIMING.mvpRender);
     }
     function toggleRadar() {
       if (isRadarOpen()) closeRadar();
@@ -6650,7 +6672,7 @@
     });
 
     captureBackground();
-    window.setInterval(() => { if (!document.hidden) captureBackground(); }, 15000);
+    window.setInterval(() => { if (!document.hidden) captureBackground(); }, TIMING.mvpBackground);
     document.addEventListener('visibilitychange', captureBackground);
     window.addEventListener('pagehide', captureBackground);
     document.addEventListener('click', event => {
@@ -6665,7 +6687,7 @@
     try {
       mvpRadar = createMvpSchedule();
     } catch (error) {
-      console.warn('個人 MVP 時刻表初始化失敗', error);
+      log('mvp', '時刻表初始化失敗', error.name);
     }
   }
 
@@ -6680,12 +6702,12 @@
   document.querySelectorAll('button[data-ro-lock]').forEach(button => button.classList.remove(...oldBadgeClasses));
   ensureHUD(); pollChars(); runPageRouter();
   setInterval(() => {
-    clearTransientCharAlerts(null, Date.now() - 600000);
+    clearTransientCharAlerts(null, Date.now() - TIMING.charAlertExpiry);
     if (document.hidden) return;
     ensureHUD(); updateHUD();
     if (Date.now() - lastRouterAt > 1200) refreshRareHelper();
     const itemGroup = document.querySelector('[role="group"][aria-label="道具設定的複製與匯出匯入"]');
     if (itemGroup) lootSyncPanels.get(itemGroup)?.();
-  }, 1500);
+  }, TIMING.hudRefresh);
   setInterval(pollChars, charPollInterval);
 })();

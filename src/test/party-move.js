@@ -209,8 +209,7 @@
   //   └ 分頁容器 props {on, draft, advanced}（draft = 目前草稿，沒有 update）
   //     └ … └ 地圖選單 props {label:'掛機地圖', maps, value: draft.lockMap, onChange} → role=group 的 DOM
   //   有 {draft, update} 的元件是「藥水與補給」等兄弟區塊，不是地圖選單的祖先，所以不能用它來找。
-  const roiDebug = () => { try { return localStorage.getItem('roi-debug') === '1'; } catch { return false; } };
-  const partyLog = (...args) => { if (roiDebug()) console.debug('[ROI party-move]', ...args); };
+  const partyLog = (...args) => { log('party-move', ...args); };
   function partyReadSettings(group) {
     const read = (matcher) => readFiberForUi(() => getCommittedProps(group, matcher)) || null;
     const picker = read((x) => x?.label === '掛機地圖' && Object.hasOwn(x, 'value'));
@@ -279,7 +278,7 @@
       rare = partyRareCoupling(info.draft, config, me, target);
       if (rare.ok) extra = extra.filter((k) => k !== 'rarePickup');
     }
-    if (extra.length || rare || roiDebug()) {
+    if (extra.length || rare || debugEnabled()) {
       const diff = partyDraftDiffKeys(info.draft, config).map((k) => ({ key: k, before: partyShape(config[k]), after: partyShape(info.draft[k]) }));
       partyLog('草稿差異', { target, applied: config.lockMap, diff, rare, blocking: extra });
     }

@@ -402,7 +402,7 @@
       try { words = validateWords(document.getElementById('i-words').value.split(/[,，、\n]/).map((s) => s.trim()).filter(Boolean)); }
       catch (error) { alert('⚠️ ' + error.message); return; }
       state.customProtectWords = words;
-      try { GM_setValue('ro_custom_protect_words_v091', words); } catch {}
+      try { GM_setValue('ro_custom_protect_words_v091', words); } catch { log("hud", "自訂貴重詞儲存失敗"); }
       refreshWarehouse(true);
       alert(`✅ 已更新自訂貴重詞 (${state.customProtectWords.length} 項)！`);
     };

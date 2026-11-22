@@ -146,7 +146,7 @@
     if (!isPlainRecord(value)) throw Error('分類設定格式不符');
     const result = {};
     for (const [id, profile] of Object.entries(value).slice(0, 128)) {
-      try { Object.assign(result, validateCategoryProfiles({ [id]: profile })); } catch {}
+      try { Object.assign(result, validateCategoryProfiles({ [id]: profile })); } catch { /* Preserve other valid profiles. */ }
     }
     return result;
   }
@@ -158,8 +158,8 @@
     const settings = data.settings ?? {}, writes = [];
     const add = (key, value, validate, json = false) => {
       if (value === undefined) return;
-      const clean = validate(value);
-      writes.push([key, json ? JSON.stringify(clean) : clean]);
+      const validatedValue = validate(value);
+      writes.push([key, json ? JSON.stringify(validatedValue) : validatedValue]);
     };
     // 相同資料若同時出現在新舊欄位，兩份都須有效，寫入順序沿用舊版優先規則。
     for (const value of [data.prefs, settings.ro_lean_prefs_v091]) add('ro_lean_prefs_v091', value, validatePrefs);

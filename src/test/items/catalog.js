@@ -43,7 +43,7 @@
       if (v?.name) ITEM_NAME_CACHE.set(numId, v.name);
     }
     if (cleanedPolluted) GM_setValue('roi_learned_item_db_v1', validateLearnedItems(Object.fromEntries(ITEM_DETAIL_DB)));
-  } catch {}
+  } catch { log("items", "無法讀寫本機道具資料"); }
   let dbSaveTimer = null;
   function recordItemDetail(id, info) {
     const numId = Number(id);
@@ -74,7 +74,7 @@
             for (const id of keep.slice(0, Math.max(0, keep.length - 3500))) delete merged[id];
             return merged;
           });
-        } catch {}
+        } catch { log("items", "無法讀寫本機道具資料"); }
       }, 2000);
     }
   }

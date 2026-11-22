@@ -4,7 +4,7 @@
     try {
       mvpRadar = createMvpSchedule();
     } catch (error) {
-      console.warn('個人 MVP 時刻表初始化失敗', error);
+      log('mvp', '時刻表初始化失敗', error.name);
     }
   }
 
@@ -19,12 +19,12 @@
   document.querySelectorAll('button[data-ro-lock]').forEach(button => button.classList.remove(...oldBadgeClasses));
   ensureHUD(); pollChars(); runPageRouter();
   setInterval(() => {
-    clearTransientCharAlerts(null, Date.now() - 600000);
+    clearTransientCharAlerts(null, Date.now() - TIMING.charAlertExpiry);
     if (document.hidden) return;
     ensureHUD(); updateHUD();
     if (Date.now() - lastRouterAt > 1200) refreshRareHelper();
     const itemGroup = document.querySelector('[role="group"][aria-label="道具設定的複製與匯出匯入"]');
     if (itemGroup) lootSyncPanels.get(itemGroup)?.();
-  }, 1500);
+  }, TIMING.hudRefresh);
   setInterval(pollChars, charPollInterval);
 })();
