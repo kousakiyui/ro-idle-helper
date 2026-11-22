@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.5.1.5
+// @version      3.5.1.6
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -1560,7 +1560,7 @@
             for (const li of lis) {
               const cb = li.querySelector('input[type="checkbox"]');
               if (!cb || cb.disabled) continue;
-              if (li.classList.contains('ro-wh-locked')) { if (cb.checked) { cb.click(); cnt--; } continue; }
+              if (li.dataset.roiWhLocked !== undefined) { if (cb.checked) { cb.click(); cnt--; } continue; }
               if (!cb.checked && cnt < 100) { cb.click(); if (++cnt % 15 === 0) await sleep(10); }
             }
           }, 'linear-gradient(135deg,#d97706,#b45309)'),
@@ -1591,7 +1591,7 @@
         const signature = text => JSON.stringify([id, name, text, reason, pinned]);
         if (!saleChecked && warehouseRowSignatures.get(li) === signature(txt) &&
             li.hasAttribute('data-roi-wh-pinned') === pinned &&
-            li.classList.contains('ro-wh-locked') === Boolean(reason) &&
+            (li.dataset.roiWhLocked !== undefined) === Boolean(reason) &&
             li.querySelector('[data-roi-wh-pin]') && li.querySelector('[data-roi-wh-pin-search]') &&
             li.querySelector('[data-ro-lock]')) continue;
         li.toggleAttribute('data-roi-wh-pinned', pinned);
@@ -1653,7 +1653,7 @@
         ITEM_NAME_CACHE.set(Number(id), name.replace(/^\+\d+\s*/, ''));
         const locked = Boolean(reason);
         if (saleChecked) cb.click();
-        li.classList.toggle('ro-wh-locked', locked);
+        li.toggleAttribute('data-roi-wh-locked', locked);
 
         let lBtn = li.querySelector('[data-ro-lock]');
         if (!lBtn) {
@@ -1676,7 +1676,7 @@
           li.insertBefore(lBtn, cb.nextSibling);
         }
         lBtn.dataset.roLock = id;
-        lBtn.className = locked ? 'ro-badge-lock' : 'ro-badge-unlock';
+        lBtn.dataset.roiWhBadge = locked ? 'lock' : 'unlock';
         const lbl = locked ? '🔒 已鎖' : '🔓';
         if (lBtn.textContent !== lbl) lBtn.textContent = lbl;
         lBtn.title = locked ? `${name} (#${id})｜${reason}\n${reason === '自選保護（★）' ? '請先取消 ★ 再解鎖' : '點擊解鎖'}` : `點擊鎖定 ${name}`;
@@ -1781,7 +1781,7 @@
           const cb = row.querySelector('input[type="checkbox"]');
           if (!cb || !f.contains(cb) || cb === source || cb.disabled || cb.checked === next) continue;
           if (row.querySelector('img[src*="/client/item/"]')?.getAttribute('src') !== src) continue;
-          if (next && row.classList.contains('ro-wh-locked') && clean(cb.getAttribute('aria-label')).startsWith('賣掉 ')) continue;
+          if (next && row.dataset.roiWhLocked !== undefined && clean(cb.getAttribute('aria-label')).startsWith('賣掉 ')) continue;
           cb.click();
           if (cb.checked === next) count += next ? 1 : -1;
         }
@@ -4213,9 +4213,9 @@
         table.roi-market-table tr > [data-roi-market-col="input-stock"] { width:110px !important; }
         table.roi-market-table tr > [data-roi-market-col^="input"] input[type="number"] { width:52px !important; }
       }
-      li.ro-wh-locked { background:linear-gradient(90deg,rgba(245,158,11,0.22),transparent 85%)!important; border-left:3px solid #f59e0b!important; padding-left:4px!important; }
-      button.ro-badge-lock { background:linear-gradient(135deg,#78350f,#92400e)!important; color:#fde047!important; border:1px solid #f59e0b!important; border-radius:4px!important; padding:0 5px!important; margin:0 4px!important; font-size:11px!important; font-weight:bold!important; cursor:pointer!important; }
-      button.ro-badge-unlock { background:transparent!important; color:#64748b!important; border:1px dashed #475569!important; border-radius:4px!important; padding:0 4px!important; margin:0 4px!important; font-size:11px!important; opacity:0.6; cursor:pointer!important; }
+      li[data-roi-wh-locked] { background:linear-gradient(90deg,rgba(245,158,11,0.22),transparent 85%)!important; border-left:3px solid #f59e0b!important; padding-left:4px!important; }
+      button[data-roi-wh-badge="lock"] { background:linear-gradient(135deg,#78350f,#92400e)!important; color:#fde047!important; border:1px solid #f59e0b!important; border-radius:4px!important; padding:0 5px!important; margin:0 4px!important; font-size:11px!important; font-weight:bold!important; cursor:pointer!important; }
+      button[data-roi-wh-badge="unlock"] { background:transparent!important; color:#64748b!important; border:1px dashed #475569!important; border-radius:4px!important; padding:0 4px!important; margin:0 4px!important; font-size:11px!important; opacity:0.6; cursor:pointer!important; }
       [data-ro-ref-tier="4"]  { color: #60a5fa !important; font-weight: 600 !important; }
       [data-ro-ref-tier="5"]  { color: #34d399 !important; font-weight: 600 !important; }
       [data-ro-ref-tier="6"]  { color: #a3e635 !important; font-weight: 700 !important; }
@@ -4246,7 +4246,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.1.5 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.1.6 測試版</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -6541,6 +6541,11 @@
   listenSharedSettings();
   if (canShareCharPoll()) listenRemote(charPollKey, validateCharPoll, applySharedCharPoll);
   window.addEventListener('focus', runPageRouter);
+  // Remove the previous version's classes from nodes left in the live page.
+  const oldRowClass = ['ro', 'wh', 'locked'].join('-');
+  const oldBadgeClasses = ['lock', 'unlock'].map(kind => ['ro', 'badge', kind].join('-'));
+  document.querySelectorAll(`li.${oldRowClass}`).forEach(row => row.classList.remove(oldRowClass));
+  document.querySelectorAll('button[data-ro-lock]').forEach(button => button.classList.remove(...oldBadgeClasses));
   ensureHUD(); pollChars(); runPageRouter();
   setInterval(() => {
     clearTransientCharAlerts(null, Date.now() - 600000);
