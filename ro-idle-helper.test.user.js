@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.5.1.6
+// @version      3.5.1.7
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -4165,8 +4165,18 @@
     syncRefineSettings(pane);
   }
 
-  let hudFit = null, hudSizeObserver = null, browserMenuObserver = null;
-  window.addEventListener('resize', () => hudFit?.());
+  const hudSkillControls = 'button[aria-label$=" +1"], [role="region"][aria-label="技能點預覽"], [role="region"][aria-label="屬性點預覽"]';
+  let hudFit = null, hudYield = null, hudSizeObserver = null, browserMenuObserver = null;
+  function resizeHud() { hudFit?.(); }
+  window.addEventListener('resize', resizeHud);
+  window.addEventListener('pagehide', function releaseHud(event) {
+    if (event.persisted) return;
+    window.removeEventListener('pagehide', releaseHud);
+    window.removeEventListener('resize', resizeHud);
+    hudSizeObserver?.disconnect();
+    browserMenuObserver?.disconnect();
+    hudFit = hudYield = null;
+  });
   function ensureHUD() {
     if (!document.body || document.getElementById('ro-helper-hud')) return;
     // 浮窗被移除後重建時，沿用同一份樣式並釋放舊的觀察器，避免重複 CSS 與監聽器累積。
@@ -4224,6 +4234,9 @@
       [data-ro-ref-tier="9"]  { color: #f87171 !important; font-weight: 800 !important; text-shadow: 0 0 9px rgba(248,113,113,0.7) !important; }
       [data-ro-ref-tier="10"] { color: #ff2d55 !important; font-weight: 900 !important; text-shadow: 0 0 8px #ff2d55, 0 0 3px #ffd700 !important; background: linear-gradient(90deg, rgba(255,45,85,0.22), rgba(250,204,21,0.18)) !important; border-radius: 4px !important; padding: 0 5px !important; border: 1px solid rgba(255,215,0,0.65) !important; }
       #ro-helper-hud { position:fixed; top:48px; right:14px; z-index:2147483646; font-family:system-ui,-apple-system,"Microsoft JhengHei",sans-serif; user-select:none; touch-action:none; }
+      #ro-helper-hud[data-roi-hud-yield] { pointer-events:none; }
+      #ro-helper-hud[data-roi-hud-yield] > #ro-hud-card { visibility:hidden; pointer-events:none; }
+      #ro-helper-hud[data-roi-hud-yield] > #ro-fab { display:flex !important; position:fixed; left:var(--roi-hud-yield-x); top:var(--roi-hud-yield-y); pointer-events:auto; cursor:pointer !important; }
       #ro-hud-card { background:linear-gradient(165deg,rgba(15,23,42,0.96),rgba(9,13,22,0.98)); backdrop-filter:blur(12px); color:#f8fafc; border:1.5px solid rgba(56,189,248,0.75); border-radius:12px; box-sizing:border-box; width:min(365px,calc(100vw - 8px)); max-height:calc(100vh - 8px); max-height:calc(100dvh - 8px); box-shadow:0 16px 40px rgba(0,0,0,0.88), 0 0 15px rgba(56,189,248,0.15); font-size:12px; overflow:auto; }
       #ro-drag { position:sticky; top:0; z-index:1; }
       .ro-tab { flex:1; text-align:center; padding:8px 2px; cursor:pointer; color:#94a3b8; font-weight:bold; font-size:11px; border-bottom:2px solid transparent; transition:all 0.15s; }
@@ -4246,7 +4259,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.1.6 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.1.7 測試版</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -4351,28 +4364,70 @@
       observer.observe(document.body, { childList: true });
     }
 
-    function placeHud(left, top) {
-      const { width, height } = hud.getBoundingClientRect();
+    let yieldDismissed = false;
+    const intersects = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    function syncHudYield(hudRect) {
+      if (document.hidden || !hud.isConnected) return;
+      const controls = [...document.querySelectorAll(hudSkillControls)]
+        .filter(el => visible(el) && getComputedStyle(el).visibility === 'visible');
+      const rects = controls.map(el => el.getBoundingClientRect())
+        .filter(rect => rect.right > 0 && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight &&
+          rect.right > rect.left && rect.bottom > rect.top);
+      if (!controls.length) yieldDismissed = false;
+      if (state.hudMin || yieldDismissed || !rects.length ||
+          !rects.some(rect => intersects(rect, hudRect ??= hud.getBoundingClientRect()))) {
+        hud.removeAttribute('data-roi-hud-yield');
+        return;
+      }
+
+      // Keep the card in layout so the original footprint remains measurable while yielded.
+      const size = 50, edge = 4; // The floating button is 46px plus two 2px borders.
+      const maxX = Math.max(0, innerWidth - size - edge);
+      const maxY = Math.max(0, innerHeight - size - edge);
+      const xs = [maxX, edge, ...rects.map(rect => rect.left - size)];
+      const ys = [edge, maxY, ...rects.map(rect => rect.bottom)];
+      let spot;
+      for (const y of ys) {
+        if (y < 0 || y > maxY) continue;
+        const x = xs.find(x => x >= 0 && x <= maxX &&
+          !rects.some(rect => intersects(rect, { left: x, top: y, right: x + size, bottom: y + size })));
+        if (x !== undefined) { spot = { x, y }; break; }
+      }
+      const left = (spot?.x ?? maxX) + 'px', top = (spot?.y ?? 0) + 'px';
+      if (hud.style.getPropertyValue('--roi-hud-yield-x') !== left) hud.style.setProperty('--roi-hud-yield-x', left);
+      if (hud.style.getPropertyValue('--roi-hud-yield-y') !== top) hud.style.setProperty('--roi-hud-yield-y', top);
+      hud.toggleAttribute('data-roi-hud-yield', true);
+    }
+
+    function clampHud(left, top, { width, height }) {
       const edge = 4;
       const maxLeft = innerWidth - width - edge;
       const maxTop = innerHeight - height - edge;
-      const x = Math.min(Math.max(0, maxLeft), Math.max(edge, left));
-      const y = Math.min(Math.max(0, maxTop), Math.max(edge, top));
+      return {
+        left: Math.min(Math.max(0, maxLeft), Math.max(edge, left)),
+        top: Math.min(Math.max(0, maxTop), Math.max(edge, top))
+      };
+    }
+
+    function writeHudPosition({ left, top }) {
       hud.style.right = 'auto';
-      hud.style.left = x + 'px';
-      hud.style.top = y + 'px';
-      return { left: x, top: y };
+      hud.style.left = left + 'px';
+      hud.style.top = top + 'px';
     }
 
     function fitHud() {
-      if (!hud.isConnected) return;
-      const { width } = hud.getBoundingClientRect();
+      if (!hud.isConnected || document.hidden) return;
+      const rect = hud.getBoundingClientRect();
       const { left, top } = state.hudPos || {};
-      placeHud(Number.isFinite(left) ? left : innerWidth - width - 14, Number.isFinite(top) ? top : 48);
+      const position = clampHud(Number.isFinite(left) ? left : innerWidth - rect.width - 14,
+        Number.isFinite(top) ? top : 48, rect);
+      syncHudYield({ ...position, right: position.left + rect.width, bottom: position.top + rect.height });
+      writeHudPosition(position);
     }
 
     fitHud();
     hudFit = fitHud;
+    hudYield = () => syncHudYield();
     hudSizeObserver = new ResizeObserver(fitHud);
     hudSizeObserver.observe(hud);
 
@@ -4389,19 +4444,26 @@
         if (!dragging) return;
         const dx = e.clientX - sx, dy = e.clientY - sy;
         if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
-        if (!moved) return;
-        state.hudPos = placeHud(ox + dx, oy + dy);
+        if (!moved || hud.hasAttribute('data-roi-hud-yield')) return;
+        state.hudPos = clampHud(ox + dx, oy + dy, hud.getBoundingClientRect());
+        writeHudPosition(state.hudPos);
       });
       handle.addEventListener('pointerup', (e) => {
         if (!dragging) return;
         dragging = false;
         handle.releasePointerCapture(e.pointerId);
-        if (moved) savePrefs();
-        else if (onClick) onClick();
+        if (moved) {
+          if (!hud.hasAttribute('data-roi-hud-yield')) { savePrefs(); syncHudYield(); }
+        } else if (onClick) onClick();
       });
     };
 
     const setMin = (m) => {
+      if (!m && hud.hasAttribute('data-roi-hud-yield')) {
+        yieldDismissed = true;
+        syncHudYield();
+        return;
+      }
       if (!m) {
         clearTransientCharAlerts();
         document.getElementById('ro-fab').classList.remove('roi-stop-alert');
@@ -5150,6 +5212,7 @@
     if (refreshAnnotations) annotateAllRefinedEquipment();
     syncHudSettings();
     mvpRadar?.syncFromStats();
+    hudYield?.();
   }
 
   let uiTimer = null;
@@ -5168,7 +5231,8 @@
     for (const r of records) {
       const el = r.target.nodeType === 1 ? r.target : r.target.parentElement;
       if (!el || !el.isConnected || el.closest('#ro-helper-hud,#roi-helper-mvp-panel,#roi-item-hover-tooltip,[data-roi-market-browser],[data-ro-wh-bar],[data-ro-rare-helper],[data-roi-settings-tools],[data-roi-refine-helper],[data-roi-price-search],[data-roi-upper-fold],[data-roi-party-move-bar],[data-roi-party-move-dialog]')) continue;
-      if (r.type === 'attributes' && !el.matches('fieldset') && !el.querySelector('fieldset')) continue;
+      if (r.type === 'attributes' && !el.matches('fieldset') && !el.querySelector('fieldset') &&
+          !el.matches(hudSkillControls) && !el.querySelector(hudSkillControls)) continue;
       if (el.closest('.log-window')) {
         sawLog = true;
         if (r.type === 'characterData' || r.type === 'childList') queueLogLine(el.closest('.log-line'));
