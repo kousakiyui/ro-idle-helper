@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.4.6
+// @version      3.4.7
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -80,6 +80,15 @@
         }
         result[field][id] = reason;
       }
+    }
+    if (Object.hasOwn(value, 'pins')) {
+      if (!isPlainRecord(value.pins)) throw Error('倉庫自選資料格式不符');
+      const entries = Object.entries(value.pins);
+      if (entries.length > 5000 || entries.some(([id, name]) =>
+        !/^[1-9]\d*$/.test(id) || Number(id) > 1e9 || typeof name !== 'string' || !name.trim() || name.length > 160)) {
+        throw Error('倉庫自選物品格式或數量不符');
+      }
+      result.pins = Object.fromEntries(entries);
     }
     return result;
   }
@@ -605,6 +614,7 @@
   const loadedWh = readValidatedSetting('warehouse-helper-v1', validateWarehouse, { marks: {}, autoLocks: {} }, true);
   state.whMarks = loadedWh.marks;
   state.whAutoLocks = loadedWh.autoLocks;
+  state.whPins = loadedWh.pins ?? {};
   state.customProtectWords = readValidatedSetting('ro_custom_protect_words_v091', validateWords, []);
 
   function savePrefs() {
@@ -637,6 +647,60 @@
     }
     return null;
   }
+
+  let townResultsTable = null;
+  let townResultsRows = [];
+  function sizeTownSearchResults() {
+    const table = townResultsTable;
+    const last = townResultsRows.at(-1);
+    if (!table?.isConnected || !table.contains(last)) return;
+    const height = last.getBoundingClientRect().bottom - table.getBoundingClientRect().top + table.scrollTop;
+    const maxHeight = height > 0 ? `${Math.ceil(height)}px` : '';
+    if (table.style.maxHeight !== maxHeight) table.style.maxHeight = maxHeight;
+  }
+  const townResultsObserver = new ResizeObserver(sizeTownSearchResults);
+
+  function refreshTownSearchResults(ui) {
+    const table = ui?.form.closest('fieldset')?.querySelector(':scope > table.xp-table');
+    const rows = table?.tBodies[0]?.rows;
+    const visibleRows = [];
+    let offers = 0;
+    for (const row of rows || []) {
+      // The game inserts a full-width equipment details row beneath an expanded offer.
+      if (row.cells.length > 1 && ++offers === 6) break;
+      visibleRows.push(row);
+    }
+    const next = offers === 6 && visible(table) ? table : null;
+    if (next === townResultsTable && (!next || (visibleRows.length === townResultsRows.length &&
+        visibleRows.every((row, i) => row === townResultsRows[i])))) return;
+
+    townResultsObserver.disconnect();
+    if (townResultsTable && townResultsTable !== next) {
+      townResultsTable.removeAttribute('data-roi-town-results');
+      townResultsTable.removeAttribute('tabindex');
+      townResultsTable.removeAttribute('role');
+      townResultsTable.removeAttribute('aria-label');
+      townResultsTable.style.maxHeight = '';
+    }
+    if (next && (next !== townResultsTable || visibleRows[0] !== townResultsRows[0])) next.scrollTop = 0;
+    townResultsTable = next;
+    townResultsRows = next ? visibleRows : [];
+    if (!next) return;
+    next.setAttribute('data-roi-town-results', '');
+    next.setAttribute('tabindex', '0');
+    next.setAttribute('role', 'table');
+    next.setAttribute('aria-label', '跨城搜尋結果');
+    sizeTownSearchResults();
+    if (next.tHead) townResultsObserver.observe(next.tHead);
+    for (const row of visibleRows) townResultsObserver.observe(row);
+  }
+
+  document.addEventListener('submit', (event) => {
+    if (townResultsTable?.isConnected && event.target === findTownSearchUI()?.form) {
+      // React can reuse the first row when successive searches share a result.
+      townResultsTable.scrollTop = 0;
+    }
+  }, true);
 
   async function triggerNativeTownSearch(rawName) {
     const baseName = clean(rawName).replace(/（.*?）|\(.*?\)/g, '').replace(/^\+\s*\d+\s*/, '').replace(/\s*\[\d+\]\s*$/, '').trim();
@@ -778,6 +842,8 @@
     }
   };
 
+  let foregroundMvpSnapshot = null;
+
   function onApiData(url, text, foreground = true) {
     try {
       if (!text || text[0] !== '{') return;
@@ -810,6 +876,7 @@
           }
           state.activeCharId = cid;
           state.activeCharName = ch.name || d.name;
+          foregroundMvpSnapshot = Array.isArray(d.snapshot.mvpLastKill) ? d.snapshot : null;
         }
         if (typeof ch.zeny === 'number') {
           if (state.initZenyMap[cid] === undefined) state.initZenyMap[cid] = ch.zeny;
@@ -981,7 +1048,7 @@
   let whSaveTimer = null;
   function flushWarehouseSave() {
     if (whSaveTimer) { clearTimeout(whSaveTimer); whSaveTimer = null; }
-    try { GM_setValue('warehouse-helper-v1', JSON.stringify({ marks: state.whMarks, autoLocks: state.whAutoLocks })); } catch {}
+    try { GM_setValue('warehouse-helper-v1', JSON.stringify({ marks: state.whMarks, autoLocks: state.whAutoLocks, pins: state.whPins })); } catch {}
   }
   function saveWarehouseSoon() {
     if (!whSaveTimer) whSaveTimer = setTimeout(flushWarehouseSave, 400);
@@ -991,6 +1058,75 @@
 
   function warehouseItemId(li) {
     return li?.querySelector('img[src*="/client/item/"]')?.getAttribute('src')?.match(/\/client\/item\/(\d+)\.png(?:[?#]|$)/)?.[1];
+  }
+
+  const warehouseCustomViews = new WeakMap();
+  const warehouseBulkLabel = /^(?:全選(?:目前顯示的)?|勾選這頁可以賣的\s*\(整疊\))$/;
+  let refineWarehouseSubmitButton = null;
+
+  function setWarehouseQuery(input, value) {
+    if (!input?.isConnected || input.value === value) return;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function syncWarehouseCustomView(field, list) {
+    // The category bar and the two inventory columns share the same native panel.
+    const tabs = field.parentElement?.parentElement?.querySelector(':scope > [role="tablist"][aria-label="物品分類"]');
+    if (!tabs || !list) return;
+    let view = warehouseCustomViews.get(tabs);
+    if (!view) {
+      const tab = document.createElement('button');
+      tab.type = 'button';
+      tab.className = 'xp-btn small';
+      tab.dataset.roiWhCustomTab = '';
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-selected', 'false');
+      tab.textContent = '★ 自選';
+      view = { tab, active: false, selectingAll: false, query: '' };
+      warehouseCustomViews.set(tabs, view);
+      tabs.append(tab);
+
+      const search = () => tabs.querySelector('input[aria-label="搜尋背包與倉庫的物品"]');
+      tab.onclick = () => {
+        if (view.active) return;
+        const all = [...tabs.querySelectorAll('button[role="tab"]')].find((button) => clean(button.textContent) === '全部');
+        const input = search();
+        if (!all || all.disabled || !input) return;
+        view.query = input.value;
+        view.active = true;
+        view.selectingAll = true;
+        try { if (all.getAttribute('aria-selected') !== 'true') all.click(); }
+        finally { view.selectingAll = false; }
+        setWarehouseQuery(search(), '');
+        refreshWarehouse();
+      };
+      tabs.addEventListener('click', (event) => {
+        const target = event.target.closest('button[role="tab"]');
+        if (!target || target === tab || !view.active || view.selectingAll) return;
+        view.active = false;
+        setWarehouseQuery(search(), view.query);
+        refreshWarehouse();
+      });
+    }
+
+    tabs.toggleAttribute('data-roi-wh-custom-tabs', view.active);
+    if (field.hasAttribute('data-roi-wh-custom-view') !== view.active) {
+      field.toggleAttribute('data-roi-wh-custom-view', view.active);
+      list.scrollTop = 0;
+    }
+    view.tab.setAttribute('aria-selected', String(view.active));
+    for (const button of field.querySelectorAll('button')) {
+      if (warehouseBulkLabel.test(clean(button.textContent))) button.toggleAttribute('data-roi-wh-native-bulk', view.active);
+    }
+    let empty = field.querySelector('[data-roi-wh-custom-empty]');
+    if (view.active && !empty) {
+      empty = element('p', '目前沒有自選物品。可回到其他分類，點物品旁的 ☆ 加入。');
+      empty.dataset.roiWhCustomEmpty = '';
+      list.after(empty);
+    }
+    if (empty) empty.hidden = !view.active || Boolean(list.querySelector(':scope > [data-roi-wh-pinned]'));
   }
 
   function warehouseTotal(field, action) {
@@ -1096,12 +1232,44 @@
       }
 
       let dirty = false;
-      for (const li of f.querySelectorAll('li')) {
+      const list = f.querySelector(':scope > ul');
+      if (!list) continue;
+      for (const li of list.children) {
         const cb = li.querySelector('input[type="checkbox"]'), nameBtn = li.querySelector('button[aria-label$="的物品資訊"]');
         if (!cb || !nameBtn) continue;
         const id = warehouseItemId(li);
         if (!id) continue;
         const name = clean(nameBtn.textContent), txt = clean(li.textContent);
+        const pinned = Object.hasOwn(state.whPins, id);
+        li.toggleAttribute('data-roi-wh-pinned', pinned);
+        let pin = li.querySelector('[data-roi-wh-pin]');
+        if (!pin) {
+          pin = document.createElement('button');
+          pin.type = 'button';
+          pin.dataset.roiWhPin = '';
+          pin.className = 'roi-warehouse-pin';
+          pin.onclick = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const itemId = warehouseItemId(li);
+            if (!itemId) return;
+            if (Object.hasOwn(state.whPins, itemId)) delete state.whPins[itemId];
+            else if (Object.keys(state.whPins).length < 5000) {
+              const label = clean(li.querySelector('button[aria-label$="的物品資訊"]')?.textContent)
+                .replace(/^\+\s*\d+\s*/, '').replace(/\s*\[\d+\].*$/, '').trim();
+              if (!label || label.length > 160) return;
+              state.whPins[itemId] = label;
+            }
+            saveWarehouseSoon();
+            refreshWarehouse();
+          };
+          li.insertBefore(pin, cb.nextSibling);
+        }
+        const icon = pinned ? '★' : '☆';
+        if (pin.textContent !== icon) pin.textContent = icon;
+        pin.title = pinned ? '移出自選' : '加入自選';
+        pin.setAttribute('aria-label', pin.title + '：' + name);
+        pin.setAttribute('aria-pressed', String(pinned));
         ITEM_NAME_CACHE.set(Number(id), name.replace(/^\+\d+\s*/, ''));
         if (rescanCustom && !String(state.whAutoLocks[id] || '').startsWith('已載入攤位普通同規格掛牌') && state.whMarks[id] !== 'lock') delete state.whAutoLocks[id];
         if (instanceLockReasons.has(state.whAutoLocks[id])) { delete state.whAutoLocks[id]; dirty = true; }
@@ -1133,6 +1301,7 @@
         if (lBtn.textContent !== lbl) lBtn.textContent = lbl;
         lBtn.title = locked ? `${name} (#${id})｜${reason}\n點擊解鎖` : `點擊鎖定 ${name}`;
       }
+      syncWarehouseCustomView(f, list);
       if (dirty) saveWarehouseSoon();
     }
   }
@@ -1157,6 +1326,21 @@
     const btn = e.target.closest('button');
     if (btn) {
       const cap = clean(btn.textContent);
+      if (f.hasAttribute('data-roi-wh-custom-view') && btn !== refineWarehouseSubmitButton) {
+        const action = cap.match(/^(直接賣掉|取出|領出)\s*\d+\s*項/)?.[1];
+        const selected = [...f.querySelectorAll(':scope > ul > li input[type="checkbox"]:checked')];
+        const hiddenSelection = action && (selected.length !== warehouseTotal(f, action) ||
+          selected.some((input) => !input.closest('li')?.hasAttribute('data-roi-wh-pinned')));
+        if (warehouseBulkLabel.test(cap) || hiddenSelection) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          const status = f.querySelector('[data-ro-wh-status]');
+          if (status) status.textContent = hiddenSelection
+            ? '還有自選以外的物品已勾選。請先全部取消，或切回原分類確認。'
+            : '請用上方按鈕勾選自選分頁顯示的物品。';
+          return;
+        }
+      }
       if (/^勾選這頁可以賣的/.test(cap)) {
         refreshWarehouse();
         requestAnimationFrame(() => requestAnimationFrame(() => refreshWarehouse()));
@@ -2117,7 +2301,7 @@
         for (let i = 0; i < 25 && !field; i++) { await refineAwait(session, sleep(100)); field = findWhField(); }
         if (!field) throw Error('開啟倉庫逾時');
       }
-      const checked = () => [...field.querySelectorAll('input[type="checkbox"]:checked')];
+      const checked = () => [...field.querySelectorAll(':scope > ul > li input[type="checkbox"]:checked')];
       if (checked().length || [...field.querySelectorAll('button')].some((b) => clean(b.textContent) === '結束賣出')) {
         throw Error('倉庫已有勾選或正在賣出，請先完成原本的操作');
       }
@@ -2173,7 +2357,10 @@
         throw Error('倉庫勾選已變動或無法領取，已中止領倉');
       }
       setStatus(`📦 領取 ${selected.size} 項` + (materialQuantity !== null ? `（${[...selected.values()].reduce((sum, item) => sum + item.quantity, 0)} 個材料）` : ''));
-      clickRefineControl(session, btn);
+      // The batch above is verified against the native selection, including rows hidden by the custom tab.
+      refineWarehouseSubmitButton = btn;
+      try { clickRefineControl(session, btn); }
+      finally { refineWarehouseSubmitButton = null; }
       submitted = true;
       if (materialQuantity === null) await refineAwait(session, sleep(450));
       return [...selected.values()];
@@ -2207,12 +2394,21 @@
     item.itemId === id && Number.isSafeInteger(item.qty) && item.qty > 0 ? sum + item.qty : sum, 0);
 
   async function waitForRefineMaterial(session, id, beforeQty) {
-    for (let i = 0; i < 40; i++) {
-      await refineAwait(session, sleep(100));
-      const b = readBackpackContext(true);
-      if (b && materialCount(b.s.inventory, id) > beforeQty) return;
+    let backpackReady = false;
+    try {
+      assertRefineSession(session);
+      for (let i = 0; i < 40; i++) {
+        await refineAwait(session, sleep(100));
+        const b = readBackpackContext(true);
+        backpackReady = Boolean(b);
+        if (b && materialCount(b.s.inventory, id) > beforeQty) return;
+      }
+    } catch (error) {
+      throw Error(`已送出領倉，確認入帳時停止（${error.message}）。請確認背包與倉庫。`);
     }
-    throw Error('等待材料入帳逾時，請確認背包與倉庫');
+    throw Error(backpackReady
+      ? '已送出領倉，但材料入帳逾時。請確認背包與倉庫。'
+      : '已送出領倉，但等待入帳逾時時背包介面仍未就緒。請確認背包與倉庫。');
   }
 
   async function runHybridRefine(modeType) {
@@ -2377,7 +2573,6 @@
           const beforeOreQty = materialCount(b.s.inventory, material);
           session.targetUid = null;
           const pulledOres = material ? await tryWithdrawFromWarehouse(new Set([material]), limitPlus, setStatus, null, 1, session, refMaterialBatch) : [];
-          assertRefineSession(session);
           if (pulledOres.length) {
             await waitForRefineMaterial(session, material, beforeOreQty);
             session.targetUid = uid;
@@ -2386,6 +2581,8 @@
             skillBtn = findNativeDetailBtn(b.table, uid, isWeaponRefineButton);
             npcBtn = skillOnly ? null : findNativeDetailBtn(b.table, uid, isNpcRefineButton);
             activeBtn = skillBtn && !skillBtn.disabled ? skillBtn : npcBtn;
+          } else {
+            assertRefineSession(session);
           }
         }
         if (!activeBtn || activeBtn.disabled) throw Error(skillOnly
@@ -3391,6 +3588,7 @@
 
   function syncMktMount() {
     ensurePackItemsLoaded();
+    refreshTownSearchResults(findTownSearchUI());
     const allFields = [...document.querySelectorAll('fieldset')].filter((f) => f !== mktPanel);
     const searchField = allFields.find((f) => clean(roiPriceText([...f.children].find((e) => e.tagName === 'LEGEND') || document.createElement('span'))).startsWith('搜尋所有城鎮的攤位'));
     if (searchField) {
@@ -3452,6 +3650,19 @@
     const st = document.createElement('style');
     st.textContent = `
       [data-roi-browse-hidden], [data-roi-native-fold] { display: none !important; }
+      table[data-roi-town-results] { display: block; overflow: auto; }
+      table[data-roi-town-results] > :is(thead, tbody) > tr > :first-child:not([colspan]) { width: 100%; }
+      nav.xp-menubar[aria-label="主選單"],
+      nav.xp-menubar[aria-label="主選單"] > .xp-menu-group { flex-wrap:wrap !important; min-width:0; max-width:100%; }
+      nav.xp-menubar[aria-label="主選單"] .xp-menu-item { flex-shrink:0; white-space:nowrap; }
+      [data-roi-wh-custom-view] > ul > li:not([data-roi-wh-pinned]),
+      [data-roi-wh-custom-view] [data-roi-wh-native-bulk],
+      [data-roi-wh-custom-tabs] > input { display:none !important; }
+      [data-roi-wh-custom-tabs] > button:not([data-roi-wh-custom-tab])[aria-selected="true"] { background:var(--face-2) !important; font-weight:normal !important; }
+      [data-roi-wh-custom-tab][aria-selected="true"] { background:var(--tab-on,#d4d0c8); font-weight:bold; }
+      .roi-warehouse-pin { flex:none; inline-size:16px; padding:0; border:0; background:transparent; color:inherit; line-height:1; cursor:pointer; }
+      .roi-warehouse-pin[aria-pressed="true"] { color:#b45309; }
+      html.night [data-roi-wh-pin][aria-pressed="true"] { color:#fbbf24; }
       html:not([data-roi-money-off]) .roi-mc-text { color: var(--roi-mc) !important; font-weight: bold !important; font-variant-numeric: tabular-nums; }
       html:not([data-roi-money-off]):is(.night,[data-info-night]) .roi-mc-text,
       html:not([data-roi-money-off]) #roi-mkt-rows .roi-mc-text { color: var(--roi-mn) !important; -webkit-text-fill-color: currentColor !important; }
@@ -3505,7 +3716,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.4.6</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.4.7</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -3590,7 +3801,7 @@
     state.renderedLootRev = -1;
     document.body.appendChild(hud);
     const mvpSlot = hud.querySelector('[data-roi-mvp-slot]');
-    if (mvpEntry) mvpSlot.replaceWith(mvpEntry);
+    if (mvpRadar) mvpSlot.replaceWith(mvpRadar.button);
     else mvpSlot.remove();
 
     function attachBrowserMenu() {
@@ -3740,7 +3951,7 @@
         format: 'ro-idle-lean-backup', version: 1,
         prefs: readValidatedSetting('ro_lean_prefs_v091', validatePrefs, {}),
         words: state.customProtectWords,
-        wh: { marks: state.whMarks, autoLocks: state.whAutoLocks },
+        wh: { marks: state.whMarks, autoLocks: state.whAutoLocks, pins: state.whPins },
         priceOptions,
         refineMaterialBatch: refMaterialBatch,
         favs: [...mktFavs]
@@ -3866,9 +4077,10 @@
       legends.some((t) => /^必撿稀有掉落/.test(t))
     ) mountSettingsTools();
     if (legends.some((t) => /^倉庫/.test(t))) refreshWarehouse();
-    if (legends.some((t) => /的攤位/.test(t)) || mktPanel.isConnected) syncMktMount();
+    if (legends.some((t) => /的攤位/.test(t)) || mktPanel.isConnected || townResultsTable) syncMktMount();
     annotateAllRefinedEquipment();
     syncHudSettings();
+    mvpRadar?.syncFromStats();
   }
 
   let uiTimer = null;
@@ -3910,7 +4122,9 @@
     });
 
     function readMinute(text, now) {
-      const match = text.normalize('NFKC').match(/最後一次擊殺:\s*(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})$/);
+      const line = text.normalize('NFKC').trim();
+      const match = line.match(/最後一次擊殺:\s*(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})$/)
+        || line.match(/打倒過\s*\(\s*(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})\s*\)\s*,\s*隊伍現在遇不到/);
       if (!match) return null;
       const [, month, day, hour, minute] = match.map(Number);
       if (hour > 23 || minute > 59) return null;
@@ -4600,7 +4814,13 @@
     panel.append(header, toolbar, results, footer);
     document.body.append(panel);
 
-    function currentSnapshot() {
+    function nativeProfileName() {
+      const menu = document.querySelector('nav.xp-menubar[aria-label="主選單"]');
+      return menu?.parentElement.querySelector(':scope > .xp-title .caption')
+        ?.textContent.match(/-\s*\[([^\]]+)\]/)?.[1].trim() || '';
+    }
+
+    function currentSnapshot(expectedName) {
       const root = document.getElementById('root');
       if (!root) return null;
       const key = Object.keys(root).find(k => k.startsWith('__reactContainer$'));
@@ -4611,7 +4831,8 @@
         if (!fiber) continue;
         const props = fiber.memoizedProps;
         for (const snap of [props?.data?.s, props?.snap, props?.s]) {
-          if (typeof snap?.character?.name !== 'string' || !snap.character.name.trim()) continue;
+          const name = typeof snap?.character?.name === 'string' ? snap.character.name.trim() : '';
+          if (!name || (expectedName && name !== expectedName)) continue;
           if (Array.isArray(snap.mvpLastKill)) return snap;
           if (snap.mapId != null) identity ??= snap;
         }
@@ -4763,9 +4984,13 @@
 
     let lastBackgroundAt = -Infinity;
     let latestData;
-    function capture() {
-      const snap = currentSnapshot();
-      const profile = snap?.character.name.trim() || '';
+    const findStatsList = () => [...document.querySelectorAll('ul[aria-label="MVP 最後一次擊殺"]')]
+      .find((list) => visible(list) && !list.closest('[hidden],[inert],[aria-hidden="true"]'));
+    function capture(list = findStatsList()) {
+      const nativeName = nativeProfileName();
+      const snap = currentSnapshot(nativeName);
+      const profile = nativeName || snap?.character.name.trim() || '';
+      const api = profile && foregroundMvpSnapshot?.character.name?.trim() === profile ? foregroundMvpSnapshot : null;
       if (profile && profile !== lastProfile) {
         lastProfile = profile;
         try { sessionStorage.setItem(profileKey, profile); } catch {}
@@ -4778,17 +5003,22 @@
         live.set(boss, Math.max(live.get(boss) || 0, at));
         if (profile) remember(profile, boss, at);
       }
-      const list = [...document.querySelectorAll('ul[aria-label="MVP 最後一次擊殺"]')].find(visible);
       if (list) {
         const now = Date.now();
         for (const row of list.children) {
-          record(row.children[0]?.textContent.trim(), readMinute(row.children[1]?.textContent || '', now));
+          const name = row.children[0]?.textContent.trim();
+          if (name && !/未變身[，,]\s*沒有 MVP/.test(name)) {
+            record(name, readMinute(row.children[1]?.textContent || '', now));
+          }
         }
       }
-      if (Array.isArray(snap?.mvpLastKill)) {
-        for (const entry of snap.mvpLastKill) record(entry?.name, timestamp(entry?.at));
+      for (const records of [api?.mvpLastKill, snap?.mvpLastKill]) {
+        if (!Array.isArray(records)) continue;
+        for (const entry of records) {
+          if (!entry?.noMvp) record(entry?.name, timestamp(entry?.at));
+        }
       }
-      latestData = {profile, live, hasList:Boolean(list) || Array.isArray(snap?.mvpLastKill)};
+      latestData = {profile, live, hasList:Boolean(list) || Array.isArray(snap?.mvpLastKill) || Boolean(api)};
       updateFloatingBadge(latestData);
       return latestData;
     }
@@ -4848,6 +5078,19 @@
         lastBackgroundAt = now;
       }
       return latestData;
+    }
+
+    let lastStatsList, lastStatsText = '', lastStatsProfile = '';
+    function syncFromStats() {
+      const list = findStatsList();
+      const text = list?.textContent || '';
+      const profile = nativeProfileName();
+      if (list === lastStatsList && text === lastStatsText && profile === lastStatsProfile) return;
+      lastStatsList = list;
+      lastStatsText = text;
+      lastStatsProfile = profile;
+      const data = capture(list);
+      if (isRadarOpen()) render(data);
     }
 
     function render(data = capture()) {
@@ -5134,13 +5377,13 @@
       const control = event.target.closest?.('button, [role="tab"], a');
       if (control && !control.closest('#ro-helper-hud') && !panel.contains(control) && /掛機設定|尋找怪物|切換角色|回城|地圖/.test(control.textContent)) captureBackground();
     }, true);
-    return open;
+    return { button: open, syncFromStats };
   }
 
-  let mvpEntry;
+  let mvpRadar;
   if (!location.pathname.startsWith('/info')) {
     try {
-      mvpEntry = createMvpSchedule();
+      mvpRadar = createMvpSchedule();
     } catch (error) {
       console.warn('個人 MVP 時刻表初始化失敗', error);
     }
