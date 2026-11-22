@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.5.1.7
+// @version      3.5.1.8
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -1705,6 +1705,7 @@
     const caption = clean(e.target.closest('button,a')?.textContent);
     if (/^(?:換角色|切換角色|登出|登入)$/.test(caption)) {
       refineIdentityEpoch++;
+      pageNet.events.dispatchEvent(new Event('ui-abort'));
       refSelected.clear();
     }
     const f = e.target.closest('fieldset');
@@ -2494,7 +2495,7 @@
         if (done) return;
         try {
           if (document.hidden || shouldAbort()) throw Error('角色已變更或流程已停止');
-          const result = check();
+          const result = check(expired);
           if (result || expired) finish(null, result || null);
         } catch (error) { finish(error); }
       }
@@ -2526,8 +2527,8 @@
   async function putStackInCart(root, inventoryTab, cartTab, stack) {
     const cartField = () => uniqueVisible(root, 'fieldset', (field) =>
       /^手推車(?:[ (]|$)/.test(clean(field.querySelector(':scope > legend')?.textContent)));
-    const actor = state.activeCharId;
-    const shouldAbort = () => state.activeCharId !== actor;
+    const actor = state.activeCharId, epoch = refineIdentityEpoch;
+    const shouldAbort = () => state.activeCharId !== actor || refineIdentityEpoch !== epoch;
     const viewRoot = root === document ? document.body : root;
     let box, submitted = false;
     cartShortcutBusy = true;
@@ -2535,10 +2536,11 @@
       cartTab.click();
       const section = root !== document && await waitForCartView(() => uniqueVisible(root, 'nav[aria-label="設定分類"] button',
         (button) => clean(button.textContent) === '手推車'), viewRoot, shouldAbort);
-      if (section && section.getAttribute('aria-current') !== 'page') section?.click();
+      if (document.hidden || shouldAbort()) throw Error('角色已變更或流程已停止');
+      if (section && section.getAttribute('aria-current') !== 'page') section.click();
 
       const field = await waitForCartView(cartField, viewRoot, shouldAbort);
-      if (!field) throw Error('找不到原版手推車介面');
+      if (!field || document.hidden || shouldAbort()) throw Error('找不到原版手推車介面');
       const selected = () => [...field.querySelectorAll('input[type="checkbox"][aria-label^="放入 "]:checked')];
       if (selected().length) throw Error('手推車已有勾選項目，請先完成原本的操作');
       box = uniqueVisible(field, 'input[type="checkbox"][aria-label^="放入 "]',
@@ -2552,12 +2554,12 @@
       const submit = await waitForCartView(() => field.isConnected && selected().length === 1 && selected()[0] === box
         && (stack.qty === 1 || Number(box.closest('li')?.querySelector('input[type="number"]')?.value) === stack.qty)
         && uniqueVisible(field, 'button', (button) => !button.disabled && /^放入\s+1\s+項$/.test(clean(button.textContent))), field, shouldAbort);
-      if (!submit || document.hidden) throw Error('找不到原版「放入 1 項」按鈕');
+      if (!submit?.isConnected || submit.disabled || document.hidden || shouldAbort()) throw Error('找不到原版「放入 1 項」按鈕');
       submitted = true;
       submit.click();
       // Return only after the backpack stack disappeared. The native cart shows errors.
       const moved = await waitForCartView(() => field.isConnected && !box.isConnected, viewRoot, shouldAbort);
-      if (moved && inventoryTab.isConnected && visible(inventoryTab)) inventoryTab.click();
+      if (moved && !document.hidden && !shouldAbort() && inventoryTab.isConnected && visible(inventoryTab)) inventoryTab.click();
     } catch (error) {
       if (!submitted && !document.hidden && !shouldAbort() && box?.isConnected && box.checked && !box.disabled) box.click();
       if (!submitted && !document.hidden && !shouldAbort() && inventoryTab.isConnected && visible(inventoryTab) && cartField()) inventoryTab.click();
@@ -2751,9 +2753,9 @@
 
   function waitForRefineUi(session, check, options = {}) {
     const { root, timeout, allowStopped = false } = options;
-    return waitForUi(() => {
+    return waitForUi(expired => {
       assertRefineSession(session, allowStopped || session.restoring === true);
-      return check();
+      return check(expired);
     }, {
       root, timeout,
       shouldAbort: () => session.epoch !== refineIdentityEpoch ||
@@ -2768,11 +2770,11 @@
     const row = b?.rows.find((r) => r.uid === uid);
     const btn = row && [...row.row.querySelectorAll('td button')].find((x) => !x.disabled && !x.closest('[data-roi-refine-helper]'));
     if (!btn) throw Error('找不到該裝備列');
-    clickRefineControl(session, btn, uid);
+    if (!findNativeDetailBtn(b.table, uid, () => true)) clickRefineControl(session, btn, uid);
     const detail = await waitForRefineUi(session, () => {
       const live = assertRefineTarget(session, uid);
       return live && findNativeDetailBtn(live.table, uid, () => true) && live;
-    }, { root: b.host?.parentElement, timeout: 2400 });
+    }, { timeout: 2400 });
     if (!detail) throw Error('找不到該裝備明細');
     return detail;
   }
@@ -2913,7 +2915,7 @@
     item.itemId === id && Number.isSafeInteger(item.qty) && item.qty > 0 ? sum + item.qty : sum, 0);
 
   // 已付費、材料已扣、等級未升，且點擊後遊戲送出的請求都已回應（且之後沒有新的回應）時，
-  // 連續兩次讀取結果相同即可確定「未升階」，不必等滿 8 秒；遊戲若不走 fetch，仍以原本 80 次上限為後備。
+  // 不同事件喚醒的連續兩讀一致才提前判定；8 秒上限會再做一次最終確認。
   function refineNoUpgradeSettled(gate, confirmed, net) {
     if (!confirmed || net.inFlight > 0 || net.settled <= gate.since) { gate.candidate = null; return false; }
     if (gate.candidate === net.settled) return true;
@@ -2924,19 +2926,41 @@
   async function waitForRefineMaterial(session, id, beforeQty) {
     let backpackReady = false;
     try {
-      assertRefineSession(session);
-      for (let i = 0; i < 40; i++) {
-        await refineAwait(session, sleep(100));
+      const received = await waitForRefineUi(session, () => {
         const b = readBackpackContext(true);
         backpackReady = Boolean(b);
-        if (b && materialCount(b.s.inventory, id) > beforeQty) return;
-      }
+        return b && materialCount(b.s.inventory, id) > beforeQty;
+      }, { timeout: 4000 });
+      if (received) return;
     } catch (error) {
       throw Error(`已送出領倉，確認入帳時停止（${error.message}）。請確認背包與倉庫。`);
     }
     throw Error(backpackReady
       ? '已送出領倉，但材料入帳逾時。請確認背包與倉庫。'
       : '已送出領倉，但等待入帳逾時時背包介面仍未就緒。請確認背包與倉庫。');
+  }
+
+  function waitForRefineResult(session, uid, options) {
+    const { root, curPlus, material, beforeMatQty, beforeZeny, beforeSp, useSkill, settleGate } = options;
+    let previouslyConfirmed = false;
+    return waitForRefineUi(session, expired => {
+      const b = assertRefineTarget(session, uid, true);
+      const nowSt = b?.s.inventory.find(x => x.uid === uid);
+      if (!b) {
+        previouslyConfirmed = false;
+        settleGate.candidate = null;
+        return null;
+      }
+      const paid = useSkill ? b.s.character.sp <= beforeSp - 5 : b.s.character.zeny < beforeZeny;
+      if (nowSt && (nowSt.refine || 0) === curPlus + 1) return { kind: 'success', b, nowSt };
+      if (!nowSt && paid) return { kind: 'broken', b };
+      const confirmedNoUpgrade = Boolean(nowSt && paid && (nowSt.refine || 0) <= curPlus &&
+        (!material || materialCount(b.s.inventory, material) < beforeMatQty));
+      if (refineNoUpgradeSettled(settleGate, confirmedNoUpgrade, pageNet) ||
+          (expired && previouslyConfirmed && confirmedNoUpgrade && pageNet.inFlight === 0)) return { kind: 'failed', b };
+      previouslyConfirmed = confirmedNoUpgrade;
+      return null;
+    }, { root, timeout: 8000 });
   }
 
   async function runHybridRefine(modeType) {
@@ -3005,21 +3029,16 @@
           assertRefineSession(session);
           if (picked.length) {
             const expected = picked.map((x) => `${x.id}:${x.refine}`).sort().join(',');
-            let received = false;
-            for (let i = 0; i < 40; i++) {
+            const received = await waitForRefineUi(session, () => {
               b = readBackpackContext(true);
-              const added = b?.s.inventory.filter((x) => !before.has(x.uid) && trackedItemIds.has(x.itemId)) || [];
-              if (added.map((x) => `${x.itemId}:${x.refine || 0}`).sort().join(',') === expected) {
-                for (const x of added.filter((item) => canRefine(item) && (item.refine || 0) < limitPlus)) {
-                  session.items.set(x.uid, refineItemSignature(x));
-                  runUids.add(x.uid); refSelected.add(x.uid);
-                }
-                received = true;
-                break;
-              }
-              await refineAwait(session, sleep(100));
-            }
+              const added = b?.s.inventory.filter(x => !before.has(x.uid) && trackedItemIds.has(x.itemId)) || [];
+              return added.map(x => `${x.itemId}:${x.refine || 0}`).sort().join(',') === expected ? added : null;
+            }, { timeout: 4000 });
             if (!received) throw Error('領取後背包新增的裝備與本批不符，請確認背包');
+            for (const x of received.filter(item => canRefine(item) && (item.refine || 0) < limitPlus)) {
+              session.items.set(x.uid, refineItemSignature(x));
+              runUids.add(x.uid); refSelected.add(x.uid);
+            }
             if (!b.rows.some((r) => runUids.has(r.uid) && refSelected.has(r.uid) && isEligibleEquip(r) && (r.st.refine || 0) < limitPlus)) {
               throw Error('領出的裝備未出現在可精煉清單');
             }
@@ -3044,7 +3063,6 @@
           if (curPlus < safeTarget && (modeType === 'safe_only' || safeTarget <= refTargetPlus)) {
             setStatus(`⚡ 一鍵安全值：【${target.name}】+${curPlus} ➔ +${safeTarget}...`);
             if (refStop || document.hidden) throw Error('已中止精煉');
-            let confirmed = false;
             const originalConfirm = page.confirm;
             let accepted = true;
             try {
@@ -3059,22 +3077,14 @@
               page.confirm = originalConfirm;
             }
             if (!accepted) throw Error('已取消原生安全精煉');
-            let missingContext = 0;
-            for (let i = 0; i < 60; i++) {
-              await refineAwait(session, sleep(100));
-              if (refStop || document.hidden) throw Error('已中止精煉');
-              b = readBackpackContext(true);
-              if (!b) {
-                if (++missingContext >= 5) throw Error('背包介面持續無法讀取，請確認精煉結果');
-                continue;
-              }
-              missingContext = 0;
-              const nowSt = b?.s.inventory.find((x) => x.uid === uid);
-              if (nowSt && (nowSt.refine || 0) >= safeTarget) { confirmed = true; successCnt++; break; }
-            }
+            const confirmed = await waitForRefineUi(session, () => {
+              const live = assertRefineTarget(session, uid, true);
+              const nowSt = live?.s.inventory.find(x => x.uid === uid);
+              return nowSt && (nowSt.refine || 0) >= safeTarget;
+            }, { root: b.host?.parentElement, timeout: 6000 });
             if (!confirmed) throw Error(`【${target.name}】安全精煉結果逾時，請確認裝備`);
+            successCnt++;
             if (modeType === 'safe_only' || safeTarget === refTargetPlus) refSelected.delete(uid);
-            await refineAwait(session, sleep(250));
             continue;
           }
         }
@@ -3145,50 +3155,39 @@
         }
         if (!userAccepted) throw Error('玩家手動取消精煉');
 
-        let resolved = false, missingContext = 0, confirmedNoUpgrade = false;
-        // Before counting a paid failure, give a late result one more fresh read.
-        for (let i = 0; i < 80 || (i === 80 && confirmedNoUpgrade); i++) {
-          await refineAwait(session, sleep(100));
-          b = readBackpackContext(true);
-          if (refStop || document.hidden) throw Error('已中止精煉');
-          if (!b) {
-            confirmedNoUpgrade = false;
-            settleGate.candidate = null;
-            if (++missingContext >= 5) throw Error('背包介面持續無法讀取，請確認精煉結果');
-            continue;
-          }
-          missingContext = 0;
-          const nowSt = b.s.inventory.find((x) => x.uid === uid);
-          const paid = activeBtn === skillBtn ? (b.s.character.sp <= beforeSp - 5) : (b.s.character.zeny < beforeZeny);
-          confirmedNoUpgrade = Boolean(nowSt && paid && (nowSt.refine || 0) <= curPlus &&
-            (!material || materialCount(b.s.inventory, material) < beforeMatQty));
-          if (nowSt && (nowSt.refine || 0) === curPlus + 1) {
-            successCnt++; resolved = true;
-            if (nowSt.refine >= limitPlus) {
-              refSelected.delete(uid);
-              if (refAutoWh && nowSt.refine >= refTargetPlus && !refStop && !document.hidden) {
-                const stBtn = await readRefineDetail(b.table, uid, (t) => /^存入倉庫|^存倉$/.test(t), session);
-                if (stBtn && !stBtn.disabled) { clickRefineControl(session, stBtn, uid); await refineAwait(session, sleep(150)); }
+        const result = await waitForRefineResult(session, uid, {
+          root: b.host?.parentElement, curPlus, material, beforeMatQty, beforeZeny, beforeSp,
+          useSkill: activeBtn === skillBtn, settleGate
+        });
+        if (!result) throw Error('精煉結果不明，請核對裝備與消耗');
+        b = result.b;
+        if (result.kind === 'success') {
+          successCnt++;
+          if (result.nowSt.refine >= limitPlus) {
+            refSelected.delete(uid);
+            if (refAutoWh && result.nowSt.refine >= refTargetPlus && !refStop && !document.hidden) {
+              const stBtn = await readRefineDetail(b.table, uid, (t) => /^存入倉庫|^存倉$/.test(t), session);
+              if (stBtn && !stBtn.disabled) {
+                clickRefineControl(session, stBtn, uid);
+                const stored = await waitForRefineUi(session, () => {
+                  const live = assertRefineTarget(session, uid, true);
+                  return live && !live.s.inventory.some(x => x.uid === uid);
+                }, { root: b.host?.parentElement, timeout: 4000 });
+                if (!stored) throw Error('存倉結果不明，請核對裝備');
               }
             }
-            break;
           }
-          if (!nowSt && paid) {
-            brokenCnt++; resolved = true; refSelected.delete(uid);
-            break;
-          }
-          if (refineNoUpgradeSettled(settleGate, confirmedNoUpgrade, pageNet)) break;
-        }
-        if (!resolved && confirmedNoUpgrade) {
-          // An unchanged or lower level after the final read counts as a failed attempt.
-          failedCnt++;
-          skipped.add(uid);
+        } else {
           refSelected.delete(uid);
-          setStatus(`⚠️ 【${target.name}】已確認消耗，精煉未升階，繼續下一件`);
-          resolved = true;
+          if (result.kind === 'broken') brokenCnt++;
+          else {
+            failedCnt++;
+            skipped.add(uid);
+            setStatus(`⚠️ 【${target.name}】已確認消耗，精煉未升階，繼續下一件`);
+          }
         }
-        if (!resolved) throw Error('精煉結果不明，請核對裝備與消耗');
-        await refineAwait(session, sleep(320));
+        // A committed result (or the settled failure confirmation) is the boundary before the next item.
+
       }
       if (refStop) throw Error('已中止精煉');
       setStatus(`🎉 精煉完成！累計成功升階 ${successCnt} 次，損壞 ${brokenCnt} 件，未升階 ${failedCnt} 件，略過 ${skipped.size - failedCnt} 件。`);
@@ -4331,7 +4330,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.1.7 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.1.8 測試版</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -6111,8 +6110,8 @@
     async function chooseMap(map, id) {
       if (navigating) return;
       navigating = true;
-      const actor = state.activeCharId;
-      const shouldAbort = () => state.activeCharId !== actor;
+      const actor = state.activeCharId, epoch = refineIdentityEpoch;
+      const shouldAbort = () => state.activeCharId !== actor || refineIdentityEpoch !== epoch;
       closeRadar();
       try {
         if (!mapGroup()) {
