@@ -1043,6 +1043,7 @@
           if (state.activeCharId !== cid) {
             if (state.activeCharId != null) clearQueuedCharacterLogs();
             refineIdentityEpoch++;
+            pageNet.events.dispatchEvent(new Event('ui-abort'));
             refSelected.clear();
           }
           state.activeCharId = cid;
@@ -2475,28 +2476,68 @@
     return candidates.length === 1 ? candidates[0] : null;
   };
 
-  async function waitForCartView(read) {
-    for (let attempt = 0; attempt < 30 && !document.hidden; attempt++) {
-      const result = read();
-      if (result) return result;
-      await sleep(80);
-    }
-    return null;
+  function waitForUi(check, options = {}) {
+    const { root = document.body, timeout = 2400, shouldAbort = () => false } = options;
+    return new Promise((resolve, reject) => {
+      let observer, timer, queued = false, done = false;
+      function finish(error, value) {
+        done = true;
+        observer?.disconnect();
+        clearTimeout(timer);
+        pageNet.events.removeEventListener('settled', schedule);
+        pageNet.events.removeEventListener('ui-abort', schedule);
+        document.removeEventListener('visibilitychange', schedule);
+        if (error) reject(error);
+        else resolve(value);
+      }
+      function inspect(expired = false) {
+        if (done) return;
+        try {
+          if (document.hidden || shouldAbort()) throw Error('角色已變更或流程已停止');
+          const result = check();
+          if (result || expired) finish(null, result || null);
+        } catch (error) { finish(error); }
+      }
+      function schedule() {
+        if (queued || done) return;
+        queued = true;
+        queueMicrotask(() => { queued = false; inspect(); });
+      }
+      inspect();
+      if (done) return;
+      try {
+        if (root) {
+          observer = new MutationObserver(schedule);
+          observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true });
+        }
+        pageNet.events.addEventListener('settled', schedule);
+        pageNet.events.addEventListener('ui-abort', schedule);
+        document.addEventListener('visibilitychange', schedule);
+        timer = setTimeout(() => inspect(true), timeout);
+      } catch (error) { finish(error); }
+    });
+  }
+
+  function waitForCartView(read, root, shouldAbort) {
+    return waitForUi(read, { root, shouldAbort });
   }
 
   let cartShortcutBusy = false;
   async function putStackInCart(root, inventoryTab, cartTab, stack) {
     const cartField = () => uniqueVisible(root, 'fieldset', (field) =>
       /^手推車(?:[ (]|$)/.test(clean(field.querySelector(':scope > legend')?.textContent)));
+    const actor = state.activeCharId;
+    const shouldAbort = () => state.activeCharId !== actor;
+    const viewRoot = root === document ? document.body : root;
     let box, submitted = false;
     cartShortcutBusy = true;
     try {
       cartTab.click();
       const section = root !== document && await waitForCartView(() => uniqueVisible(root, 'nav[aria-label="設定分類"] button',
-        (button) => clean(button.textContent) === '手推車'));
+        (button) => clean(button.textContent) === '手推車'), viewRoot, shouldAbort);
       if (section && section.getAttribute('aria-current') !== 'page') section?.click();
 
-      const field = await waitForCartView(cartField);
+      const field = await waitForCartView(cartField, viewRoot, shouldAbort);
       if (!field) throw Error('找不到原版手推車介面');
       const selected = () => [...field.querySelectorAll('input[type="checkbox"][aria-label^="放入 "]:checked')];
       if (selected().length) throw Error('手推車已有勾選項目，請先完成原本的操作');
@@ -2510,16 +2551,16 @@
       box.click();
       const submit = await waitForCartView(() => field.isConnected && selected().length === 1 && selected()[0] === box
         && (stack.qty === 1 || Number(box.closest('li')?.querySelector('input[type="number"]')?.value) === stack.qty)
-        && uniqueVisible(field, 'button', (button) => !button.disabled && /^放入\s+1\s+項$/.test(clean(button.textContent))));
+        && uniqueVisible(field, 'button', (button) => !button.disabled && /^放入\s+1\s+項$/.test(clean(button.textContent))), field, shouldAbort);
       if (!submit || document.hidden) throw Error('找不到原版「放入 1 項」按鈕');
       submitted = true;
       submit.click();
       // Return only after the backpack stack disappeared. The native cart shows errors.
-      const moved = await waitForCartView(() => field.isConnected && !box.isConnected);
+      const moved = await waitForCartView(() => field.isConnected && !box.isConnected, viewRoot, shouldAbort);
       if (moved && inventoryTab.isConnected && visible(inventoryTab)) inventoryTab.click();
     } catch (error) {
-      if (!submitted && box?.isConnected && box.checked && !box.disabled) box.click();
-      if (!submitted && inventoryTab.isConnected && visible(inventoryTab) && cartField()) inventoryTab.click();
+      if (!submitted && !document.hidden && !shouldAbort() && box?.isConnected && box.checked && !box.disabled) box.click();
+      if (!submitted && !document.hidden && !shouldAbort() && inventoryTab.isConnected && visible(inventoryTab) && cartField()) inventoryTab.click();
       alert(error.message);
     } finally {
       cartShortcutBusy = false;
@@ -2703,6 +2744,24 @@
     button.click();
   }
 
+  function stopRefine() {
+    refStop = true;
+    pageNet.events.dispatchEvent(new Event('ui-abort'));
+  }
+
+  function waitForRefineUi(session, check, options = {}) {
+    const { root, timeout, allowStopped = false } = options;
+    return waitForUi(() => {
+      assertRefineSession(session, allowStopped || session.restoring === true);
+      return check();
+    }, {
+      root, timeout,
+      shouldAbort: () => session.epoch !== refineIdentityEpoch ||
+        (state.activeCharId != null && Number(state.activeCharId) !== session.characterId) ||
+        (refStop && !allowStopped && !session.restoring)
+    });
+  }
+
   async function selectBagItemRow(uid, session) {
     assertRefineTarget(session, uid);
     const b = readBackpackContext(true);
@@ -2710,8 +2769,12 @@
     const btn = row && [...row.row.querySelectorAll('td button')].find((x) => !x.disabled && !x.closest('[data-roi-refine-helper]'));
     if (!btn) throw Error('找不到該裝備列');
     clickRefineControl(session, btn, uid);
-    await refineAwait(session, sleep(90));
-    return assertRefineTarget(session, uid);
+    const detail = await waitForRefineUi(session, () => {
+      const live = assertRefineTarget(session, uid);
+      return live && findNativeDetailBtn(live.table, uid, () => true) && live;
+    }, { root: b.host?.parentElement, timeout: 2400 });
+    if (!detail) throw Error('找不到該裝備明細');
+    return detail;
   }
 
   async function equipItemByUid(uid, session) {
@@ -2721,12 +2784,12 @@
     const eqBtn = await readRefineDetail(b.table, uid, (t) => t === '裝備', session);
     if (!eqBtn || eqBtn.disabled) throw Error('此職業無法穿戴該裝備進行忽克連精煉');
     clickRefineControl(session, eqBtn, uid);
-    for (let i = 0; i < 40; i++) {
-      await refineAwait(session, sleep(100));
-      b = assertRefineTarget(session, uid);
-      if (b && Object.values(b.s.equipment || {}).includes(uid)) return b;
-    }
-    throw Error('穿戴裝備逾時');
+    const equipped = await waitForRefineUi(session, () => {
+      const live = assertRefineTarget(session, uid);
+      return live && Object.values(live.s.equipment || {}).includes(uid) && live;
+    }, { root: b.host?.parentElement, timeout: 4000 });
+    if (!equipped) throw Error('穿戴裝備逾時');
+    return equipped;
   }
 
   async function tryWithdrawFromWarehouse(wantedItemIds, targetPlusLimit, setStatus, limitsById, maxItems = 15, session, materialQuantity = null) {
@@ -2745,7 +2808,7 @@
         switchedTab = tabs.find((el) => clean(el.textContent) === '背包');
         if (!whTab || !switchedTab) return [];
         clickRefineControl(session, whTab);
-        for (let i = 0; i < 25 && !field; i++) { await refineAwait(session, sleep(100)); field = findWhField(); }
+        field = await waitForRefineUi(session, findWhField, { timeout: 2500 });
         if (!field) throw Error('開啟倉庫逾時');
       }
       const checked = () => [...field.querySelectorAll(':scope > ul > li input[type="checkbox"]:checked')];
@@ -2762,13 +2825,18 @@
         if (refStop || document.hidden) throw Error('已中止領倉');
         clickRefineControl(session, cb);
         selected.set(cb, { id, refine, name });
-        await refineAwait(session, sleep(25));
+        const confirmed = await waitForRefineUi(session, () => {
+          if (!field.contains(cb) || !cb.checked) return false;
+          return [...field.querySelectorAll('button')].some(b =>
+            !b.disabled && Number(clean(b.textContent).match(/^(?:領出|取出)\s*(\d+)\s*項/)?.[1]) === selected.size);
+        }, { root: field });
+        if (!confirmed) throw Error('倉庫勾選已變動或無法領取，已中止領倉');
         if (materialQuantity !== null) {
           const amount = li.querySelector('input[type="number"]');
           const stackText = clean(li.textContent).match(/×\s*([\d,]+)/)?.[1];
           const stack = stackText ? Number(stackText.replace(/,/g, '')) : amount ? NaN : 1;
           const quantity = materialWithdrawalAmount(materialQuantity, stack, amount?.max ?? '');
-          if (amount) {
+          if (amount && Number(amount.value) !== quantity) {
             assertRefineSession(session);
             if (!li.contains(amount) || Number(warehouseItemId(li)) !== id) throw Error('領料項目已變動');
             const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
@@ -2776,10 +2844,14 @@
             setter.call(amount, String(quantity));
             amount.dispatchEvent(new Event('input', { bubbles: true }));
             amount.dispatchEvent(new Event('change', { bubbles: true }));
-            await refineAwait(session, sleep(100));
-            const currentAmount = cb.closest('li')?.querySelector('input[type="number"]');
-            if (!currentAmount?.isConnected || Number(currentAmount.value) !== quantity) throw Error('遊戲未接受領料數量，已停止');
-          } else if (stack !== 1 || quantity !== 1) {
+            const accepted = await waitForRefineUi(session, () => {
+              const current = cb.closest('li')?.querySelector('input[type="number"]');
+              if (!current?.isConnected || Number(current.value) !== quantity) return false;
+              // The manual setter changes the DOM immediately; React must also accept the controlled value.
+              return Boolean(getCommittedProps(current, props => props.value != null && Number(props.value) === quantity));
+            }, { root: li });
+            if (!accepted) throw Error('遊戲未接受領料數量，已停止');
+          } else if (!amount && (stack !== 1 || quantity !== 1)) {
             throw Error('無法確認領料數量，已停止以避免取出整疊');
           }
           selected.get(cb).quantity = quantity;
@@ -2809,7 +2881,10 @@
       try { clickRefineControl(session, btn); }
       finally { refineWarehouseSubmitButton = null; }
       submitted = true;
-      if (materialQuantity === null) await refineAwait(session, sleep(450));
+      const acknowledged = await waitForRefineUi(session, () =>
+        [...selected.keys()].every(cb => !cb.isConnected || !cb.checked),
+      { root: field.parentElement, timeout: 4000 });
+      if (!acknowledged) throw Error('已送出領倉，但未確認提交結果。請確認背包與倉庫。');
       return [...selected.values()];
     } finally {
       try {
@@ -2823,10 +2898,7 @@
         }
         if (canClean() && switchedTab?.isConnected && !switchedTab.disabled) {
           switchedTab.click();
-          for (let i = 0; i < 25; i++) {
-            await refineAwait(session, sleep(100), true);
-            if (readBackpackContext(true)) break;
-          }
+          await waitForRefineUi(session, () => readBackpackContext(true), { timeout: 2500, allowStopped: true });
         }
       } catch {
         // 清理中斷時，保留原始領倉錯誤，不再點擊。
@@ -3197,7 +3269,7 @@
     const b = readFiberForUi(() => readBackpackContext());
     if (b === undefined) return;
     if (!b) {
-      if (refBusy && !visitingWarehouse) refStop = true;
+      if (refBusy && !visitingWarehouse) stopRefine();
       refPanel?.remove(); refPanel = null; return;
     }
     if (!refPanel?.isConnected) {
@@ -3277,7 +3349,7 @@
       refPanel.querySelector('#ref-run-safe').onclick = () => runHybridRefine('safe_only');
       refPanel.querySelector('#ref-run-target').onclick = () => runHybridRefine('to_target');
       refPanel.querySelector('#ref-run-skill').onclick = () => runHybridRefine('skill_only');
-      refPanel.querySelector('#ref-stop').onclick = () => { refStop = true; };
+      refPanel.querySelector('#ref-stop').onclick = stopRefine;
     }
 
     if (refinePack && refSelected.size) {
@@ -6020,13 +6092,8 @@
       input.dispatchEvent(new InputEvent('input', {bubbles:true, composed:true, inputType:'insertReplacementText', data:value}));
       input.dispatchEvent(new Event('change', {bubbles:true}));
     }
-    async function until(read) {
-      for (let n = 0; n < 100; n++) {
-        const value = read();
-        if (value) return value;
-        await new Promise(resolve => setTimeout(resolve,80));
-      }
-      return null;
+    function until(read, shouldAbort, root) {
+      return waitForUi(read, { root, timeout: 8000, shouldAbort });
     }
     const mapGroup = () => [...document.querySelectorAll('[role="group"][aria-label="掛機地圖"]')].find(visible);
     function reactFiber(el) {
@@ -6044,22 +6111,24 @@
     async function chooseMap(map, id) {
       if (navigating) return;
       navigating = true;
+      const actor = state.activeCharId;
+      const shouldAbort = () => state.activeCharId !== actor;
       closeRadar();
       try {
         if (!mapGroup()) {
           let tab = namedButton('掛機設定');
           if (!tab) {
             namedButton('冒險')?.click();
-            tab = await until(() => namedButton('掛機設定'));
+            tab = await until(() => namedButton('掛機設定'), shouldAbort);
           }
           if (!tab && !mapGroup()) throw Error('找不到掛機設定入口。請先開啟掛機設定再點地圖。');
           tab?.click();
         }
         const findFilter = () => [...document.querySelectorAll('input[type="search"]')].find(el =>
           visible(el) && el.closest('label')?.textContent.includes('搜尋設定'));
-        await until(() => mapGroup() || findFilter());
+        await until(() => mapGroup() || findFilter(), shouldAbort);
         if (!mapGroup() && findFilter()) setSearch(findFilter(),'掛機地圖');
-        const field = await until(() => mapGroup()?.querySelector('input[aria-label="掛機地圖：搜尋"]'));
+        const field = await until(() => mapGroup()?.querySelector('input[aria-label="掛機地圖：搜尋"]'), shouldAbort);
         if (!field) throw Error('找不到原生掛機地圖選單。');
         const options = pickerMaps(field.closest('[role="group"]'));
         const label = options.find(option => option.id === id)?.name || map;
@@ -6080,7 +6149,7 @@
           }
           return !button.disabled || button.getAttribute('aria-pressed') === 'true' ? button : null;
         };
-        const button = await until(choice);
+        const button = await until(choice, shouldAbort, field.closest('[role="group"]')?.parentElement);
         if (!button) throw Error('原生選單無法確認這張地圖：'+map+'（'+id+'）。');
         let selected = button;
         if (button.getAttribute('aria-pressed') !== 'true') {
@@ -6088,7 +6157,7 @@
           selected = await until(() => {
             const target = choice();
             return target?.getAttribute('aria-pressed') === 'true' && target;
-          });
+          }, shouldAbort, field.closest('[role="group"]')?.parentElement);
         }
         if (!selected) throw Error('尚未確認選取成功，請在掛機設定檢查地圖。');
         selected.scrollIntoView({block:'nearest'});
