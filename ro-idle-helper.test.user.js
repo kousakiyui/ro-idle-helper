@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.5.1.1
+// @version      3.5.1.2
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -1257,10 +1257,12 @@
     syncHudSettings();
   }
   const instanceLockReasons = new Set(['自動保護：精煉裝備', '自動保護：有洞裝備', '自動保護：特殊/插卡']);
+  const isStarProtected = (id) => Boolean(state.whProtectPins && Object.hasOwn(state.whPins, id));
   function getLockReason(id, name, text) {
     if (state.whMarks[id] === 'lock') return '手動上鎖';
+    // ★ 優先於手動解除（neutral）：開啟「清倉排除自選」時，有 ★ 一律保護。
+    if (isStarProtected(id)) return '自選保護（★）';
     if (state.whMarks[id] === 'neutral') return '';
-    if (state.whProtectPins && Object.hasOwn(state.whPins, id)) return '自選保護（★）';
     if (state.whAutoLocks[id] && !instanceLockReasons.has(state.whAutoLocks[id])) return state.whAutoLocks[id];
     if (state.whAutoEquipCard) {
       if (/卡片$/.test(name)) return '自動保護：卡片';
@@ -1573,6 +1575,8 @@
             event.stopPropagation();
             const itemId = warehouseItemId(li);
             if (!itemId) return;
+            // 加入或移除 ★ 都清除該物品的 neutral：★ 與手動解除不並存；移除 ★ 後回到一般自動保護規則。
+            if (state.whMarks[itemId] === 'neutral') setWarehouseEntry('marks', itemId, null);
             if (Object.hasOwn(state.whPins, itemId)) setWarehouseEntry('pins', itemId, null);
             else if (Object.keys(state.whPins).length < 5000) {
               const label = clean(li.querySelector('button[aria-label$="的物品資訊"]')?.textContent)
@@ -1630,7 +1634,12 @@
             const id = warehouseItemId(li);
             if (!id) return;
             const nowLocked = Boolean(getLockReason(id, clean(li.querySelector('button[aria-label$="的物品資訊"]')?.textContent), clean(li.textContent)));
-            setWarehouseEntry('marks', id, nowLocked ? 'neutral' : 'lock');
+            if (nowLocked && state.whMarks[id] !== 'lock' && isStarProtected(id)) {
+              const status = li.closest('fieldset')?.querySelector('[data-ro-wh-status]');
+              if (status) status.textContent = '★ 自選物品一律保護，請先取消 ★ 再解鎖';
+              return;
+            }
+            setWarehouseEntry('marks', id, nowLocked ? (isStarProtected(id) ? null : 'neutral') : 'lock');
             if (nowLocked) setWarehouseEntry('autoLocks', id, null);
             refreshWarehouse();
           };
@@ -1640,7 +1649,7 @@
         lBtn.className = locked ? 'ro-badge-lock' : 'ro-badge-unlock';
         const lbl = locked ? '🔒 已鎖' : '🔓';
         if (lBtn.textContent !== lbl) lBtn.textContent = lbl;
-        lBtn.title = locked ? `${name} (#${id})｜${reason}\n點擊解鎖` : `點擊鎖定 ${name}`;
+        lBtn.title = locked ? `${name} (#${id})｜${reason}\n${reason === '自選保護（★）' ? '請先取消 ★ 再解鎖' : '點擊解鎖'}` : `點擊鎖定 ${name}`;
         warehouseRowSignatures.set(li, signature(clean(li.textContent)));
       }
       syncWarehouseCustomView(f, list);
@@ -1648,9 +1657,15 @@
   }
 
   function bulkWhLock(f, lock) {
-    const ids = [...new Set([...f.querySelectorAll('li')].filter(visible).map((li) => warehouseItemId(li)).filter(Boolean))];
-    if (!ids.length || !confirm(`確定將目前可見的 ${ids.length} 種物品全部${lock ? '上鎖' : '解鎖'}？`)) return;
+    const visibleIds = [...new Set([...f.querySelectorAll('li')].filter(visible).map((li) => warehouseItemId(li)).filter(Boolean))];
+    // 本頁全解略過 ★ 自選物品（★ 一律保護）；全鎖照常包含。
+    const ids = lock ? visibleIds : visibleIds.filter((id) => !isStarProtected(id));
+    const skippedStars = visibleIds.length - ids.length;
+    const status = f.querySelector('[data-ro-wh-status]');
+    if (!ids.length) { if (status && skippedStars) status.textContent = `本頁只有 ★ 自選物品，已略過 ${skippedStars} 種`; return; }
+    if (!confirm(`確定將目前可見的 ${ids.length} 種物品全部${lock ? '上鎖' : '解鎖'}？${skippedStars ? `（略過 ${skippedStars} 種 ★ 自選物品）` : ''}`)) return;
     ids.forEach((id) => { setWarehouseEntry('marks', id, lock ? 'lock' : 'neutral'); if (!lock) setWarehouseEntry('autoLocks', id, null); });
+    if (status && skippedStars) status.textContent = `已略過 ${skippedStars} 種 ★ 自選物品`;
     refreshWarehouse();
   }
 
@@ -4180,7 +4195,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.1.1 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.1.2 測試版</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
