@@ -1,0 +1,16 @@
+【Windows 發表】RO掛機小助手瀏覽器 V1.0
+
+把 RO Idle 的多個帳號放在同一個管理器。每組可開 1～3 個遊戲視窗，每格保有獨立登入資料。常用組別可以釘在首頁，一鍵全開。
+
+這版包含
+・A～E 分組、首頁捷徑與不顯示 Chrome 網址列的遊戲畫面
+・內建 RO Idle 助手，預設正式版，切換測試版前會提醒穩定性風險
+・可匯入自訂 .user.js，指定視窗、個別開關，以及單格試跑
+・深色／淺色外觀，以及 GitHub 程式更新
+
+下載後先完整解壓，再雙擊 ROIdleManager.exe。需已安裝 Chrome，並使用 Windows .NET Framework 4.8 或更新版本。免裝篡改猴、Node.js 和 .NET 8。
+
+已經使用 6.x 的玩家，可在程式內檢查更新。若提示 6.3.0，安裝重啟後顯示的正式版名稱為 V1.0。手動覆蓋時請保留原本的 Data。
+
+下載與教學
+https://github.com/kousakiyui/ro-idle-helper/releases/tag/browser-v1.0
