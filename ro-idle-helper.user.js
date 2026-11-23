@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.5.1
+// @version      3.5.2
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -9,7 +9,6 @@
 // @grant        GM_getValue
 // @grant        GM_addValueChangeListener
 // @grant        GM_setValue
-// @grant        GM_registerMenuCommand
 // @grant        GM_notification
 // @downloadURL https://update.greasyfork.org/scripts/604952/RO%20Idle%20%E4%BE%BF%E5%88%A9%E5%8A%A9%E6%89%8B%EF%BD%9C%E5%80%89%E5%BA%AB%E4%BF%9D%E8%AD%B7%E8%88%87%E8%B7%A8%E5%9F%8E%E5%B8%82%E5%A0%B4.user.js
 // @updateURL https://update.greasyfork.org/scripts/604952/RO%20Idle%20%E4%BE%BF%E5%88%A9%E5%8A%A9%E6%89%8B%EF%BD%9C%E5%80%89%E5%BA%AB%E4%BF%9D%E8%AD%B7%E8%88%87%E8%B7%A8%E5%9F%8E%E5%B8%82%E5%A0%B4.meta.js
@@ -110,6 +109,23 @@
       return validate(value);
     } catch { return fallback; }
   }
+  // 遠端（其他分頁）送來的值與寫入前使用同一組驗證；JSON 字串先檢查大小再解析。
+  function validateStoredValue(value, validate, json = false) {
+    if (json && typeof value === 'string') {
+      if (value.length > MAX_BACKUP_BYTES) throw Error('資料超過大小上限');
+      value = JSON.parse(value);
+    }
+    checkDataTree(value);
+    return validate(value);
+  }
+  // 讀取最新已存值（無效時改用 fallback）→ 只套用本頁的變更 → 驗證 → 寫入，避免整包覆寫其他分頁剛寫入的欄位。
+  function updateStoredValue(key, validate, fallback, mutate, json = false) {
+    const latest = readValidatedSetting(key, validate, fallback, json);
+    const next = validate(mutate(latest));
+    checkDataTree(next);
+    GM_setValue(key, json ? JSON.stringify(next) : next);
+    return next;
+  }
   function validateLearnedItems(value) {
     if (!isPlainRecord(value) || Object.keys(value).length > 3500) throw Error('道具快取超過上限');
     const result = {};
@@ -140,6 +156,15 @@
     }
     return result;
   }
+  // 讀取用：略過格式不符的角色項目，保留其他角色；寫入前仍以嚴格版驗證。
+  function salvageCategoryProfiles(value) {
+    if (!isPlainRecord(value)) throw Error('分類設定格式不符');
+    const result = {};
+    for (const [id, profile] of Object.entries(value).slice(0, 128)) {
+      try { Object.assign(result, validateCategoryProfiles({ [id]: profile })); } catch { /* Preserve other valid profiles. */ }
+    }
+    return result;
+  }
   function prepareBackupWrites(data) {
     checkDataTree(data);
     if (!isPlainRecord(data) || !['ro-idle-lean-backup', 'ro-idle-helper-backup'].includes(data.format)) throw Error('備份格式不符');
@@ -148,8 +173,8 @@
     const settings = data.settings ?? {}, writes = [];
     const add = (key, value, validate, json = false) => {
       if (value === undefined) return;
-      const clean = validate(value);
-      writes.push([key, json ? JSON.stringify(clean) : clean]);
+      const validatedValue = validate(value);
+      writes.push([key, json ? JSON.stringify(validatedValue) : validatedValue]);
     };
     // 相同資料若同時出現在新舊欄位，兩份都須有效，寫入順序沿用舊版優先規則。
     for (const value of [data.prefs, settings.ro_lean_prefs_v091]) add('ro_lean_prefs_v091', value, validatePrefs);
@@ -180,6 +205,29 @@
   }
   const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   if (page.top !== page.self) return;
+
+  const TIMING = Object.freeze({
+    // Network reuse, expiry and notification cadence in milliseconds.
+    charPollInterval: 45000, charPollReuseMargin: 5000,
+    notifyCooldown: 5000, notifyDuration: 5000,
+    // Background UI, battle log and temporary character alerts.
+    hudRefresh: 1500, charAlertExpiry: 600000, recentInteraction: 5000, pointerSample: 100,
+    activeRouter: 160, visibleRouter: 300, hiddenRouter: 700, textRouter: 1500,
+    activeLogFlush: 120, idleLogFlush: 250, alertRenderGap: 250,
+    // MVP background and render cadence.
+    mvpCaptureGap: 1000, mvpBackground: 15000, mvpRender: 30000,
+    // Market refresh and query spacing.
+    marketRefresh: 15000, marketSnapshotWait: 800, marketCrossSearchGap: 2200
+  });
+
+  function debugEnabled() {
+    try { return localStorage.getItem('roi-debug') === '1'; }
+    catch { return false; }
+  }
+
+  function log(scope, ...details) {
+    if (debugEnabled()) console.debug('[ROI ' + scope + ']', ...details);
+  }
 
   function element(tag, content, style) {
     const node = document.createElement(tag);
@@ -271,8 +319,8 @@
       ITEM_DETAIL_DB.set(numId, v);
       if (v?.name) ITEM_NAME_CACHE.set(numId, v.name);
     }
-    if (cleanedPolluted) GM_setValue('roi_learned_item_db_v1', Object.fromEntries(ITEM_DETAIL_DB));
-  } catch {}
+    if (cleanedPolluted) GM_setValue('roi_learned_item_db_v1', validateLearnedItems(Object.fromEntries(ITEM_DETAIL_DB)));
+  } catch { log("items", "無法讀寫本機道具資料"); }
   let dbSaveTimer = null;
   function recordItemDetail(id, info) {
     const numId = Number(id);
@@ -293,8 +341,17 @@
       dbSaveTimer = setTimeout(() => {
         dbSaveTimer = null;
         try {
-          if (ITEM_DETAIL_DB.size <= 3500) GM_setValue('roi_learned_item_db_v1', Object.fromEntries(ITEM_DETAIL_DB));
-        } catch {}
+          // 與其他分頁已存的學習資料合併（本頁較新者優先），驗證後再寫入。
+          updateStoredValue('roi_learned_item_db_v1', validateLearnedItems, {}, (latest) => {
+            const merged = { ...latest };
+            for (const [id, info] of ITEM_DETAIL_DB) merged[id] = { ...(merged[id] || {}), ...info };
+            const ids = Object.keys(merged);
+            for (const id of ids.slice(0, Math.max(0, ids.length - 3500))) if (!ITEM_DETAIL_DB.has(Number(id))) delete merged[id];
+            const keep = Object.keys(merged);
+            for (const id of keep.slice(0, Math.max(0, keep.length - 3500))) delete merged[id];
+            return merged;
+          });
+        } catch { log("items", "無法讀寫本機道具資料"); }
       }, 2000);
     }
   }
@@ -600,6 +657,21 @@
   }
 
   function getCommittedProps(el, matcher) {
+    // 由 return 指標回推 child/sibling 路徑；任何一段對不上（樹正在變動）就不快取。
+    const fiberRouteFrom = (top, node) => {
+      const out = [];
+      for (let guard = 0; node && node !== top; guard++) {
+        const parent = node.return;
+        if (!parent || guard > 80000) return null;
+        let s = parent.child, k = 0;
+        for (; s && s !== node; s = s.sibling) k++;
+        if (!s) return null;
+        for (let i = 0; i < k; i++) out.push('s');
+        out.push('c');
+        node = parent;
+      }
+      return node === top ? out.reverse() : null;
+    };
     const root = currentFiberRoot(el);
     if (!root) return null;
     const cachedRoute = fiberRouteMap.get(el);
@@ -616,21 +688,22 @@
         if (found) return found;
       }
     }
-    const stack = [{ f: root, found: null, route: [] }];
+    const nodes = [root], founds = [null];
     let guard = 0;
     const budget = createFiberScanBudget(el, propsScanRetries);
-    while (stack.length && ++guard < 80000) {
+    while (nodes.length && ++guard < 80000) {
       budget.step();
-      const { f: node, found, route } = stack.pop();
+      const node = nodes.pop(), found = founds.pop();
       const p = node.memoizedProps;
       const next = p && matcher(p) ? p : found;
       if (node.stateNode === el) {
         budget.complete();
-        if (next) fiberRouteMap.set(el, route);
+        const route = next ? fiberRouteFrom(root, node) : null;
+        if (route) fiberRouteMap.set(el, route);
         return next;
       }
-      if (node.sibling) stack.push({ f: node.sibling, found, route: [...route, 's'] });
-      if (node.child) stack.push({ f: node.child, found: next, route: [...route, 'c'] });
+      if (node.sibling) { nodes.push(node.sibling); founds.push(found); }
+      if (node.child) { nodes.push(node.child); founds.push(next); }
     }
     budget.complete();
     return null;
@@ -662,48 +735,75 @@
   state.customProtectWords = readValidatedSetting('ro_custom_protect_words_v091', validateWords, []);
 
   let applyingRemote = false;
+  // 其他分頁寫入的值一律先通過與寫入前相同的驗證；無效即忽略，不改本頁狀態。
+  function listenRemote(key, validate, apply, json = false) {
+    if (typeof GM_addValueChangeListener !== 'function') return;
+    GM_addValueChangeListener(key, (_key, _old, value, remote) => {
+      if (remote !== true || value === undefined) return;
+      let data;
+      try { data = validateStoredValue(value, validate, json); }
+      catch (error) { console.warn('便利助手忽略無效的跨分頁資料', key, error.message); return; }
+      if (data == null) return;
+      applyingRemote = true;
+      try { apply(data); } catch (error) { console.warn('便利助手設定同步', key, error.message); }
+      finally { applyingRemote = false; }
+    });
+  }
   function listenSharedSettings() {
     if (typeof GM_addValueChangeListener !== 'function') return;
-    function listen(key, apply) {
-      GM_addValueChangeListener(key, (_key, _old, value, remote) => {
-        if (remote !== true) return;
-        applyingRemote = true;
-        try { apply(value); } catch (error) { console.warn('便利助手設定同步', key, error.message); }
-        finally { applyingRemote = false; }
-      });
-    }
-    listen('warehouse-helper-v1', value => {
-      const data = validateWarehouse(typeof value === 'string' ? JSON.parse(value) : value);
+    const listen = (key, apply, validate, json) => listenRemote(key, validate, apply, json);
+    listen('warehouse-helper-v1', data => {
       applyWarehouseData(mergeWarehouseChanges(data));
       refreshWarehouse();
-    });
-    listen('ro_custom_protect_words_v091', value => {
-      state.customProtectWords = validateWords(value);
+    }, validateWarehouse, true);
+    listen('ro_custom_protect_words_v091', words => {
+      state.customProtectWords = words;
       const input = document.querySelector('#i-words');
       if (input && document.activeElement !== input) input.value = state.customProtectWords.join(', ');
       refreshWarehouse(true);
-    });
+    }, validateWords);
     listen('ro_lean_prefs_v091', value => {
-      const { hudMin, hudPos, ...prefs } = validatePrefs(value);
+      const { hudMin, hudPos, ...prefs } = value;
       Object.assign(state, prefs);
+      for (const [key, v] of Object.entries(prefs)) prefsSynced.set(key, prefValueSig(v));
       document.documentElement.toggleAttribute('data-roi-money-off', !state.moneyColor);
       hideTooltip();
       refreshWarehouse();
       syncMktMount();
       mvpRadar?.refreshPreferences();
       syncHudSettings();
-    });
+    }, validatePrefs);
+    listen(priceOptionKey, (options) => {
+      priceOptions = options;
+      refreshWarehouse();
+      syncHudSettings();
+    }, validatePriceOptions);
+    listen('roi-favorites-v1', (favs) => {
+      mktFavs = new Set(favs);
+      renderMkt();
+    }, validateFavorites);
+    listen('roi-refine-material-batch-v1', (batch) => {
+      if (refBusy) return;
+      refMaterialBatch = batch;
+      syncRefineSettings(refPanel);
+      syncRefineSettings(document.getElementById('pane-cfg'));
+    }, validateMaterialBatch);
+    listen('roi-rare-auto-map-v1', (enabled) => applyRareAutoMap(enabled), validateRareAutoMap);
   }
 
+  const prefKeys = ['sound', 'notify', 'moneyColor', 'itemHover', 'marketHover', 'whProtectPins', 'mvpMergeRoster', 'whProtect',
+    'whSaleReview', 'whAutoEquipCard', 'hudMin', 'hudPos', 'mktUpperFold'];
+  const prefValueSig = (value) => JSON.stringify(value ?? null);
+  // 本頁最後一次與已存值同步時的各欄位；儲存時只寫入與此不同（本頁改過）的欄位。
+  const prefsSynced = new Map(prefKeys.map((key) => [key, prefValueSig(state[key])]));
   function savePrefs() {
+    const changed = {};
+    for (const key of prefKeys) if (prefValueSig(state[key]) !== prefsSynced.get(key)) changed[key] = state[key];
+    if (!Object.keys(changed).length) return;
     try {
-      GM_setValue('ro_lean_prefs_v091', {
-        sound: state.sound, notify: state.notify,
-        moneyColor: state.moneyColor, itemHover: state.itemHover, marketHover: state.marketHover,
-        whProtectPins: state.whProtectPins, mvpMergeRoster: state.mvpMergeRoster, whProtect: state.whProtect, whSaleReview: state.whSaleReview, whAutoEquipCard: state.whAutoEquipCard,
-        hudMin: state.hudMin, hudPos: state.hudPos, mktUpperFold: state.mktUpperFold
-      });
-    } catch {}
+      updateStoredValue('ro_lean_prefs_v091', validatePrefs, {}, (latest) => ({ ...latest, ...changed }));
+      for (const [key, value] of Object.entries(changed)) prefsSynced.set(key, prefValueSig(value));
+    } catch (error) { console.warn('便利助手偏好設定儲存失敗', error); }
   }
 
   function setWarehouseSaleReview(enabled) {
@@ -874,9 +974,11 @@
             if (!qBtn) {
               qBtn = document.createElement('button');
               qBtn.type = 'button'; qBtn.dataset.roiPriceSearch = ''; qBtn.textContent = '🔍';
-              qBtn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); triggerNativeTownSearch(iName); };
+              // React 重用同一列顯示其他商品時，點擊須搜尋目前的品名而非建立按鈕時的品名。
+              qBtn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); if (qBtn.dataset.roiPriceSearch) triggerNativeTownSearch(qBtn.dataset.roiPriceSearch); };
               td.appendChild(qBtn);
             }
+            if (qBtn.dataset.roiPriceSearch !== iName) qBtn.dataset.roiPriceSearch = iName;
             if (qBtn.title !== `跨城搜尋：${iName}`) qBtn.title = `跨城搜尋：${iName}`;
           }
         }
@@ -914,9 +1016,9 @@
   const alertUser = (title, text, isDanger = false) => {
     if (isDanger) { playTone(220, 'sawtooth', 0.2, 0); playTone(165, 'sawtooth', 0.3, 0.2); }
     else { playTone(880, 'sine', 0.15, 0); playTone(1318, 'triangle', 0.25, 0.15); }
-    if (state.notify && Date.now() - state.lastNotifyAt > 5000 && typeof GM_notification === 'function') {
+    if (state.notify && Date.now() - state.lastNotifyAt > TIMING.notifyCooldown && typeof GM_notification === 'function') {
       state.lastNotifyAt = Date.now();
-      GM_notification({ title, text, timeout: 5000 });
+      GM_notification({ title, text, timeout: TIMING.notifyDuration });
     }
   };
 
@@ -964,6 +1066,7 @@
           if (state.activeCharId !== cid) {
             if (state.activeCharId != null) clearQueuedCharacterLogs();
             refineIdentityEpoch++;
+            pageNet.events.dispatchEvent(new Event('ui-abort'));
             refSelected.clear();
           }
           state.activeCharId = cid;
@@ -986,6 +1089,9 @@
 
   const pollFetch = page.fetch.bind(page);
   let detailRequest = 0;
+  // 頁面（遊戲）發出的 fetch 進行中／已完成數；腳本自己的輪詢走 pollFetch，不計入。
+  // events：每個遊戲請求完成時發 'settled'（detail: path/method/status），全隊移動等流程用來取代固定等待。
+  const pageNet = { inFlight: 0, settled: 0, events: new EventTarget() };
   try {
     const origFetch = page.fetch;
     if (origFetch) {
@@ -994,7 +1100,14 @@
         const path = u.replace(location.origin, '').split('?')[0];
         const isDetail = /^\/api\/characters\/\d+$/.test(path);
         const request = isDetail ? ++detailRequest : 0;
-        const res = await origFetch.apply(this, args);
+        const method = String(args[1]?.method || args[0]?.method || 'GET').toUpperCase();
+        pageNet.inFlight++;
+        let res;
+        try { res = await origFetch.apply(this, args); }
+        finally {
+          pageNet.inFlight--; pageNet.settled++;
+          try { pageNet.events.dispatchEvent(new CustomEvent('settled', { detail: { path, method, status: res?.status ?? 0 } })); } catch {}
+        }
         if (path === '/api/characters' || isDetail) {
           try { res.clone().text().then((t) => { if (!isDetail || request === detailRequest) onApiData(u, t); }).catch(() => {}); } catch {}
         }
@@ -1010,9 +1123,9 @@
   let lastSharedCharPollAt = 0;
   let polledRoster = false;
   let charPollBusy = false;
-  const charPollInterval = 45000;
+  const charPollInterval = TIMING.charPollInterval;
   // 重用門檻須小於輪詢間隔，否則計時器準時觸發時會跳過自己上一輪的結果，實際週期變成 90 秒。
-  const charPollReuseMs = charPollInterval - 5000;
+  const charPollReuseMs = charPollInterval - TIMING.charPollReuseMargin;
   const localZenyAt = new Map();
 
   function validateCharPoll(data) {
@@ -1045,6 +1158,8 @@
     for (const { id } of characters) {
       const balance = zeny[id];
       if (!Number.isSafeInteger(balance) || balance < 0 || (localZenyAt.get(Number(id)) ?? 0) >= at) continue;
+      // 本頁目前角色由前景 API／攤位快照維護 curZeny；輪詢值（deferCatchup）只寫清單會讓清單與儀表盤餘額互相跳動。
+      if (Number(id) === state.activeCharId && localZenyAt.has(Number(id))) continue;
       state.charZenyMap[id] = balance;
       state.initZenyMap[id] ??= balance;
     }
@@ -1188,30 +1303,20 @@
       stats.sellers = Math.max(stats.sellers, sellers.size);
     }
   }
-  function savePriceOptions(options) {
-    GM_setValue(priceOptionKey, options);
-    priceOptions = options;
-    const threshold = document.getElementById('c-price-threshold');
-    if (threshold && threshold !== document.activeElement) threshold.value = options.threshold;
+  // 只合併本次變更的欄位（enabled 或 threshold），不以本頁舊值覆寫其他分頁剛改的另一欄。
+  // 原 Tampermonkey 選單的兩個指令已由儀表盤「設定」分頁的同一組控制項取代（同鍵、同驗證、即時生效）。
+  function savePriceOptions(patch) {
+    priceOptions = updateStoredValue(priceOptionKey, validatePriceOptions, priceOptions, (latest) => ({ ...latest, ...patch }));
     refreshWarehouse();
     syncHudSettings();
   }
-  GM_registerMenuCommand('設定掛牌價自動保護門檻', () => {
-    const input = prompt('普通同規格至少 3 位賣家的最低掛牌價達多少 Zeny 時保護？', String(priceOptions.threshold));
-    if (input === null) return;
-    const threshold = Number(input.replace(/,/g, ''));
-    if (!validThreshold(threshold)) return alert('請輸入 1 至 1 兆之間的整數。');
-    savePriceOptions({ ...priceOptions, threshold });
-  });
-  GM_registerMenuCommand('切換掛牌價自動保護', () => {
-    savePriceOptions({ ...priceOptions, enabled: !priceOptions.enabled });
-    alert(priceOptions.enabled ? '已啟用掛牌價保護' : '已停止新增掛牌價保護，既有鎖定仍保留');
-  });
   const instanceLockReasons = new Set(['自動保護：精煉裝備', '自動保護：有洞裝備', '自動保護：特殊/插卡']);
+  const isStarProtected = (id) => Boolean(state.whProtectPins && Object.hasOwn(state.whPins, id));
   function getLockReason(id, name, text) {
     if (state.whMarks[id] === 'lock') return '手動上鎖';
+    // ★ 優先於手動解除（neutral）：開啟「清倉排除自選」時，有 ★ 一律保護。
+    if (isStarProtected(id)) return '自選保護（★）';
     if (state.whMarks[id] === 'neutral') return '';
-    if (state.whProtectPins && Object.hasOwn(state.whPins, id)) return '自選保護（★）';
     if (state.whAutoLocks[id] && !instanceLockReasons.has(state.whAutoLocks[id])) return state.whAutoLocks[id];
     if (state.whAutoEquipCard) {
       if (/卡片$/.test(name)) return '自動保護：卡片';
@@ -1416,6 +1521,8 @@
     }
     dlg.querySelector('[data-sale-caption]').textContent = clean(saleBtn.textContent);
     document.body.appendChild(dlg);
+    // Esc 關閉時也要移除對話框，避免殘留節點與重複 id。
+    dlg.addEventListener('close', () => dlg.remove());
     dlg.querySelector('#wh-rev-cancel').onclick = () => { whSaleApproval = null; dlg.close(); dlg.remove(); };
     dlg.querySelector('#wh-rev-ok').onclick = () => {
       whSaleApproval = { sig, field: f, saleBtn, until: Date.now() + 15000 };
@@ -1477,7 +1584,7 @@
             for (const li of lis) {
               const cb = li.querySelector('input[type="checkbox"]');
               if (!cb || cb.disabled) continue;
-              if (li.classList.contains('ro-wh-locked')) { if (cb.checked) { cb.click(); cnt--; } continue; }
+              if (li.dataset.roiWhLocked !== undefined) { if (cb.checked) { cb.click(); cnt--; } continue; }
               if (!cb.checked && cnt < 100) { cb.click(); if (++cnt % 15 === 0) await sleep(10); }
             }
           }, 'linear-gradient(135deg,#d97706,#b45309)'),
@@ -1508,8 +1615,8 @@
         const signature = text => JSON.stringify([id, name, text, reason, pinned]);
         if (!saleChecked && warehouseRowSignatures.get(li) === signature(txt) &&
             li.hasAttribute('data-roi-wh-pinned') === pinned &&
-            li.classList.contains('ro-wh-locked') === Boolean(reason) &&
-            li.querySelector('[data-roi-wh-pin]') && li.querySelector('.roi-warehouse-pin-search') &&
+            (li.dataset.roiWhLocked !== undefined) === Boolean(reason) &&
+            li.querySelector('[data-roi-wh-pin]') && li.querySelector('[data-roi-wh-pin-search]') &&
             li.querySelector('[data-ro-lock]')) continue;
         li.toggleAttribute('data-roi-wh-pinned', pinned);
         let pin = li.querySelector('[data-roi-wh-pin]');
@@ -1517,12 +1624,13 @@
           pin = document.createElement('button');
           pin.type = 'button';
           pin.dataset.roiWhPin = '';
-          pin.className = 'roi-warehouse-pin';
           pin.onclick = (event) => {
             event.preventDefault();
             event.stopPropagation();
             const itemId = warehouseItemId(li);
             if (!itemId) return;
+            // 加入或移除 ★ 都清除該物品的 neutral：★ 與手動解除不並存；移除 ★ 後回到一般自動保護規則。
+            if (state.whMarks[itemId] === 'neutral') setWarehouseEntry('marks', itemId, null);
             if (Object.hasOwn(state.whPins, itemId)) setWarehouseEntry('pins', itemId, null);
             else if (Object.keys(state.whPins).length < 5000) {
               const label = clean(li.querySelector('button[aria-label$="的物品資訊"]')?.textContent)
@@ -1534,12 +1642,12 @@
           };
           li.insertBefore(pin, cb.nextSibling);
         }
-        if (!li.querySelector('.roi-warehouse-pin-search')) {
+        if (!li.querySelector('[data-roi-wh-pin-search]')) {
           const search = document.createElement('button');
           search.type = 'button';
           search.textContent = '🔍';
           search.title = '跨城查價';
-          search.className = 'roi-warehouse-pin-search';
+          search.dataset.roiWhPinSearch = '';
           search.onclick = async event => {
             event.preventDefault();
             event.stopPropagation();
@@ -1569,7 +1677,7 @@
         ITEM_NAME_CACHE.set(Number(id), name.replace(/^\+\d+\s*/, ''));
         const locked = Boolean(reason);
         if (saleChecked) cb.click();
-        li.classList.toggle('ro-wh-locked', locked);
+        li.toggleAttribute('data-roi-wh-locked', locked);
 
         let lBtn = li.querySelector('[data-ro-lock]');
         if (!lBtn) {
@@ -1580,17 +1688,22 @@
             const id = warehouseItemId(li);
             if (!id) return;
             const nowLocked = Boolean(getLockReason(id, clean(li.querySelector('button[aria-label$="的物品資訊"]')?.textContent), clean(li.textContent)));
-            setWarehouseEntry('marks', id, nowLocked ? 'neutral' : 'lock');
+            if (nowLocked && state.whMarks[id] !== 'lock' && isStarProtected(id)) {
+              const status = li.closest('fieldset')?.querySelector('[data-ro-wh-status]');
+              if (status) status.textContent = '★ 自選物品一律保護，請先取消 ★ 再解鎖';
+              return;
+            }
+            setWarehouseEntry('marks', id, nowLocked ? (isStarProtected(id) ? null : 'neutral') : 'lock');
             if (nowLocked) setWarehouseEntry('autoLocks', id, null);
             refreshWarehouse();
           };
           li.insertBefore(lBtn, cb.nextSibling);
         }
         lBtn.dataset.roLock = id;
-        lBtn.className = locked ? 'ro-badge-lock' : 'ro-badge-unlock';
+        lBtn.dataset.roiWhBadge = locked ? 'lock' : 'unlock';
         const lbl = locked ? '🔒 已鎖' : '🔓';
         if (lBtn.textContent !== lbl) lBtn.textContent = lbl;
-        lBtn.title = locked ? `${name} (#${id})｜${reason}\n點擊解鎖` : `點擊鎖定 ${name}`;
+        lBtn.title = locked ? `${name} (#${id})｜${reason}\n${reason === '自選保護（★）' ? '請先取消 ★ 再解鎖' : '點擊解鎖'}` : `點擊鎖定 ${name}`;
         warehouseRowSignatures.set(li, signature(clean(li.textContent)));
       }
       syncWarehouseCustomView(f, list);
@@ -1598,9 +1711,15 @@
   }
 
   function bulkWhLock(f, lock) {
-    const ids = [...new Set([...f.querySelectorAll('li')].filter(visible).map((li) => warehouseItemId(li)).filter(Boolean))];
-    if (!ids.length || !confirm(`確定將目前可見的 ${ids.length} 種物品全部${lock ? '上鎖' : '解鎖'}？`)) return;
+    const visibleIds = [...new Set([...f.querySelectorAll('li')].filter(visible).map((li) => warehouseItemId(li)).filter(Boolean))];
+    // 本頁全解略過 ★ 自選物品（★ 一律保護）；全鎖照常包含。
+    const ids = lock ? visibleIds : visibleIds.filter((id) => !isStarProtected(id));
+    const skippedStars = visibleIds.length - ids.length;
+    const status = f.querySelector('[data-ro-wh-status]');
+    if (!ids.length) { if (status && skippedStars) status.textContent = `本頁只有 ★ 自選物品，已略過 ${skippedStars} 種`; return; }
+    if (!confirm(`確定將目前可見的 ${ids.length} 種物品全部${lock ? '上鎖' : '解鎖'}？${skippedStars ? `（略過 ${skippedStars} 種 ★ 自選物品）` : ''}`)) return;
     ids.forEach((id) => { setWarehouseEntry('marks', id, lock ? 'lock' : 'neutral'); if (!lock) setWarehouseEntry('autoLocks', id, null); });
+    if (status && skippedStars) status.textContent = `已略過 ${skippedStars} 種 ★ 自選物品`;
     refreshWarehouse();
   }
 
@@ -1609,6 +1728,7 @@
     const caption = clean(e.target.closest('button,a')?.textContent);
     if (/^(?:換角色|切換角色|登出|登入)$/.test(caption)) {
       refineIdentityEpoch++;
+      pageNet.events.dispatchEvent(new Event('ui-abort'));
       refSelected.clear();
     }
     const f = e.target.closest('fieldset');
@@ -1686,7 +1806,7 @@
           const cb = row.querySelector('input[type="checkbox"]');
           if (!cb || !f.contains(cb) || cb === source || cb.disabled || cb.checked === next) continue;
           if (row.querySelector('img[src*="/client/item/"]')?.getAttribute('src') !== src) continue;
-          if (next && row.classList.contains('ro-wh-locked') && clean(cb.getAttribute('aria-label')).startsWith('賣掉 ')) continue;
+          if (next && row.dataset.roiWhLocked !== undefined && clean(cb.getAttribute('aria-label')).startsWith('賣掉 ')) continue;
           cb.click();
           if (cb.checked === next) count += next ? 1 : -1;
         }
@@ -1733,13 +1853,29 @@
   }, true);
 
   const rarePanels = new WeakMap(), rareKnownRoots = new Set(), rareLastMap = new WeakMap();
-  let rareAutoMap = readValidatedSetting('roi-rare-auto-map-v1', (value) => {
+  // 同步造成的草稿淨變動：itemId → true（勾）／false（取消）。面板回到乾淨（套用鈕停用）或換角色時清空。
+  const rareSyncDelta = { charId: null, lockMap: null, net: new Map(), tainted: false };
+  function resetRareSyncDelta() { rareSyncDelta.charId = null; rareSyncDelta.lockMap = null; rareSyncDelta.net.clear(); rareSyncDelta.tainted = false; }
+  function noteRareSync(lockMap, id, checked) {
+    const charId = Number(state.activeCharId) || null;
+    if (rareSyncDelta.charId !== charId) { resetRareSyncDelta(); rareSyncDelta.charId = charId; }
+    rareSyncDelta.lockMap = typeof lockMap === 'string' ? lockMap : null;
+    if (!Number.isSafeInteger(id)) { rareSyncDelta.tainted = true; return; }
+    if (rareSyncDelta.net.has(id) && rareSyncDelta.net.get(id) !== checked) rareSyncDelta.net.delete(id);
+    else rareSyncDelta.net.set(id, checked);
+  }
+  const settingsApplyDirty = () => [...document.querySelectorAll('button')].some((b) => !b.disabled && clean(b.textContent) === '套用設定' && visible(b));
+  function validateRareAutoMap(value) {
     if (typeof value !== 'boolean') throw Error('稀有掉落開關格式不符');
     return value;
-  }, true);
+  }
+  let rareAutoMap = readValidatedSetting('roi-rare-auto-map-v1', validateRareAutoMap, true);
   function setRareAutoMap(enabled) {
+    try { GM_setValue('roi-rare-auto-map-v1', validateRareAutoMap(enabled)); } catch { log("rare", "無法保存或讀取稀有掉落設定"); }
+    applyRareAutoMap(enabled);
+  }
+  function applyRareAutoMap(enabled) {
     rareAutoMap = enabled;
-    try { GM_setValue('roi-rare-auto-map-v1', enabled); } catch {}
     for (const root of rareKnownRoots) {
       rareLastMap.delete(root);
       if (!enabled) {
@@ -1748,6 +1884,7 @@
       }
     }
     refreshRareHelper();
+    syncHudSettings();
   }
   const isRareHeading = (s) => /^必撿稀有掉落\s*\(\s*\d+\s*項\s*\)$/.test(clean(s));
   const isRareBoundary = (s) => /^不在這張地圖(?:的)?\s*[:：]?$/.test(clean(s));
@@ -1826,7 +1963,7 @@
     return null;
   }
 
-  function fastSelectRare(root, group, next) {
+  function fastSelectRare(root, group, next, sync = null) {
     const rs = scanRareItems(root);
     const statusSpan = rarePanels.get(root)?.querySelector('[data-ro-rare-status]');
     if (!rs) { if (statusSpan) statusSpan.textContent = '⚠️ 無法辨識本圖與其他地圖的掉落'; return false; }
@@ -1846,7 +1983,13 @@
         if (statusSpan) statusSpan.textContent = '⚠️ 有無法勾選的道具，請檢查清單';
         return false;
       }
+      let syncId = null;
+      if (sync) {
+        syncId = sync.ids.get(current.box);
+        if (syncId == null) { for (const e of getRareContext(root)?.entries || []) sync.ids.set(e.box, e.id); syncId = sync.ids.get(current.box); }
+      }
       current.box.click();
+      if (sync) noteRareSync(sync.lockMap, syncId, desired);
       if (current.box.isConnected && current.box.checked !== desired) {
         if (statusSpan) statusSpan.textContent = '⚠️ 遊戲未接受勾選，請檢查清單';
         return false;
@@ -1863,7 +2006,12 @@
     return true;
   }
 
+  const rareHeadingXPath = '//text()[starts-with(normalize-space(.), "必撿稀有掉落") and not(ancestor::*[@id="ro-helper-hud"])]';
   function refreshRareHelper() {
+    // 頁面沒有「必撿稀有掉落」文字時，略過整頁 div/span 掃描（原生 XPath 單次比對）。
+    try {
+      if (![...document.body.children].some((c) => !c.matches('#ro-helper-hud,#roi-helper-mvp-panel,#roi-item-hover-tooltip,script,style') && c.textContent.includes('必撿稀有掉落'))) return;
+    } catch { log("rare", "無法保存或讀取稀有掉落設定"); }
     for (const root of findRareRoots()) {
       let panel = rarePanels.get(root);
       if (!panel?.isConnected || !root.contains(panel)) {
@@ -1879,12 +2027,14 @@
         else root.prepend(panel);
         rarePanels.set(root, panel);
       }
+      if (rareSyncDelta.net.size && !settingsApplyDirty()) resetRareSyncDelta();
       if (rareAutoMap) {
         const context = getRareContext(root);
         if (context) {
           const mapSig = JSON.stringify([context.p.draft.lockMap, context.p.monsterIds]);
           if (rareLastMap.get(root) !== mapSig) {
-            if (fastSelectRare(root, 'sync', true)) rareLastMap.set(root, mapSig);
+            const sync = { lockMap: context.p.draft.lockMap, ids: new Map(context.entries.map((e) => [e.box, e.id])) };
+            if (fastSelectRare(root, 'sync', true, sync)) rareLastMap.set(root, mapSig);
           }
         }
       }
@@ -1925,7 +2075,7 @@
   let PACK_ITEMS_MAP = null;
   function ensurePackItemsLoaded() {
     if (PACK_ITEMS_MAP) return;
-    try { void loadLootPack().catch(() => {}); } catch {}
+    try { void loadLootPack().catch(() => log("loot", "無法預載掉落資料")); } catch { log("loot", "無法開始預載掉落資料"); }
   }
   function loadLootPack() {
     const link = document.querySelector('link[rel="modulepreload"][href^="/assets/pack-"]');
@@ -2086,7 +2236,7 @@
         request++;
       };
       const saveSettings = () => {
-        const all = readValidatedSetting(settingsKey, validateCategoryProfiles, {});
+        const all = readValidatedSetting(settingsKey, salvageCategoryProfiles, {});
         const next = plainObject(all) ? { ...all } : {};
         next[boundCharacter] = preferences;
         GM_setValue(settingsKey, validateCategoryProfiles(next));
@@ -2289,7 +2439,8 @@
     let host = inputs[0].parentElement;
     while (host && host !== document.body && !host.querySelector('table.xp-table')) host = host.parentElement;
     const table = host?.querySelector('table.xp-table');
-    if (!table || !table.textContent.includes('回城賣') || !table.textContent.includes('存倉')) return null;
+    const tableText = table?.textContent || '';
+    if (!tableText.includes('回城賣') || !tableText.includes('存倉')) return null;
     const tree = currentFiberRoot(table);
     if (!tree) return null;
     if (!force && bagMemo?.tree === tree && bagMemo.table === table && bagMemo.val.host.isConnected) return bagMemo.val;
@@ -2349,29 +2500,70 @@
     return candidates.length === 1 ? candidates[0] : null;
   };
 
-  async function waitForCartView(read) {
-    for (let attempt = 0; attempt < 30 && !document.hidden; attempt++) {
-      const result = read();
-      if (result) return result;
-      await sleep(80);
-    }
-    return null;
+  function waitForUi(check, options = {}) {
+    const { root = document.body, timeout = 2400, shouldAbort = () => false } = options;
+    return new Promise((resolve, reject) => {
+      let observer, timer, queued = false, done = false;
+      function finish(error, value) {
+        done = true;
+        observer?.disconnect();
+        clearTimeout(timer);
+        pageNet.events.removeEventListener('settled', schedule);
+        pageNet.events.removeEventListener('ui-abort', schedule);
+        document.removeEventListener('visibilitychange', schedule);
+        if (error) reject(error);
+        else resolve(value);
+      }
+      function inspect(expired = false) {
+        if (done) return;
+        try {
+          if (document.hidden || shouldAbort()) throw Error('角色已變更或流程已停止');
+          const result = check(expired);
+          if (result || expired) finish(null, result || null);
+        } catch (error) { finish(error); }
+      }
+      function schedule() {
+        if (queued || done) return;
+        queued = true;
+        queueMicrotask(() => { queued = false; inspect(); });
+      }
+      inspect();
+      if (done) return;
+      try {
+        if (root) {
+          observer = new MutationObserver(schedule);
+          observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true });
+        }
+        pageNet.events.addEventListener('settled', schedule);
+        pageNet.events.addEventListener('ui-abort', schedule);
+        document.addEventListener('visibilitychange', schedule);
+        timer = setTimeout(() => inspect(true), timeout);
+      } catch (error) { finish(error); }
+    });
+  }
+
+  function waitForCartView(read, root, shouldAbort) {
+    return waitForUi(read, { root, shouldAbort });
   }
 
   let cartShortcutBusy = false;
   async function putStackInCart(root, inventoryTab, cartTab, stack) {
     const cartField = () => uniqueVisible(root, 'fieldset', (field) =>
       /^手推車(?:[ (]|$)/.test(clean(field.querySelector(':scope > legend')?.textContent)));
+    const actor = state.activeCharId, epoch = refineIdentityEpoch;
+    const shouldAbort = () => state.activeCharId !== actor || refineIdentityEpoch !== epoch;
+    const viewRoot = root === document ? document.body : root;
     let box, submitted = false;
     cartShortcutBusy = true;
     try {
       cartTab.click();
       const section = root !== document && await waitForCartView(() => uniqueVisible(root, 'nav[aria-label="設定分類"] button',
-        (button) => clean(button.textContent) === '手推車'));
-      if (section && section.getAttribute('aria-current') !== 'page') section?.click();
+        (button) => clean(button.textContent) === '手推車'), viewRoot, shouldAbort);
+      if (document.hidden || shouldAbort()) throw Error('角色已變更或流程已停止');
+      if (section && section.getAttribute('aria-current') !== 'page') section.click();
 
-      const field = await waitForCartView(cartField);
-      if (!field) throw Error('找不到原版手推車介面');
+      const field = await waitForCartView(cartField, viewRoot, shouldAbort);
+      if (!field || document.hidden || shouldAbort()) throw Error('找不到原版手推車介面');
       const selected = () => [...field.querySelectorAll('input[type="checkbox"][aria-label^="放入 "]:checked')];
       if (selected().length) throw Error('手推車已有勾選項目，請先完成原本的操作');
       box = uniqueVisible(field, 'input[type="checkbox"][aria-label^="放入 "]',
@@ -2384,16 +2576,16 @@
       box.click();
       const submit = await waitForCartView(() => field.isConnected && selected().length === 1 && selected()[0] === box
         && (stack.qty === 1 || Number(box.closest('li')?.querySelector('input[type="number"]')?.value) === stack.qty)
-        && uniqueVisible(field, 'button', (button) => !button.disabled && /^放入\s+1\s+項$/.test(clean(button.textContent))));
-      if (!submit || document.hidden) throw Error('找不到原版「放入 1 項」按鈕');
+        && uniqueVisible(field, 'button', (button) => !button.disabled && /^放入\s+1\s+項$/.test(clean(button.textContent))), field, shouldAbort);
+      if (!submit?.isConnected || submit.disabled || document.hidden || shouldAbort()) throw Error('找不到原版「放入 1 項」按鈕');
       submitted = true;
       submit.click();
       // Return only after the backpack stack disappeared. The native cart shows errors.
-      const moved = await waitForCartView(() => field.isConnected && !box.isConnected);
-      if (moved && inventoryTab.isConnected && visible(inventoryTab)) inventoryTab.click();
+      const moved = await waitForCartView(() => field.isConnected && !box.isConnected, viewRoot, shouldAbort);
+      if (moved && !document.hidden && !shouldAbort() && inventoryTab.isConnected && visible(inventoryTab)) inventoryTab.click();
     } catch (error) {
-      if (!submitted && box?.isConnected && box.checked && !box.disabled) box.click();
-      if (!submitted && inventoryTab.isConnected && visible(inventoryTab) && cartField()) inventoryTab.click();
+      if (!submitted && !document.hidden && !shouldAbort() && box?.isConnected && box.checked && !box.disabled) box.click();
+      if (!submitted && !document.hidden && !shouldAbort() && inventoryTab.isConnected && visible(inventoryTab) && cartField()) inventoryTab.click();
       alert(error.message);
     } finally {
       cartShortcutBusy = false;
@@ -2577,15 +2769,37 @@
     button.click();
   }
 
+  function stopRefine() {
+    refStop = true;
+    pageNet.events.dispatchEvent(new Event('ui-abort'));
+  }
+
+  function waitForRefineUi(session, check, options = {}) {
+    const { root, timeout, allowStopped = false } = options;
+    return waitForUi(expired => {
+      assertRefineSession(session, allowStopped || session.restoring === true);
+      return check(expired);
+    }, {
+      root, timeout,
+      shouldAbort: () => session.epoch !== refineIdentityEpoch ||
+        (state.activeCharId != null && Number(state.activeCharId) !== session.characterId) ||
+        (refStop && !allowStopped && !session.restoring)
+    });
+  }
+
   async function selectBagItemRow(uid, session) {
     assertRefineTarget(session, uid);
     const b = readBackpackContext(true);
     const row = b?.rows.find((r) => r.uid === uid);
     const btn = row && [...row.row.querySelectorAll('td button')].find((x) => !x.disabled && !x.closest('[data-roi-refine-helper]'));
     if (!btn) throw Error('找不到該裝備列');
-    clickRefineControl(session, btn, uid);
-    await refineAwait(session, sleep(90));
-    return assertRefineTarget(session, uid);
+    if (!findNativeDetailBtn(b.table, uid, () => true)) clickRefineControl(session, btn, uid);
+    const detail = await waitForRefineUi(session, () => {
+      const live = assertRefineTarget(session, uid);
+      return live && findNativeDetailBtn(live.table, uid, () => true) && live;
+    }, { timeout: 2400 });
+    if (!detail) throw Error('找不到該裝備明細');
+    return detail;
   }
 
   async function equipItemByUid(uid, session) {
@@ -2595,12 +2809,12 @@
     const eqBtn = await readRefineDetail(b.table, uid, (t) => t === '裝備', session);
     if (!eqBtn || eqBtn.disabled) throw Error('此職業無法穿戴該裝備進行忽克連精煉');
     clickRefineControl(session, eqBtn, uid);
-    for (let i = 0; i < 40; i++) {
-      await refineAwait(session, sleep(100));
-      b = assertRefineTarget(session, uid);
-      if (b && Object.values(b.s.equipment || {}).includes(uid)) return b;
-    }
-    throw Error('穿戴裝備逾時');
+    const equipped = await waitForRefineUi(session, () => {
+      const live = assertRefineTarget(session, uid);
+      return live && Object.values(live.s.equipment || {}).includes(uid) && live;
+    }, { root: b.host?.parentElement, timeout: 4000 });
+    if (!equipped) throw Error('穿戴裝備逾時');
+    return equipped;
   }
 
   async function tryWithdrawFromWarehouse(wantedItemIds, targetPlusLimit, setStatus, limitsById, maxItems = 15, session, materialQuantity = null) {
@@ -2619,7 +2833,7 @@
         switchedTab = tabs.find((el) => clean(el.textContent) === '背包');
         if (!whTab || !switchedTab) return [];
         clickRefineControl(session, whTab);
-        for (let i = 0; i < 25 && !field; i++) { await refineAwait(session, sleep(100)); field = findWhField(); }
+        field = await waitForRefineUi(session, findWhField, { timeout: 2500 });
         if (!field) throw Error('開啟倉庫逾時');
       }
       const checked = () => [...field.querySelectorAll(':scope > ul > li input[type="checkbox"]:checked')];
@@ -2636,13 +2850,18 @@
         if (refStop || document.hidden) throw Error('已中止領倉');
         clickRefineControl(session, cb);
         selected.set(cb, { id, refine, name });
-        await refineAwait(session, sleep(25));
+        const confirmed = await waitForRefineUi(session, () => {
+          if (!field.contains(cb) || !cb.checked) return false;
+          return [...field.querySelectorAll('button')].some(b =>
+            !b.disabled && Number(clean(b.textContent).match(/^(?:領出|取出)\s*(\d+)\s*項/)?.[1]) === selected.size);
+        }, { root: field });
+        if (!confirmed) throw Error('倉庫勾選已變動或無法領取，已中止領倉');
         if (materialQuantity !== null) {
           const amount = li.querySelector('input[type="number"]');
           const stackText = clean(li.textContent).match(/×\s*([\d,]+)/)?.[1];
           const stack = stackText ? Number(stackText.replace(/,/g, '')) : amount ? NaN : 1;
           const quantity = materialWithdrawalAmount(materialQuantity, stack, amount?.max ?? '');
-          if (amount) {
+          if (amount && Number(amount.value) !== quantity) {
             assertRefineSession(session);
             if (!li.contains(amount) || Number(warehouseItemId(li)) !== id) throw Error('領料項目已變動');
             const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
@@ -2650,10 +2869,14 @@
             setter.call(amount, String(quantity));
             amount.dispatchEvent(new Event('input', { bubbles: true }));
             amount.dispatchEvent(new Event('change', { bubbles: true }));
-            await refineAwait(session, sleep(100));
-            const currentAmount = cb.closest('li')?.querySelector('input[type="number"]');
-            if (!currentAmount?.isConnected || Number(currentAmount.value) !== quantity) throw Error('遊戲未接受領料數量，已停止');
-          } else if (stack !== 1 || quantity !== 1) {
+            const accepted = await waitForRefineUi(session, () => {
+              const current = cb.closest('li')?.querySelector('input[type="number"]');
+              if (!current?.isConnected || Number(current.value) !== quantity) return false;
+              // The manual setter changes the DOM immediately; React must also accept the controlled value.
+              return Boolean(getCommittedProps(current, props => props.value != null && Number(props.value) === quantity));
+            }, { root: li });
+            if (!accepted) throw Error('遊戲未接受領料數量，已停止');
+          } else if (!amount && (stack !== 1 || quantity !== 1)) {
             throw Error('無法確認領料數量，已停止以避免取出整疊');
           }
           selected.get(cb).quantity = quantity;
@@ -2683,7 +2906,10 @@
       try { clickRefineControl(session, btn); }
       finally { refineWarehouseSubmitButton = null; }
       submitted = true;
-      if (materialQuantity === null) await refineAwait(session, sleep(450));
+      const acknowledged = await waitForRefineUi(session, () =>
+        [...selected.keys()].every(cb => !cb.isConnected || !cb.checked),
+      { root: field.parentElement, timeout: 4000 });
+      if (!acknowledged) throw Error('已送出領倉，但未確認提交結果。請確認背包與倉庫。');
       return [...selected.values()];
     } finally {
       try {
@@ -2697,10 +2923,7 @@
         }
         if (canClean() && switchedTab?.isConnected && !switchedTab.disabled) {
           switchedTab.click();
-          for (let i = 0; i < 25; i++) {
-            await refineAwait(session, sleep(100), true);
-            if (readBackpackContext(true)) break;
-          }
+          await waitForRefineUi(session, () => readBackpackContext(true), { timeout: 2500, allowStopped: true });
         }
       } catch {
         // 清理中斷時，保留原始領倉錯誤，不再點擊。
@@ -2714,22 +2937,53 @@
   const materialCount = (inventory, id) => inventory.reduce((sum, item) =>
     item.itemId === id && Number.isSafeInteger(item.qty) && item.qty > 0 ? sum + item.qty : sum, 0);
 
+  // 已付費、材料已扣、等級未升，且點擊後遊戲送出的請求都已回應（且之後沒有新的回應）時，
+  // 不同事件喚醒的連續兩讀一致才提前判定；8 秒上限會再做一次最終確認。
+  function refineNoUpgradeSettled(gate, confirmed, net) {
+    if (!confirmed || net.inFlight > 0 || net.settled <= gate.since) { gate.candidate = null; return false; }
+    if (gate.candidate === net.settled) return true;
+    gate.candidate = net.settled;
+    return false;
+  }
+
   async function waitForRefineMaterial(session, id, beforeQty) {
     let backpackReady = false;
     try {
-      assertRefineSession(session);
-      for (let i = 0; i < 40; i++) {
-        await refineAwait(session, sleep(100));
+      const received = await waitForRefineUi(session, () => {
         const b = readBackpackContext(true);
         backpackReady = Boolean(b);
-        if (b && materialCount(b.s.inventory, id) > beforeQty) return;
-      }
+        return b && materialCount(b.s.inventory, id) > beforeQty;
+      }, { timeout: 4000 });
+      if (received) return;
     } catch (error) {
       throw Error(`已送出領倉，確認入帳時停止（${error.message}）。請確認背包與倉庫。`);
     }
     throw Error(backpackReady
       ? '已送出領倉，但材料入帳逾時。請確認背包與倉庫。'
       : '已送出領倉，但等待入帳逾時時背包介面仍未就緒。請確認背包與倉庫。');
+  }
+
+  function waitForRefineResult(session, uid, options) {
+    const { root, curPlus, material, beforeMatQty, beforeZeny, beforeSp, useSkill, settleGate } = options;
+    let previouslyConfirmed = false;
+    return waitForRefineUi(session, expired => {
+      const b = assertRefineTarget(session, uid, true);
+      const nowSt = b?.s.inventory.find(x => x.uid === uid);
+      if (!b) {
+        previouslyConfirmed = false;
+        settleGate.candidate = null;
+        return null;
+      }
+      const paid = useSkill ? b.s.character.sp <= beforeSp - 5 : b.s.character.zeny < beforeZeny;
+      if (nowSt && (nowSt.refine || 0) === curPlus + 1) return { kind: 'success', b, nowSt };
+      if (!nowSt && paid) return { kind: 'broken', b };
+      const confirmedNoUpgrade = Boolean(nowSt && paid && (nowSt.refine || 0) <= curPlus &&
+        (!material || materialCount(b.s.inventory, material) < beforeMatQty));
+      if (refineNoUpgradeSettled(settleGate, confirmedNoUpgrade, pageNet) ||
+          (expired && previouslyConfirmed && confirmedNoUpgrade && pageNet.inFlight === 0)) return { kind: 'failed', b };
+      previouslyConfirmed = confirmedNoUpgrade;
+      return null;
+    }, { root, timeout: 8000 });
   }
 
   async function runHybridRefine(modeType) {
@@ -2798,21 +3052,16 @@
           assertRefineSession(session);
           if (picked.length) {
             const expected = picked.map((x) => `${x.id}:${x.refine}`).sort().join(',');
-            let received = false;
-            for (let i = 0; i < 40; i++) {
+            const received = await waitForRefineUi(session, () => {
               b = readBackpackContext(true);
-              const added = b?.s.inventory.filter((x) => !before.has(x.uid) && trackedItemIds.has(x.itemId)) || [];
-              if (added.map((x) => `${x.itemId}:${x.refine || 0}`).sort().join(',') === expected) {
-                for (const x of added.filter((item) => canRefine(item) && (item.refine || 0) < limitPlus)) {
-                  session.items.set(x.uid, refineItemSignature(x));
-                  runUids.add(x.uid); refSelected.add(x.uid);
-                }
-                received = true;
-                break;
-              }
-              await refineAwait(session, sleep(100));
-            }
+              const added = b?.s.inventory.filter(x => !before.has(x.uid) && trackedItemIds.has(x.itemId)) || [];
+              return added.map(x => `${x.itemId}:${x.refine || 0}`).sort().join(',') === expected ? added : null;
+            }, { timeout: 4000 });
             if (!received) throw Error('領取後背包新增的裝備與本批不符，請確認背包');
+            for (const x of received.filter(item => canRefine(item) && (item.refine || 0) < limitPlus)) {
+              session.items.set(x.uid, refineItemSignature(x));
+              runUids.add(x.uid); refSelected.add(x.uid);
+            }
             if (!b.rows.some((r) => runUids.has(r.uid) && refSelected.has(r.uid) && isEligibleEquip(r) && (r.st.refine || 0) < limitPlus)) {
               throw Error('領出的裝備未出現在可精煉清單');
             }
@@ -2837,7 +3086,6 @@
           if (curPlus < safeTarget && (modeType === 'safe_only' || safeTarget <= refTargetPlus)) {
             setStatus(`⚡ 一鍵安全值：【${target.name}】+${curPlus} ➔ +${safeTarget}...`);
             if (refStop || document.hidden) throw Error('已中止精煉');
-            let confirmed = false;
             const originalConfirm = page.confirm;
             let accepted = true;
             try {
@@ -2852,22 +3100,14 @@
               page.confirm = originalConfirm;
             }
             if (!accepted) throw Error('已取消原生安全精煉');
-            let missingContext = 0;
-            for (let i = 0; i < 60; i++) {
-              await refineAwait(session, sleep(100));
-              if (refStop || document.hidden) throw Error('已中止精煉');
-              b = readBackpackContext(true);
-              if (!b) {
-                if (++missingContext >= 5) throw Error('背包介面持續無法讀取，請確認精煉結果');
-                continue;
-              }
-              missingContext = 0;
-              const nowSt = b?.s.inventory.find((x) => x.uid === uid);
-              if (nowSt && (nowSt.refine || 0) >= safeTarget) { confirmed = true; successCnt++; break; }
-            }
+            const confirmed = await waitForRefineUi(session, () => {
+              const live = assertRefineTarget(session, uid, true);
+              const nowSt = live?.s.inventory.find(x => x.uid === uid);
+              return nowSt && (nowSt.refine || 0) >= safeTarget;
+            }, { root: b.host?.parentElement, timeout: 6000 });
             if (!confirmed) throw Error(`【${target.name}】安全精煉結果逾時，請確認裝備`);
+            successCnt++;
             if (modeType === 'safe_only' || safeTarget === refTargetPlus) refSelected.delete(uid);
-            await refineAwait(session, sleep(250));
             continue;
           }
         }
@@ -2923,7 +3163,7 @@
         setStatus(`🔨 衝裝中：【${target.name}】+${curPlus} ➔ +${curPlus + 1} (成功:${successCnt} 爆:${brokenCnt})`);
 
         const origConfirm = page.confirm;
-        let userAccepted = true;
+        let userAccepted = true, settleGate = { since: pageNet.settled, candidate: null };
         try {
           page.confirm = (msg) => {
             if (refSkipConfirm || /成功率 100%|一定成功/.test(String(msg))) return true;
@@ -2931,54 +3171,46 @@
             return userAccepted;
           };
           if ((assertRefineTarget(session, uid).s.inventory.find((item) => item.uid === uid).refine || 0) !== curPlus) throw Error('精煉值已變動');
+          settleGate = { since: pageNet.settled, candidate: null };
           clickRefineControl(session, activeBtn, uid);
         } finally {
           page.confirm = origConfirm;
         }
         if (!userAccepted) throw Error('玩家手動取消精煉');
 
-        let resolved = false, missingContext = 0, confirmedNoUpgrade = false;
-        // Before counting a paid failure, give a late result one more fresh read.
-        for (let i = 0; i < 80 || (i === 80 && confirmedNoUpgrade); i++) {
-          await refineAwait(session, sleep(100));
-          b = readBackpackContext(true);
-          if (refStop || document.hidden) throw Error('已中止精煉');
-          if (!b) {
-            confirmedNoUpgrade = false;
-            if (++missingContext >= 5) throw Error('背包介面持續無法讀取，請確認精煉結果');
-            continue;
-          }
-          missingContext = 0;
-          const nowSt = b.s.inventory.find((x) => x.uid === uid);
-          const paid = activeBtn === skillBtn ? (b.s.character.sp <= beforeSp - 5) : (b.s.character.zeny < beforeZeny);
-          confirmedNoUpgrade = Boolean(nowSt && paid && (nowSt.refine || 0) <= curPlus &&
-            (!material || materialCount(b.s.inventory, material) < beforeMatQty));
-          if (nowSt && (nowSt.refine || 0) === curPlus + 1) {
-            successCnt++; resolved = true;
-            if (nowSt.refine >= limitPlus) {
-              refSelected.delete(uid);
-              if (refAutoWh && nowSt.refine >= refTargetPlus && !refStop && !document.hidden) {
-                const stBtn = await readRefineDetail(b.table, uid, (t) => /^存入倉庫|^存倉$/.test(t), session);
-                if (stBtn && !stBtn.disabled) { clickRefineControl(session, stBtn, uid); await refineAwait(session, sleep(150)); }
+        const result = await waitForRefineResult(session, uid, {
+          root: b.host?.parentElement, curPlus, material, beforeMatQty, beforeZeny, beforeSp,
+          useSkill: activeBtn === skillBtn, settleGate
+        });
+        if (!result) throw Error('精煉結果不明，請核對裝備與消耗');
+        b = result.b;
+        if (result.kind === 'success') {
+          successCnt++;
+          if (result.nowSt.refine >= limitPlus) {
+            refSelected.delete(uid);
+            if (refAutoWh && result.nowSt.refine >= refTargetPlus && !refStop && !document.hidden) {
+              const stBtn = await readRefineDetail(b.table, uid, (t) => /^存入倉庫|^存倉$/.test(t), session);
+              if (stBtn && !stBtn.disabled) {
+                clickRefineControl(session, stBtn, uid);
+                const stored = await waitForRefineUi(session, () => {
+                  const live = assertRefineTarget(session, uid, true);
+                  return live && !live.s.inventory.some(x => x.uid === uid);
+                }, { root: b.host?.parentElement, timeout: 4000 });
+                if (!stored) throw Error('存倉結果不明，請核對裝備');
               }
             }
-            break;
           }
-          if (!nowSt && paid) {
-            brokenCnt++; resolved = true; refSelected.delete(uid);
-            break;
-          }
-        }
-        if (!resolved && confirmedNoUpgrade) {
-          // An unchanged or lower level after the final read counts as a failed attempt.
-          failedCnt++;
-          skipped.add(uid);
+        } else {
           refSelected.delete(uid);
-          setStatus(`⚠️ 【${target.name}】已確認消耗，精煉未升階，繼續下一件`);
-          resolved = true;
+          if (result.kind === 'broken') brokenCnt++;
+          else {
+            failedCnt++;
+            skipped.add(uid);
+            setStatus(`⚠️ 【${target.name}】已確認消耗，精煉未升階，繼續下一件`);
+          }
         }
-        if (!resolved) throw Error('精煉結果不明，請核對裝備與消耗');
-        await refineAwait(session, sleep(320));
+        // A committed result (or the settled failure confirmation) is the boundary before the next item.
+
       }
       if (refStop) throw Error('已中止精煉');
       setStatus(`🎉 精煉完成！累計成功升階 ${successCnt} 次，損壞 ${brokenCnt} 件，未升階 ${failedCnt} 件，略過 ${skipped.size - failedCnt} 件。`);
@@ -3059,7 +3291,7 @@
     const b = readFiberForUi(() => readBackpackContext());
     if (b === undefined) return;
     if (!b) {
-      if (refBusy && !visitingWarehouse) refStop = true;
+      if (refBusy && !visitingWarehouse) stopRefine();
       refPanel?.remove(); refPanel = null; return;
     }
     if (!refPanel?.isConnected) {
@@ -3139,7 +3371,7 @@
       refPanel.querySelector('#ref-run-safe').onclick = () => runHybridRefine('safe_only');
       refPanel.querySelector('#ref-run-target').onclick = () => runHybridRefine('to_target');
       refPanel.querySelector('#ref-run-skill').onclick = () => runHybridRefine('skill_only');
-      refPanel.querySelector('#ref-stop').onclick = () => { refStop = true; };
+      refPanel.querySelector('#ref-stop').onclick = stopRefine;
     }
 
     if (refinePack && refSelected.size) {
@@ -3597,7 +3829,7 @@
       if (refBtn) {
         refBtn.click();
         if (st) st.textContent = `🟢 [${new Date().toLocaleTimeString()}] 已觸發 15 秒原生重新整理...`;
-        await sleep(800);
+        await sleep(TIMING.marketSnapshotWait);
         if (!isCurrent() || findCityVendingFieldset() !== cf) return;
         const p = readFiberForUi(() => getCommittedProps(cf, (x) => Array.isArray(x.shops) && x.snap?.mapId));
         if (p === undefined) return;
@@ -3605,7 +3837,7 @@
       }
       const kw = mktPanel.querySelector('#roi-mkt-q').value.trim() || (mktFilter === 'card' ? '卡片' : mktSub !== 'all' ? SUB_LABELS[mktSub] : '');
       if (kw && mktAuto15s && Date.now() >= crossCooldownUntil) {
-        await sleep(2200);
+        await sleep(TIMING.marketCrossSearchGap);
         if (isCurrent() && findCityVendingFieldset() === cf && Date.now() >= crossCooldownUntil) {
           await doCrossSearch(kw, true);
         }
@@ -3639,7 +3871,7 @@
     mktAutoBtn.style.background = '#dc2626';
     clearInterval(mktAutoTimer);
     void mktAutoTick();
-    mktAutoTimer = setInterval(() => { void mktAutoTick(); }, 15000);
+    mktAutoTimer = setInterval(() => { void mktAutoTick(); }, TIMING.marketRefresh);
   }
 
   function stopMktAuto(reason = '') {
@@ -3648,7 +3880,7 @@
     clearInterval(mktAutoTimer);
     mktAutoTimer = null;
     if (crossAbortCtrl) {
-      try { crossAbortCtrl.abort(); } catch {}
+      try { crossAbortCtrl.abort(); } catch { log("market", "無法取消補查"); }
       crossAbortCtrl = null;
     }
     crossBusy = false;
@@ -3691,7 +3923,9 @@
         const key = `${s.vendorId}|${i.cartUid}|${i.itemId}|${spec}`;
         const oldPrice = mktPrevPrices.get(key);
         const changeTag = oldPrice === undefined ? '' : oldPrice !== i.price ? ` (原 ${oldPrice.toLocaleString()})` : '';
+        mktPrevPrices.delete(key);
         mktPrevPrices.set(key, i.price);
+        if (mktPrevPrices.size > 20000) mktPrevPrices.delete(mktPrevPrices.keys().next().value);
         out.push({
           id: i.itemId, refine: i.refine || 0, slots, cards, cNames, base, name: full, lower: full.toLowerCase(),
           cat, sub, price: i.price, qty: i.qty, seller: clean(s.vendorName) || `#${s.vendorId}`,
@@ -3909,8 +4143,14 @@
     const btn = e.target.closest('[data-act]'); if (!btn) return;
     const r = mktKeyMap.get(btn.closest('[data-rkey]')?.dataset.rkey); if (!r) return;
     if (btn.dataset.act === 'fav') {
-      if (mktFavs.has(r.id)) mktFavs.delete(r.id); else mktFavs.add(r.id);
-      try { GM_setValue('roi-favorites-v1', [...mktFavs]); } catch {}
+      const adding = !mktFavs.has(r.id);
+      try {
+        mktFavs = new Set(updateStoredValue('roi-favorites-v1', validateFavorites, [...mktFavs], (latest) => {
+          const next = new Set(latest);
+          if (adding) next.add(r.id); else next.delete(r.id);
+          return [...next];
+        }));
+      } catch (error) { log('market', '收藏儲存失敗', error.name); }
       renderMkt();
     } else if (btn.dataset.act === 'find') {
       triggerNativeTownSearch(r.base);
@@ -3931,7 +4171,12 @@
     });
   }
 
+  // 攤位元件的 props.snap 可能是較早 render 留下的舊快照（元件未重繪時同一物件會一直被讀到）。
+  // 每個快照物件只在第一次被看到時套用一次，舊快照不會在每次路由時把較新的 API 餘額改回去。
+  const seenBalanceSnapshots = new WeakSet();
   function syncMarketBalance(snapshot, actorId) {
+    if (!snapshot || typeof snapshot !== 'object' || seenBalanceSnapshots.has(snapshot)) return;
+    seenBalanceSnapshots.add(snapshot);
     const character = snapshot?.character;
     const id = snapshotCharacterId(snapshot) ?? positiveId(actorId);
     const ownerMatches = id ? id === state.activeCharId :
@@ -3998,6 +4243,10 @@
     if (!pane) return;
     for (const input of pane.querySelectorAll('[data-ro-pref]')) input.checked = state[input.dataset.roPref];
     pane.querySelector('#c-price-lock').checked = priceOptions.enabled;
+    const priceThreshold = pane.querySelector('#c-price-threshold');
+    if (priceThreshold && priceThreshold !== document.activeElement && priceThreshold.value !== String(priceOptions.threshold)) {
+      priceThreshold.value = priceOptions.threshold;
+    }
     pane.querySelector('#c-rare-sync').checked = rareAutoMap;
     const loot = currentLootAutoControl();
     const lootSwitch = pane.querySelector('#c-loot-sync');
@@ -4010,9 +4259,26 @@
     syncRefineSettings(pane);
   }
 
+  const hudSkillControls = 'button[aria-label$=" +1"], [role="region"][aria-label="技能點預覽"], [role="region"][aria-label="屬性點預覽"]';
+  let hudFit = null, hudYield = null, hudSizeObserver = null, browserMenuObserver = null;
+  function resizeHud() { hudFit?.(); }
+  window.addEventListener('resize', resizeHud);
+  window.addEventListener('pagehide', function releaseHud(event) {
+    if (event.persisted) return;
+    window.removeEventListener('pagehide', releaseHud);
+    window.removeEventListener('resize', resizeHud);
+    hudSizeObserver?.disconnect();
+    browserMenuObserver?.disconnect();
+    hudFit = hudYield = null;
+  });
   function ensureHUD() {
     if (!document.body || document.getElementById('ro-helper-hud')) return;
-    const st = document.createElement('style');
+    // 浮窗被移除後重建時，沿用同一份樣式並釋放舊的觀察器，避免重複 CSS 與監聽器累積。
+    hudSizeObserver?.disconnect();
+    browserMenuObserver?.disconnect();
+    browserMenuObserver = null;
+    const st = document.querySelector('style[data-roi-style]') || document.createElement('style');
+    st.dataset.roiStyle = '';
     st.textContent = `
       [data-roi-browse-hidden], [data-roi-native-fold] { display: none !important; }
       table[data-roi-town-results] { display: block; overflow: auto; }
@@ -4028,8 +4294,8 @@
       @keyframes roi-stop-pulse { to { outline-offset:4px; outline-color:transparent; } }
       #ro-fab.roi-stop-alert { outline:3px solid #ef4444; animation:roi-stop-pulse 1.2s ease-out infinite; }
       @media (prefers-reduced-motion:reduce) { #ro-fab.roi-stop-alert { animation:none; } }
-      .roi-warehouse-pin, .roi-warehouse-pin-search { flex:none; inline-size:16px; padding:0; border:0; background:transparent; color:inherit; line-height:1; cursor:pointer; }
-      .roi-warehouse-pin[aria-pressed="true"] { color:#b45309; }
+      [data-roi-wh-pin], [data-roi-wh-pin-search] { flex:none; inline-size:16px; padding:0; border:0; background:transparent; color:inherit; line-height:1; cursor:pointer; }
+      [data-roi-wh-pin][aria-pressed="true"] { color:#b45309; }
       html.night [data-roi-wh-pin][aria-pressed="true"] { color:#fbbf24; }
       html:not([data-roi-money-off]) .roi-mc-text { color: var(--roi-mc) !important; font-weight: bold !important; font-variant-numeric: tabular-nums; }
       html:not([data-roi-money-off]):is(.night,[data-info-night]) .roi-mc-text,
@@ -4051,9 +4317,9 @@
         table.roi-market-table tr > [data-roi-market-col="input-stock"] { width:110px !important; }
         table.roi-market-table tr > [data-roi-market-col^="input"] input[type="number"] { width:52px !important; }
       }
-      li.ro-wh-locked { background:linear-gradient(90deg,rgba(245,158,11,0.22),transparent 85%)!important; border-left:3px solid #f59e0b!important; padding-left:4px!important; }
-      button.ro-badge-lock { background:linear-gradient(135deg,#78350f,#92400e)!important; color:#fde047!important; border:1px solid #f59e0b!important; border-radius:4px!important; padding:0 5px!important; margin:0 4px!important; font-size:11px!important; font-weight:bold!important; cursor:pointer!important; }
-      button.ro-badge-unlock { background:transparent!important; color:#64748b!important; border:1px dashed #475569!important; border-radius:4px!important; padding:0 4px!important; margin:0 4px!important; font-size:11px!important; opacity:0.6; cursor:pointer!important; }
+      li[data-roi-wh-locked] { background:linear-gradient(90deg,rgba(245,158,11,0.22),transparent 85%)!important; border-left:3px solid #f59e0b!important; padding-left:4px!important; }
+      button[data-roi-wh-badge="lock"] { background:linear-gradient(135deg,#78350f,#92400e)!important; color:#fde047!important; border:1px solid #f59e0b!important; border-radius:4px!important; padding:0 5px!important; margin:0 4px!important; font-size:11px!important; font-weight:bold!important; cursor:pointer!important; }
+      button[data-roi-wh-badge="unlock"] { background:transparent!important; color:#64748b!important; border:1px dashed #475569!important; border-radius:4px!important; padding:0 4px!important; margin:0 4px!important; font-size:11px!important; opacity:0.6; cursor:pointer!important; }
       [data-ro-ref-tier="4"]  { color: #60a5fa !important; font-weight: 600 !important; }
       [data-ro-ref-tier="5"]  { color: #34d399 !important; font-weight: 600 !important; }
       [data-ro-ref-tier="6"]  { color: #a3e635 !important; font-weight: 700 !important; }
@@ -4062,6 +4328,9 @@
       [data-ro-ref-tier="9"]  { color: #f87171 !important; font-weight: 800 !important; text-shadow: 0 0 9px rgba(248,113,113,0.7) !important; }
       [data-ro-ref-tier="10"] { color: #ff2d55 !important; font-weight: 900 !important; text-shadow: 0 0 8px #ff2d55, 0 0 3px #ffd700 !important; background: linear-gradient(90deg, rgba(255,45,85,0.22), rgba(250,204,21,0.18)) !important; border-radius: 4px !important; padding: 0 5px !important; border: 1px solid rgba(255,215,0,0.65) !important; }
       #ro-helper-hud { position:fixed; top:48px; right:14px; z-index:2147483646; font-family:system-ui,-apple-system,"Microsoft JhengHei",sans-serif; user-select:none; touch-action:none; }
+      #ro-helper-hud[data-roi-hud-yield] { pointer-events:none; }
+      #ro-helper-hud[data-roi-hud-yield] > #ro-hud-card { visibility:hidden; pointer-events:none; }
+      #ro-helper-hud[data-roi-hud-yield] > #ro-fab { display:flex !important; position:fixed; left:var(--roi-hud-yield-x); top:var(--roi-hud-yield-y); pointer-events:auto; cursor:pointer !important; }
       #ro-hud-card { background:linear-gradient(165deg,rgba(15,23,42,0.96),rgba(9,13,22,0.98)); backdrop-filter:blur(12px); color:#f8fafc; border:1.5px solid rgba(56,189,248,0.75); border-radius:12px; box-sizing:border-box; width:min(365px,calc(100vw - 8px)); max-height:calc(100vh - 8px); max-height:calc(100dvh - 8px); box-shadow:0 16px 40px rgba(0,0,0,0.88), 0 0 15px rgba(56,189,248,0.15); font-size:12px; overflow:auto; }
       #ro-drag { position:sticky; top:0; z-index:1; }
       .ro-tab { flex:1; text-align:center; padding:8px 2px; cursor:pointer; color:#94a3b8; font-weight:bold; font-size:11px; border-bottom:2px solid transparent; transition:all 0.15s; }
@@ -4076,7 +4345,7 @@
       #pane-cfg label > input { margin:0 4px 0 0; }
       #pane-cfg input[type="number"] { width:7em; color:#f8fafc; background:#0f172a; border:1px solid #475569; border-radius:4px; }
     `;
-    document.head.appendChild(st);
+    if (!st.isConnected) document.head.appendChild(st);
     document.documentElement.toggleAttribute('data-roi-money-off', !state.moneyColor);
 
     const hud = document.createElement('div'); hud.id = 'ro-helper-hud';
@@ -4084,7 +4353,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.1</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.2</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -4183,36 +4452,78 @@
       return true;
     }
     if (!attachBrowserMenu()) {
-      const browserMenuObserver = new MutationObserver(() => {
-        if (attachBrowserMenu()) browserMenuObserver.disconnect();
+      const observer = browserMenuObserver = new MutationObserver(() => {
+        if (attachBrowserMenu()) { observer.disconnect(); if (browserMenuObserver === observer) browserMenuObserver = null; }
       });
-      browserMenuObserver.observe(document.body, { childList: true });
+      observer.observe(document.body, { childList: true });
     }
 
-    function placeHud(left, top) {
-      const { width, height } = hud.getBoundingClientRect();
+    let yieldDismissed = false;
+    const intersects = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    function syncHudYield(hudRect) {
+      if (document.hidden || !hud.isConnected) return;
+      const controls = [...document.querySelectorAll(hudSkillControls)]
+        .filter(el => visible(el) && getComputedStyle(el).visibility === 'visible');
+      const rects = controls.map(el => el.getBoundingClientRect())
+        .filter(rect => rect.right > 0 && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight &&
+          rect.right > rect.left && rect.bottom > rect.top);
+      if (!controls.length) yieldDismissed = false;
+      if (state.hudMin || yieldDismissed || !rects.length ||
+          !rects.some(rect => intersects(rect, hudRect ??= hud.getBoundingClientRect()))) {
+        hud.removeAttribute('data-roi-hud-yield');
+        return;
+      }
+
+      // Keep the card in layout so the original footprint remains measurable while yielded.
+      const size = 50, edge = 4; // The floating button is 46px plus two 2px borders.
+      const maxX = Math.max(0, innerWidth - size - edge);
+      const maxY = Math.max(0, innerHeight - size - edge);
+      const xs = [maxX, edge, ...rects.map(rect => rect.left - size)];
+      const ys = [edge, maxY, ...rects.map(rect => rect.bottom)];
+      let spot;
+      for (const y of ys) {
+        if (y < 0 || y > maxY) continue;
+        const x = xs.find(x => x >= 0 && x <= maxX &&
+          !rects.some(rect => intersects(rect, { left: x, top: y, right: x + size, bottom: y + size })));
+        if (x !== undefined) { spot = { x, y }; break; }
+      }
+      const left = (spot?.x ?? maxX) + 'px', top = (spot?.y ?? 0) + 'px';
+      if (hud.style.getPropertyValue('--roi-hud-yield-x') !== left) hud.style.setProperty('--roi-hud-yield-x', left);
+      if (hud.style.getPropertyValue('--roi-hud-yield-y') !== top) hud.style.setProperty('--roi-hud-yield-y', top);
+      hud.toggleAttribute('data-roi-hud-yield', true);
+    }
+
+    function clampHud(left, top, { width, height }) {
       const edge = 4;
       const maxLeft = innerWidth - width - edge;
       const maxTop = innerHeight - height - edge;
-      const x = Math.min(Math.max(0, maxLeft), Math.max(edge, left));
-      const y = Math.min(Math.max(0, maxTop), Math.max(edge, top));
+      return {
+        left: Math.min(Math.max(0, maxLeft), Math.max(edge, left)),
+        top: Math.min(Math.max(0, maxTop), Math.max(edge, top))
+      };
+    }
+
+    function writeHudPosition({ left, top }) {
       hud.style.right = 'auto';
-      hud.style.left = x + 'px';
-      hud.style.top = y + 'px';
-      return { left: x, top: y };
+      hud.style.left = left + 'px';
+      hud.style.top = top + 'px';
     }
 
     function fitHud() {
-      if (!hud.isConnected) return;
-      const { width } = hud.getBoundingClientRect();
+      if (!hud.isConnected || document.hidden) return;
+      const rect = hud.getBoundingClientRect();
       const { left, top } = state.hudPos || {};
-      placeHud(Number.isFinite(left) ? left : innerWidth - width - 14, Number.isFinite(top) ? top : 48);
+      const position = clampHud(Number.isFinite(left) ? left : innerWidth - rect.width - 14,
+        Number.isFinite(top) ? top : 48, rect);
+      syncHudYield({ ...position, right: position.left + rect.width, bottom: position.top + rect.height });
+      writeHudPosition(position);
     }
 
     fitHud();
-    const hudSizeObserver = new ResizeObserver(fitHud);
+    hudFit = fitHud;
+    hudYield = () => syncHudYield();
+    hudSizeObserver = new ResizeObserver(fitHud);
     hudSizeObserver.observe(hud);
-    window.addEventListener('resize', fitHud);
 
     const bindDrag = (handle, onClick) => {
       let dragging = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0;
@@ -4227,19 +4538,26 @@
         if (!dragging) return;
         const dx = e.clientX - sx, dy = e.clientY - sy;
         if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
-        if (!moved) return;
-        state.hudPos = placeHud(ox + dx, oy + dy);
+        if (!moved || hud.hasAttribute('data-roi-hud-yield')) return;
+        state.hudPos = clampHud(ox + dx, oy + dy, hud.getBoundingClientRect());
+        writeHudPosition(state.hudPos);
       });
       handle.addEventListener('pointerup', (e) => {
         if (!dragging) return;
         dragging = false;
         handle.releasePointerCapture(e.pointerId);
-        if (moved) savePrefs();
-        else if (onClick) onClick();
+        if (moved) {
+          if (!hud.hasAttribute('data-roi-hud-yield')) { savePrefs(); syncHudYield(); }
+        } else if (onClick) onClick();
       });
     };
 
     const setMin = (m) => {
+      if (!m && hud.hasAttribute('data-roi-hud-yield')) {
+        yieldDismissed = true;
+        syncHudYield();
+        return;
+      }
       if (!m) {
         clearTransientCharAlerts();
         document.getElementById('ro-fab').classList.remove('roi-stop-alert');
@@ -4288,14 +4606,14 @@
         syncHudSettings();
       };
     };
-    bindSetting('c-price-lock', (input) => savePriceOptions({ ...priceOptions, enabled: input.checked }));
+    bindSetting('c-price-lock', (input) => savePriceOptions({ enabled: input.checked }));
     bindSetting('c-price-threshold', (input) => {
       const threshold = Number(input.value);
       if (!validThreshold(threshold)) {
         input.value = priceOptions.threshold;
         throw Error('保護門檻請輸入 1 至 1 兆之間的整數');
       }
-      try { savePriceOptions({ ...priceOptions, threshold }); }
+      try { savePriceOptions({ threshold }); }
       finally { input.value = priceOptions.threshold; }
     });
     bindSetting('c-rare-sync', (input) => setRareAutoMap(input.checked));
@@ -4314,8 +4632,11 @@
     bindRefineSettings(settings, settingsStatus);
 
     document.getElementById('b-save-words').onclick = () => {
-      state.customProtectWords = document.getElementById('i-words').value.split(/[,，、\n]/).map((s) => s.trim()).filter(Boolean);
-      try { GM_setValue('ro_custom_protect_words_v091', state.customProtectWords); } catch {}
+      let words;
+      try { words = validateWords(document.getElementById('i-words').value.split(/[,，、\n]/).map((s) => s.trim()).filter(Boolean)); }
+      catch (error) { alert('⚠️ ' + error.message); return; }
+      state.customProtectWords = words;
+      try { GM_setValue('ro_custom_protect_words_v091', words); } catch { log("hud", "自訂貴重詞儲存失敗"); }
       refreshWarehouse(true);
       alert(`✅ 已更新自訂貴重詞 (${state.customProtectWords.length} 項)！`);
     };
@@ -4461,14 +4782,443 @@
   }
 
   let lastInteractionAt = -Infinity;
-  const hasActiveOperation = () => refBusy || cartShortcutBusy || visitingWarehouse;
+  // ===== 全隊（同帳號）移到此地圖 =====
+  // 指令與遊戲相同：POST /api/characters/{id}/commands {commandId, command}，同源 cookie + x-ro-client 標頭。
+  // 「停止」要等那一場打完才生效（10 秒～數分鐘），所以等待改由隊伍資料判定，不用固定時間。
+  const partyMapIdRx = /^[a-z0-9_]{1,40}$/i;
+  class PartyMoveError extends Error {
+    constructor(message, status = 0, code = '') { super(message); this.status = status; this.code = code; }
+  }
+  function validatePartyView(value) {
+    const id = (v) => Number.isSafeInteger(v) && v > 0;
+    if (!isPlainRecord(value)) throw Error('隊伍資料格式不符');
+    const party = value.party;
+    if (party === null || party === undefined) return { party: null, own: [] };
+    if (!isPlainRecord(party) || !id(party.id) || !Array.isArray(party.members) || party.members.length > 12) throw Error('隊伍資料格式不符');
+    const members = party.members.map((m) => {
+      if (!isPlainRecord(m) || !id(m.id) || typeof m.name !== 'string' || m.name.length > 40 || typeof m.running !== 'boolean' ||
+          typeof m.mapId !== 'string' || !partyMapIdRx.test(m.mapId)) throw Error('隊員資料格式不符');
+      return { id: m.id, name: m.name, mapId: m.mapId, running: m.running, baseLv: Number.isSafeInteger(m.baseLv) ? m.baseLv : null, job: typeof m.job === 'string' ? m.job.slice(0, 40) : '' };
+    });
+    const own = (Array.isArray(value.own) ? value.own : []).slice(0, 12).flatMap((o) => (
+      isPlainRecord(o) && id(o.id) && (o.partyId === null || id(o.partyId)) ? [{ id: o.id, partyId: o.partyId, vending: o.vending === true }] : []));
+    return { party: { id: party.id, leaderId: id(party.leaderId) ? party.leaderId : null, members }, own };
+  }
+  function planPartyMove(view, me, target, rosterIds) {
+    if (!partyMapIdRx.test(target || '')) throw Error('沒有選擇有效的地圖');
+    if (!view.party) throw Error('目前角色沒有隊伍');
+    const mine = new Set([...rosterIds].map(Number));
+    if (!mine.has(me)) throw Error('目前角色不在本帳號名單內');
+    const own = new Map(view.own.filter((o) => o.partyId === view.party.id).map((o) => [o.id, o]));
+    const meMember = view.party.members.find((m) => m.id === me);
+    if (!meMember) throw Error('隊伍資料裡找不到目前角色');
+    const rows = view.party.members.map((m) => {
+      const self = m.id === me;
+      const ours = self || (own.has(m.id) && mine.has(m.id));
+      const vending = ours && own.get(m.id)?.vending === true;
+      return { ...m, self, ours, vending, move: ours && !vending };
+    });
+    const movers = rows.filter((r) => r.move);
+    if (movers.length < 2) throw Error('隊伍裡沒有其他可移動的同帳號角色');
+    if (movers.every((r) => r.running && r.mapId === target)) throw Error('大家已經都在這張地圖掛機');
+    return { me, target, rows, movers, stopIds: movers.filter((r) => r.running).map((r) => r.id) };
+  }
+  // deps：getParty()、command(id, cmd)、applyOwnMap(target)、kicks（EventTarget，遊戲有請求完成或戰鬥日誌時發 'settled'／'kick'）
+  //       onStatus(text)、limits {stopWaitMs, verifyMs, minGapMs, heartbeatMs}
+  function createPartyMoveRunner(deps) {
+    const L = { stopWaitMs: 180000, verifyMs: 30000, minGapMs: 2500, heartbeatMs: 10000, ...deps.limits };
+    let cancelled = false;
+    const names = new Map();
+    const label = (id) => names.get(id) || `#${id}`;
+    const isRateLimit = (e) => e?.status === 429 || e?.code === 'RATE_LIMITED';
+    let inFlight = 0, maxInFlight = 0;
+    async function send(id, command) {
+      if (cancelled) throw new PartyMoveError('已取消');
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+      try { return await deps.command(id, command); }
+      catch (e) { throw e instanceof PartyMoveError ? new PartyMoveError(`${label(id)}：${e.message}`, e.status, e.code) : new PartyMoveError(`${label(id)}：${e?.message || e}`); }
+      finally { inFlight--; }
+    }
+    // 事件驅動等待：遊戲請求完成、戰鬥日誌、指令回應都會「踢」一下，重抓隊伍資料（至少間隔 minGapMs）；
+    // 完全沒有事件時每 heartbeatMs 補抓一次；超過 timeoutMs 失敗。所有計時器與監聽在結束時清除。
+    function waitParty(check, timeoutMs, describe) {
+      return new Promise((resolve, reject) => {
+        const started = Date.now();
+        let done = false, fetching = false, lastFetch = 0, gapTimer = 0, beatTimer = 0, limitTimer = 0, last = null;
+        const finish = (fn, v) => {
+          if (done) return; done = true;
+          clearTimeout(gapTimer); clearTimeout(beatTimer); clearTimeout(limitTimer);
+          deps.kicks?.removeEventListener('settled', kick); deps.kicks?.removeEventListener('kick', kick);
+          cancelHook = null; fn(v);
+        };
+        const fetchNow = async () => {
+          if (done || fetching) return;
+          fetching = true; lastFetch = Date.now();
+          clearTimeout(beatTimer);
+          try {
+            last = await deps.getParty();
+            if (done) return;
+            const r = check(last);
+            if (r) return finish(resolve, last);
+            deps.onStatus?.(describe(last, Math.round((Date.now() - started) / 1000)));
+          } catch (e) {
+            if (isRateLimit(e)) return finish(reject, new PartyMoveError('讀取隊伍資料被限流：' + e.message, e.status, e.code));
+          } finally {
+            fetching = false;
+            if (!done) beatTimer = setTimeout(fetchNow, L.heartbeatMs);
+          }
+        };
+        function kick() {
+          if (done || fetching || gapTimer) return;
+          const wait = lastFetch + L.minGapMs - Date.now();
+          if (wait <= 0) void fetchNow();
+          else gapTimer = setTimeout(() => { gapTimer = 0; void fetchNow(); }, wait);
+        }
+        cancelHook = () => finish(reject, new PartyMoveError('已取消'));
+        deps.kicks?.addEventListener('settled', kick); deps.kicks?.addEventListener('kick', kick);
+        limitTimer = setTimeout(() => finish(reject, new PartyMoveError(`等候逾時（${Math.round(timeoutMs / 1000)} 秒）：` + describe(last || { party: null }, Math.round(timeoutMs / 1000)))), timeoutMs);
+        void fetchNow();
+      });
+    }
+    let cancelHook = null;
+    async function run(plan, { startAfter = true } = {}) {
+      for (const r of plan.rows) names.set(r.id, r.self ? `${r.name}（你）` : r.name);
+      const stopped = [], started = [], lines = [];
+      const byId = (view, id) => view?.party?.members.find((m) => m.id === id);
+      let phase = 'apply';
+      try {
+        deps.onStatus?.('套用你的掛機地圖…');
+        await deps.applyOwnMap(plan.target);
+        phase = 'stop';
+        for (const id of plan.stopIds) {
+          deps.onStatus?.(`停止 ${label(id)}（${stopped.length + 1}/${plan.stopIds.length}）`);
+          await send(id, { type: 'stop' });
+          stopped.push(id);
+        }
+        if (plan.stopIds.length) {
+          await waitParty((v) => plan.stopIds.every((id) => byId(v, id) && !byId(v, id).running), L.stopWaitMs, (v, s) => {
+            const left = plan.stopIds.filter((id) => byId(v, id)?.running !== false).map(label);
+            return `等待 ${left.join('、') || '隊員'} 打完這場（已等 ${s} 秒，可按取消）`;
+          });
+        }
+        if (!startAfter) return { ok: true, lines: plan.movers.map((r) => `⏸️ ${label(r.id)}：已停止`), maxInFlight };
+        phase = 'start';
+        const fresh = await deps.getParty();
+        const ordered = [...plan.movers].sort((a, b) => Number(b.self) - Number(a.self));
+        for (const r of ordered) {
+          const now = byId(fresh, r.id);
+          if (!r.self && now?.mapId !== plan.target) {
+            deps.onStatus?.(`${label(r.id)} 前往 ${plan.target}`);
+            await send(r.id, { type: 'selectMap', mapId: plan.target });
+          }
+          deps.onStatus?.(`開始 ${label(r.id)}（${started.length + 1}/${ordered.length}）`);
+          await send(r.id, { type: 'start' });
+          started.push(r.id);
+        }
+        phase = 'verify';
+        let final = null;
+        try {
+          final = await waitParty((v) => started.every((id) => byId(v, id)?.running && byId(v, id)?.mapId === plan.target), L.verifyMs,
+            (v, s) => `確認大家都在 ${plan.target} 掛機（${s} 秒）`);
+        } catch (e) {
+          if (e.message === '已取消') throw e;
+          final = await deps.getParty().catch(() => null);
+        }
+        for (const id of started) {
+          const m = byId(final, id);
+          const okRow = m?.running && m.mapId === plan.target;
+          lines.push(`${okRow ? '✅' : '⚠️'} ${label(id)}：${m ? `${m.mapId}${m.running ? ' 掛機中' : ' 停止'}` : '讀不到狀態'}`);
+        }
+        for (const r of plan.rows.filter((x) => !x.move)) lines.push(`➖ ${label(r.id)}：${r.vending ? '擺攤中，未變動' : '非本帳號角色，未變動'}`);
+        return { ok: lines.every((l) => !l.startsWith('⚠️')), lines, maxInFlight };
+      } catch (e) {
+        lines.push(`🛑 ${e.message}`);
+        // 回復：被我們停掉、還沒重新開始的角色照原設定重新開始；被限流時不再送任何指令。
+        const restore = stopped.filter((id) => !started.includes(id));
+        if (restore.length && !isRateLimit(e) && phase !== 'apply') {
+          const wasCancelled = cancelled; cancelled = false;
+          for (const id of restore) {
+            try { await send(id, { type: 'start' }); lines.push(`↩️ ${label(id)}：已恢復掛機（原地圖設定）`); }
+            catch (err) { lines.push(`⚠️ ${label(id)}：恢復失敗（${err.message}），請手動開始`); if (isRateLimit(err)) break; }
+          }
+          cancelled = wasCancelled;
+        } else if (restore.length) {
+          for (const id of restore) lines.push(`⚠️ ${label(id)}：已停止，請稍後手動開始`);
+        }
+        for (const id of started) lines.push(`ℹ️ ${label(id)}：已送出開始`);
+        return { ok: false, error: e, lines, maxInFlight };
+      }
+    }
+    return { run, cancel() { cancelled = true; cancelHook?.(); }, get maxInFlight() { return maxInFlight; } };
+  }
+
+  let partyMoveActive = null;
+  const partyMapGroup = () => [...document.querySelectorAll('[role="group"][aria-label="掛機地圖"]')].find(visible) || null;
+  function partyCommandId() {
+    if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+    const b = crypto.getRandomValues(new Uint8Array(16));
+    b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
+    const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  }
+  // 與遊戲相同的請求方式：同源 cookie；POST 帶 content-type 與 x-ro-client。走 pollFetch，不計入 pageNet。
+  async function partyApiJson(path, init = {}) {
+    const res = await pollFetch(path, { credentials: 'same-origin', cache: 'no-store', ...init,
+      signal: globalThis.AbortSignal?.timeout?.(init.method === 'POST' ? 30000 : 15000) });
+    const text = await res.text();
+    let body = {};
+    try { body = text ? JSON.parse(text) : {}; } catch { throw new PartyMoveError(`伺服器回應格式不正確（HTTP ${res.status}）`, res.status, 'INVALID_RESPONSE'); }
+    if (!res.ok) throw new PartyMoveError(String(body?.error?.message || `請求失敗（HTTP ${res.status}）`).slice(0, 200), res.status, String(body?.error?.code || 'HTTP_' + res.status));
+    return body;
+  }
+  async function partyCommand(id, command) {
+    if (!Number.isSafeInteger(id) || id <= 0) throw new PartyMoveError('角色編號不正確');
+    const body = await partyApiJson(`/api/characters/${id}/commands`, { method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-ro-client': '1' },
+      body: JSON.stringify({ commandId: partyCommandId(), command }) });
+    if (body?.ok !== true) throw new PartyMoveError('伺服器沒有確認這個指令', 200, 'NOT_OK');
+    pageNet.events.dispatchEvent(new Event('kick'));
+    return body;
+  }
+  async function partyReadConfig(me) {
+    const d = await partyApiJson(`/api/characters/${me}?deferCatchup=1`);
+    const config = d?.snapshot?.config;
+    if (Number(d?.characterId) !== me || !isPlainRecord(config) || typeof config.lockMap !== 'string') throw new PartyMoveError('讀不到你目前的掛機設定');
+    return config;
+  }
+  // 掛機設定面板的實際結構（遊戲前端 index-Dxm6ToCt.js）：
+  //   設定元件 props {snap, save, characterId}，草稿在它的 useState（未修改時為 null，畫面用 draft ?? snap.config）
+  //   └ 分頁容器 props {on, draft, advanced}（draft = 目前草稿，沒有 update）
+  //     └ … └ 地圖選單 props {label:'掛機地圖', maps, value: draft.lockMap, onChange} → role=group 的 DOM
+  //   有 {draft, update} 的元件是「藥水與補給」等兄弟區塊，不是地圖選單的祖先，所以不能用它來找。
+  const partyLog = (...args) => { log('party-move', ...args); };
+  function partyReadSettings(group) {
+    const read = (matcher) => readFiberForUi(() => getCommittedProps(group, matcher)) || null;
+    const picker = read((x) => x?.label === '掛機地圖' && Object.hasOwn(x, 'value'));
+    const holder = read((x) => x?.draft && typeof x.draft === 'object' && typeof x.draft.lockMap === 'string');
+    const panel = read((x) => x?.snap?.config && typeof x.snap.config === 'object' && typeof x.save === 'function');
+    const pressed = [...group.querySelectorAll('button[aria-pressed="true"]')].filter(visible);
+    const domTarget = pressed.length === 1 ? String(getReactFiber(pressed[0])?.key ?? '') : '';
+    const applyBtns = [...document.querySelectorAll('button')].filter((b) => visible(b) && clean(b.textContent) === '套用設定');
+    const applyEnabled = applyBtns.length ? applyBtns.some((b) => !b.disabled) : null;
+    const candidates = [picker?.value, holder?.draft?.lockMap, domTarget].filter((v) => typeof v === 'string' && partyMapIdRx.test(v));
+    const target = candidates[0] || '';
+    const info = {
+      target, draft: holder?.draft || null, applied: panel?.snap?.config || null, applyEnabled,
+      diag: {
+        picker: picker ? { value: typeof picker.value === 'string' ? picker.value : typeof picker.value, maps: Array.isArray(picker.maps) ? picker.maps.length : null } : null,
+        draftHolder: holder ? Object.keys(holder).slice(0, 8) : null,
+        panel: panel ? Object.keys(panel).slice(0, 8) : null,
+        domTarget: domTarget || null, pressedButtons: pressed.length,
+        applyButtons: applyBtns.length, applyEnabled,
+        fiber: Boolean(getReactFiber(group)), candidatesAgree: new Set(candidates).size <= 1,
+      },
+    };
+    if (applyEnabled === false) resetRareSyncDelta();
+    partyLog('讀取掛機設定', info.diag);
+    return info;
+  }
+  // 比較用的正規化：物件鍵排序、undefined 當作沒有；必撿稀有掉落當集合比（順序無關，空陣列 = 未設定）。
+  const partyNorm = (v) => v === null || typeof v !== 'object' ? v
+    : Array.isArray(v) ? v.map(partyNorm)
+      : Object.fromEntries(Object.keys(v).sort().filter((k) => v[k] !== undefined).map((k) => [k, partyNorm(v[k])]));
+  const partyIdSet = (v) => new Set(Array.isArray(v) ? v.map(Number).filter(Number.isSafeInteger) : []);
+  function partyDraftDiffKeys(draft, config) {
+    const keys = new Set([...Object.keys(draft), ...Object.keys(config)]);
+    keys.delete('lockMap');
+    return [...keys].filter((k) => {
+      if (k === 'rarePickup') {
+        const a = partyIdSet(draft[k]), b = partyIdSet(config[k]);
+        return a.size !== b.size || [...a].some((x) => !b.has(x));
+      }
+      return JSON.stringify(partyNorm(draft[k])) !== JSON.stringify(partyNorm(config[k]));
+    }).sort();
+  }
+  // 只回報形狀（型別、長度、鍵數），不印內容。
+  const partyShape = (v) => v === undefined ? 'undefined' : v === null ? 'null' : Array.isArray(v) ? `array(${v.length})`
+    : typeof v === 'object' ? `object(${Object.keys(v).length} keys)` : typeof v === 'boolean' ? String(v) : typeof v;
+  // 地圖連動的必撿稀有掉落：差異必須完全是「隨地圖同步」這次自己勾／取消的道具，且同步對象就是目標地圖。
+  function partyRareCoupling(draft, config, me, target) {
+    const a = partyIdSet(draft.rarePickup), b = partyIdSet(config.rarePickup);
+    const added = [...a].filter((x) => !b.has(x)), removed = [...b].filter((x) => !a.has(x));
+    const d = rareSyncDelta;
+    const reasons = [];
+    if (!rareAutoMap) reasons.push('sync-off');
+    if (d.tainted) reasons.push('sync-unknown-id');
+    if (d.charId !== me) reasons.push('sync-other-char');
+    if (d.lockMap !== target) reasons.push('sync-other-map');
+    const manualAdded = added.filter((x) => d.net.get(x) !== true).length;
+    const manualRemoved = removed.filter((x) => d.net.get(x) !== false).length;
+    if (manualAdded || manualRemoved) reasons.push('not-from-sync');
+    return { ok: reasons.length === 0, added: added.length, removed: removed.length, manualAdded, manualRemoved, syncNet: d.net.size, reasons };
+  }
+  // extra：[] 代表除了地圖（與地圖連動的必撿稀有掉落）沒有其他修改；null 代表無法確認。
+  function partyExtraChanges(info, config, me, target) {
+    if (!info.draft) return { extra: info.applyEnabled === false ? [] : null, rare: null };
+    let extra = partyDraftDiffKeys(info.draft, config), rare = null;
+    if (extra.includes('rarePickup')) {
+      rare = partyRareCoupling(info.draft, config, me, target);
+      if (rare.ok) extra = extra.filter((k) => k !== 'rarePickup');
+    }
+    if (extra.length || rare || debugEnabled()) {
+      const diff = partyDraftDiffKeys(info.draft, config).map((k) => ({ key: k, before: partyShape(config[k]), after: partyShape(info.draft[k]) }));
+      partyLog('草稿差異', { target, applied: config.lockMap, diff, rare, blocking: extra });
+    }
+    return { extra, rare };
+  }
+  function partyMapNames(group) {
+    for (let f = getReactFiber(group); f; f = f.return) {
+      const p = f.memoizedProps;
+      if (p?.label === '掛機地圖' && Array.isArray(p.maps)) {
+        return new Map(p.maps.filter((m) => typeof m?.id === 'string' && typeof m.name === 'string').map((m) => [m.id, m.name]));
+      }
+    }
+    return new Map();
+  }
+  async function partyApplyOwnMap(me, target, group) {
+    const config = await partyReadConfig(me);
+    if (config.lockMap === target) return;
+    const info = partyReadSettings(group);
+    if (info.target !== target) throw new PartyMoveError('掛機設定的地圖已變更，請重新操作');
+    const { extra } = partyExtraChanges(info, config, me, target);
+    if (extra === null) throw new PartyMoveError('讀不到完整草稿，無法確認有沒有其他未套用的修改；請先手動按「套用設定」再按 🚩');
+    if (extra.length) throw new PartyMoveError(`掛機設定還有其他未套用的修改（${extra.slice(0, 5).join('、')}），請先套用或還原`);
+    const btn = [...document.querySelectorAll('button')].find((b) => visible(b) && !b.disabled && clean(b.textContent) === '套用設定');
+    if (!btn) throw new PartyMoveError('找不到「套用設定」按鈕，請保持掛機設定開著');
+    const path = `/api/characters/${me}/commands`;
+    const settled = new Promise((resolve, reject) => {
+      const on = (e) => { if (e.detail?.method === 'POST' && e.detail.path === path) { off(); resolve(e.detail.status); } };
+      const timer = setTimeout(() => { off(); reject(new PartyMoveError('套用設定逾時（20 秒），請檢查掛機設定')); }, 20000);
+      const off = () => { clearTimeout(timer); pageNet.events.removeEventListener('settled', on); };
+      pageNet.events.addEventListener('settled', on);
+    });
+    btn.click();
+    const status = await settled;
+    const after = await partyReadConfig(me);
+    if (after.lockMap !== target) throw new PartyMoveError(`套用後掛機地圖仍是 ${after.lockMap}（HTTP ${status}）`);
+  }
+  function showPartyMoveDialog(plan, mapNames, needApply, rare = null) {
+    const mapLabel = (id) => mapNames.get(id) ? `${mapNames.get(id)}（${id}）` : id;
+    return new Promise((resolve) => {
+      const dlg = document.createElement('dialog');
+      dlg.dataset.roiPartyMoveDialog = '';
+      dlg.style.cssText = 'width:min(560px,calc(100vw - 24px));max-height:80vh;padding:16px 18px;background:rgba(15,23,42,0.98);color:#f8fafc;border:1.5px solid #38bdf8;border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,0.92);font-size:13px;';
+      dlg.append(element('div', `🚩 全隊移到 ${mapLabel(plan.target)}`, 'font-weight:bold;font-size:15px;color:#7dd3fc;border-bottom:1px solid #334155;padding-bottom:8px;margin-bottom:8px;'));
+      const list = element('div', null, 'max-height:46vh;overflow:auto;margin-bottom:10px;border:1px solid #334155;border-radius:6px;padding:6px 10px;background:#090d16;');
+      for (const r of plan.rows) {
+        const row = element('div', null, 'display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px dashed #1e293b');
+        const who = `${r.name}${r.self ? '（你）' : ''}${r.baseLv ? ` Lv${r.baseLv}` : ''}`;
+        const st = !r.ours ? '非本帳號，不動' : r.vending ? '擺攤中，不動' : r.running ? '掛機中 → 停止後移動' : '停止 → 移動';
+        row.append(element('span', who), element('span', `${mapLabel(r.mapId)} → ${r.move ? mapLabel(plan.target) : '—'}`, 'color:#cbd5e1'), element('b', st, `color:${r.move ? '#4ade80' : '#94a3b8'};white-space:nowrap`));
+        list.append(row);
+      }
+      dlg.append(list);
+      const notes = [
+        needApply ? `會先替你按「套用設定」，把你的掛機地圖改成 ${mapLabel(plan.target)}。` : '',
+        needApply && rare && (rare.added || rare.removed) ? `必撿稀有掉落已隨地圖同步更新（新增 ${rare.added}、取消 ${rare.removed} 項），會和地圖一起套用。` : '',
+        plan.stopIds.length ? '「停止」要等那一場打完才生效，可能要等幾十秒到幾分鐘，過程中可以取消。' : '',
+      ].filter(Boolean).join(' ');
+      if (notes) dlg.append(element('div', notes, 'font-size:12px;color:#cbd5e1;margin-bottom:8px;'));
+      const startLabel = element('label', ' 完成後全部開始掛機', 'display:flex;gap:4px;align-items:center;font-size:12px;margin-bottom:10px;');
+      const startBox = element('input'); startBox.type = 'checkbox'; startBox.checked = true; startLabel.prepend(startBox);
+      dlg.append(startLabel);
+      const btns = element('div', null, 'display:flex;justify-content:flex-end;gap:8px;');
+      const cancel = element('button', '取消'); cancel.type = 'button'; cancel.className = 'xp-btn small';
+      const ok = element('button', '確定移動'); ok.type = 'button'; ok.className = 'xp-btn small primary';
+      btns.append(cancel, ok); dlg.append(btns);
+      let result = null, done = false;
+      // Esc 會觸發 close；按鈕直接收尾。任何路徑都只移除一次、只回覆一次。
+      const finish = () => { if (done) return; done = true; if (dlg.open && typeof dlg.close === 'function') dlg.close(); dlg.remove(); resolve(result); };
+      dlg.addEventListener('close', finish);
+      cancel.onclick = finish;
+      ok.onclick = () => { result = { startAfter: startBox.checked }; finish(); };
+      document.body.appendChild(dlg);
+      if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
+    });
+  }
+  async function startPartyMove(bar) {
+    const status = bar.querySelector('[data-roi-party-move-status]');
+    const btn = bar.querySelector('[data-roi-party-move]');
+    const stopBtn = bar.querySelector('[data-roi-party-move-cancel]');
+    const out = bar.querySelector('[data-roi-party-move-result]');
+    if (partyMoveActive || document.hidden) return;
+    if (hasActiveOperation()) { status.textContent = '⚠️ 精煉／領倉進行中，請稍後再試'; return; }
+    const group = partyMapGroup();
+    const me = Number(state.activeCharId);
+    btn.disabled = true; out.replaceChildren();
+    try {
+      if (!group) throw Error('請先開啟掛機設定的地圖選單');
+      if (!Number.isSafeInteger(me) || me <= 0) throw Error('還不知道目前角色，請稍候再試');
+      status.textContent = '讀取隊伍與設定…';
+      const info = partyReadSettings(group);
+      if (!info.target) {
+        console.warn('[ROI party-move] 讀不到掛機設定選的地圖', info.diag);
+        throw Error('讀不到掛機設定選的地圖，請在地圖選單點選一張地圖後再試');
+      }
+      if (!info.diag.candidatesAgree) console.warn('[ROI party-move] 地圖來源不一致，以選單 value 為準', info.diag);
+      const target = info.target;
+      const config = await partyReadConfig(me);
+      const { extra, rare } = partyExtraChanges(info, config, me, target);
+      if (extra === null) {
+        console.warn('[ROI party-move] 讀不到完整草稿且有未套用的修改', info.diag);
+        throw Error('讀不到完整草稿，無法確認有沒有其他未套用的修改；請先手動按「套用設定」再按 🚩');
+      }
+      if (extra.length) throw Error(`掛機設定還有其他未套用的修改（${extra.slice(0, 5).join('、')}），請先套用或還原，再使用全隊移動`);
+      const view = validatePartyView(await partyApiJson(`/api/characters/${me}/party`));
+      const plan = planPartyMove(view, me, target, nativeRosterIds?.size ? nativeRosterIds : state.myCharIds);
+      status.textContent = '請在視窗中確認';
+      const choice = await showPartyMoveDialog(plan, partyMapNames(group), config.lockMap !== target, rare?.ok ? rare : null);
+      if (!choice) { status.textContent = '已取消'; return; }
+      if (Number(state.activeCharId) !== me) throw Error('角色已切換，請重新操作');
+      const runner = createPartyMoveRunner({
+        getParty: async () => validatePartyView(await partyApiJson(`/api/characters/${me}/party`)),
+        command: partyCommand,
+        applyOwnMap: (t) => partyApplyOwnMap(me, t, group),
+        kicks: pageNet.events,
+        onStatus: (text) => { status.textContent = text; },
+      });
+      partyMoveActive = runner;
+      stopBtn.hidden = false;
+      const result = await runner.run(plan, choice);
+      status.textContent = result.ok ? '🎉 全隊移動完成' : '⚠️ 全隊移動沒有全部完成，請看下方明細';
+      for (const line of result.lines) out.append(element('div', line));
+      alertUser(result.ok ? '🚩 全隊移動完成' : '⚠️ 全隊移動未完成', result.lines.slice(0, 6).join('\n'), !result.ok);
+    } catch (e) {
+      status.textContent = '⚠️ ' + (e?.message || e);
+    } finally {
+      partyMoveActive = null;
+      btn.disabled = false; stopBtn.hidden = true;
+    }
+  }
+  function syncPartyMoveBar() {
+    const bars = [...document.querySelectorAll('[data-roi-party-move-bar]')];
+    const group = partyMapGroup();
+    if (!group) { if (!partyMoveActive) bars.forEach((b) => b.remove()); return; }
+    let bar = bars.shift();
+    bars.forEach((b) => b.remove());
+    if (!bar) {
+      bar = element('div', null, 'display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:4px 0;font-size:12px;');
+      bar.dataset.roiPartyMoveBar = '';
+      const btn = element('button', '🚩 全隊移到此地圖'); btn.type = 'button'; btn.className = 'xp-btn small'; btn.dataset.roiPartyMove = '';
+      btn.title = '把同隊的自己角色停止、換到這張地圖，再一起開始掛機';
+      const stop = element('button', '取消'); stop.type = 'button'; stop.className = 'xp-btn small'; stop.dataset.roiPartyMoveCancel = ''; stop.hidden = true;
+      const status = element('span', null, 'color:#38bdf8'); status.dataset.roiPartyMoveStatus = '';
+      const out = element('div', null, 'flex-basis:100%;font-size:11.5px;line-height:1.5'); out.dataset.roiPartyMoveResult = '';
+      btn.onclick = () => { void startPartyMove(bar); };
+      stop.onclick = () => { partyMoveActive?.cancel(); };
+      bar.append(btn, stop, status, out);
+    }
+    if (group.nextElementSibling !== bar) group.after(bar);
+  }
+
+  const hasActiveOperation = () => refBusy || cartShortcutBusy || visitingWarehouse || partyMoveActive !== null;
   const isActiveWindow = () => hasActiveOperation() ||
-    (!document.hidden && (document.hasFocus() || performance.now() - lastInteractionAt <= 5000));
+    (!document.hidden && (document.hasFocus() || performance.now() - lastInteractionAt <= TIMING.recentInteraction));
 
   function trackRouterInteraction() {
     if (document.hidden) return;
     const now = performance.now();
-    if (now - lastInteractionAt >= 100) lastInteractionAt = now;
+    if (now - lastInteractionAt >= TIMING.pointerSample) lastInteractionAt = now;
   }
 
   for (const event of ['pointermove', 'keydown', 'pointerdown']) {
@@ -4476,8 +5226,8 @@
   }
 
   function routerDelay() {
-    if (isActiveWindow()) return 160;
-    return document.hidden ? 700 : 300;
+    if (isActiveWindow()) return TIMING.activeRouter;
+    return document.hidden ? TIMING.hiddenRouter : TIMING.visibleRouter;
   }
   const logSnapshots = [];
   let logTimer = null;
@@ -4485,7 +5235,7 @@
   let alertRenderTimer = null;
   function renderLogAlertChars() {
     if (alertRenderTimer !== null) return;
-    const remaining = 250 - (performance.now() - lastAlertRender);
+    const remaining = TIMING.alertRenderGap - (performance.now() - lastAlertRender);
     if (remaining > 0) {
       alertRenderTimer = setTimeout(() => {
         alertRenderTimer = null;
@@ -4506,7 +5256,7 @@
       logTimer = null;
       flushLogBatch(document.hidden ? 800 : 200);
       scheduleLogBatch();
-    }, isActiveWindow() ? 120 : 250);
+    }, isActiveWindow() ? TIMING.activeLogFlush : TIMING.idleLogFlush);
   }
   function queueLogLine(line) {
     if (!line) return;
@@ -4549,11 +5299,13 @@
       rareKnownRoots.size > 0 ||
       legends.some((t) => /^必撿稀有掉落/.test(t))
     ) mountSettingsTools();
+    syncPartyMoveBar();
     if (legends.some((t) => /^倉庫/.test(t))) refreshWarehouse();
     if (legends.some((t) => /的攤位/.test(t)) || mktPanel.isConnected || townResultsTable) syncMktMount();
     if (refreshAnnotations) annotateAllRefinedEquipment();
     syncHudSettings();
     mvpRadar?.syncFromStats();
+    hudYield?.();
   }
 
   let uiTimer = null;
@@ -4564,13 +5316,18 @@
     runPageRouter();
     if (canShareCharPoll()) void pollChars();
   });
+  const ROUTER_TEXT_SCOPE = 'fieldset,table,legend,.xp-sunken,[role="dialog"],select,label';
+  const ROUTER_SLOW_DELAY = TIMING.textRouter;
+  let slowTimer = null;
   new MutationObserver((records) => {
-    let domChanged = false;
+    let domChanged = false, slowChanged = false, sawLog = false;
     for (const r of records) {
       const el = r.target.nodeType === 1 ? r.target : r.target.parentElement;
-      if (!el || !el.isConnected || el.closest('#ro-helper-hud,#roi-helper-mvp-panel,#roi-item-hover-tooltip,[data-roi-market-browser],[data-ro-wh-bar],[data-ro-rare-helper],[data-roi-settings-tools],[data-roi-refine-helper],[data-roi-price-search],[data-roi-upper-fold]')) continue;
-      if (r.type === 'attributes' && !el.matches('fieldset') && !el.querySelector('fieldset')) continue;
+      if (!el || !el.isConnected || el.closest('#ro-helper-hud,#roi-helper-mvp-panel,#roi-item-hover-tooltip,[data-roi-market-browser],[data-ro-wh-bar],[data-ro-rare-helper],[data-roi-settings-tools],[data-roi-refine-helper],[data-roi-price-search],[data-roi-upper-fold],[data-roi-party-move-bar],[data-roi-party-move-dialog]')) continue;
+      if (r.type === 'attributes' && !el.matches('fieldset') && !el.querySelector('fieldset') &&
+          !el.matches(hudSkillControls) && !el.querySelector(hudSkillControls)) continue;
       if (el.closest('.log-window')) {
+        sawLog = true;
         if (r.type === 'characterData' || r.type === 'childList') queueLogLine(el.closest('.log-line'));
         r.addedNodes.forEach((n) => {
           if (n.nodeType !== 1) return;
@@ -4583,10 +5340,18 @@
         if (n.nodeType !== 1) return;
         n.querySelectorAll?.('.log-window .log-line').forEach(queueLogLine);
       });
+      // 純文字變動且不在需處理的容器內：改走慢速通道，避免倒數計時、HP 等文字每 160ms 觸發整頁路由。
+      if (!el.closest(ROUTER_TEXT_SCOPE) && (r.type === 'characterData' ||
+          (r.type === 'childList' && [...r.addedNodes, ...r.removedNodes].every((n) => n.nodeType === 3)))) { slowChanged = true; continue; }
       domChanged = true;
     }
+    // 全隊移動等待中：戰鬥日誌有新行代表伺服器狀態在推進，提醒等待器重抓隊伍資料（有最小間隔）。
+    if (sawLog && partyMoveActive) pageNet.events.dispatchEvent(new Event('kick'));
     if (domChanged && !uiTimer) {
+      clearTimeout(slowTimer); slowTimer = null;
       uiTimer = setTimeout(() => { uiTimer = null; runPageRouter(); }, routerDelay());
+    } else if (slowChanged && !uiTimer && !slowTimer) {
+      slowTimer = setTimeout(() => { slowTimer = null; if (!uiTimer) runPageRouter(); }, ROUTER_SLOW_DELAY);
     }
   }).observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes:true, attributeFilter:['hidden','aria-hidden','inert','class','style'] });
 
@@ -5306,7 +6071,7 @@
 
     function nativeProfileName() {
       const menu = document.querySelector('nav.xp-menubar[aria-label="主選單"]');
-      return menu?.parentElement.querySelector(':scope > .xp-title .caption')
+      return menu?.parentElement?.querySelector(':scope > .xp-title .caption')
         ?.textContent.match(/-\s*\[([^\]]+)\]/)?.[1].trim() || '';
     }
 
@@ -5338,25 +6103,20 @@
       return Number.isFinite(at) && at > 0 && Number.isFinite(new Date(at).getTime()) ? at : null;
     }
 
-    const visible = el => el && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
+    const visibleIgnoringAria = el => el && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
     function namedButton(label) {
       return [...document.querySelectorAll('button,[role="tab"]')].find(el =>
-        visible(el) && !el.disabled && [el.textContent.trim(),el.getAttribute('aria-label'),el.title].includes(label));
+        visibleIgnoringAria(el) && !el.disabled && [el.textContent.trim(),el.getAttribute('aria-label'),el.title].includes(label));
     }
     function setSearch(input, value) {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);
       input.dispatchEvent(new InputEvent('input', {bubbles:true, composed:true, inputType:'insertReplacementText', data:value}));
       input.dispatchEvent(new Event('change', {bubbles:true}));
     }
-    async function until(read) {
-      for (let n = 0; n < 100; n++) {
-        const value = read();
-        if (value) return value;
-        await new Promise(resolve => setTimeout(resolve,80));
-      }
-      return null;
+    function until(read, shouldAbort, root) {
+      return waitForUi(read, { root, timeout: 8000, shouldAbort });
     }
-    const mapGroup = () => [...document.querySelectorAll('[role="group"][aria-label="掛機地圖"]')].find(visible);
+    const mapGroup = () => [...document.querySelectorAll('[role="group"][aria-label="掛機地圖"]')].find(visibleIgnoringAria);
     function reactFiber(el) {
       const key = Object.keys(el).find(name => name.startsWith('__reactFiber$'));
       return key && el[key];
@@ -5372,22 +6132,24 @@
     async function chooseMap(map, id) {
       if (navigating) return;
       navigating = true;
+      const actor = state.activeCharId, epoch = refineIdentityEpoch;
+      const shouldAbort = () => state.activeCharId !== actor || refineIdentityEpoch !== epoch;
       closeRadar();
       try {
         if (!mapGroup()) {
           let tab = namedButton('掛機設定');
           if (!tab) {
             namedButton('冒險')?.click();
-            tab = await until(() => namedButton('掛機設定'));
+            tab = await until(() => namedButton('掛機設定'), shouldAbort);
           }
           if (!tab && !mapGroup()) throw Error('找不到掛機設定入口。請先開啟掛機設定再點地圖。');
           tab?.click();
         }
         const findFilter = () => [...document.querySelectorAll('input[type="search"]')].find(el =>
-          visible(el) && el.closest('label')?.textContent.includes('搜尋設定'));
-        await until(() => mapGroup() || findFilter());
+          visibleIgnoringAria(el) && el.closest('label')?.textContent.includes('搜尋設定'));
+        await until(() => mapGroup() || findFilter(), shouldAbort);
         if (!mapGroup() && findFilter()) setSearch(findFilter(),'掛機地圖');
-        const field = await until(() => mapGroup()?.querySelector('input[aria-label="掛機地圖：搜尋"]'));
+        const field = await until(() => mapGroup()?.querySelector('input[aria-label="掛機地圖：搜尋"]'), shouldAbort);
         if (!field) throw Error('找不到原生掛機地圖選單。');
         const options = pickerMaps(field.closest('[role="group"]'));
         const label = options.find(option => option.id === id)?.name || map;
@@ -5397,7 +6159,7 @@
         const choice = () => {
           const group = mapGroup();
           if (group?.querySelector('input[aria-label="掛機地圖：搜尋"]')?.value !== query) return null;
-          const buttons = [...group.querySelectorAll('button[aria-pressed]')].filter(visible);
+          const buttons = [...group.querySelectorAll('button[aria-pressed]')].filter(visibleIgnoringAria);
           const exact = buttons.filter(button => reactFiber(button)?.key === id);
           if (exact.length > 1) return null;
           let button = exact[0];
@@ -5408,7 +6170,7 @@
           }
           return !button.disabled || button.getAttribute('aria-pressed') === 'true' ? button : null;
         };
-        const button = await until(choice);
+        const button = await until(choice, shouldAbort, field.closest('[role="group"]')?.parentElement);
         if (!button) throw Error('原生選單無法確認這張地圖：'+map+'（'+id+'）。');
         let selected = button;
         if (button.getAttribute('aria-pressed') !== 'true') {
@@ -5416,7 +6178,7 @@
           selected = await until(() => {
             const target = choice();
             return target?.getAttribute('aria-pressed') === 'true' && target;
-          });
+          }, shouldAbort, field.closest('[role="group"]')?.parentElement);
         }
         if (!selected) throw Error('尚未確認選取成功，請在掛機設定檢查地圖。');
         selected.scrollIntoView({block:'nearest'});
@@ -5433,7 +6195,7 @@
     const mvpChangeKey = 'roi-mvp-record-change-v1';
     let lastProfile = '';
     let storageFailed = false;
-    try { lastProfile = sessionStorage.getItem(profileKey) || ''; } catch {}
+    try { lastProfile = sessionStorage.getItem(profileKey) || ''; } catch { log("mvp", "無法取得或同步本機 MVP 設定"); }
 
     function prefixFor(profile) {
       return cacheRoot + encodeURIComponent(profile) + '/';
@@ -5455,7 +6217,7 @@
         if (at > stored) {
           localStorage.setItem(key, String(at));
           if (typeof GM_addValueChangeListener === 'function') {
-            try { GM_setValue(mvpChangeKey, { key, at }); } catch {}
+            try { GM_setValue(mvpChangeKey, validateMvpChange({ key, at })); } catch { log("mvp", "無法取得或同步本機 MVP 設定"); }
           }
         }
       } catch { storageFailed = true; }
@@ -5483,6 +6245,11 @@
       return kills;
     }
 
+    function validateMvpChange(value) {
+      if (!isPlainRecord(value) || typeof value.key !== 'string' || value.key.length > 512 ||
+          !value.key.startsWith(cacheRoot) || value.key === profileKey || !timestamp(value.at)) throw Error('MVP 變更訊號格式不符');
+      return { key: value.key, at: value.at };
+    }
     function invalidateSavedKills(key) {
       if (typeof key !== 'string' || !key.startsWith(cacheRoot) || key === profileKey) return;
       memory.delete(key);
@@ -5495,16 +6262,12 @@
       if (event.key === null) { memory.clear(); savedKillsCache.clear(); }
       else invalidateSavedKills(event.key);
     });
-    if (typeof GM_addValueChangeListener === 'function') {
-      GM_addValueChangeListener(mvpChangeKey, (_name, _old, value, remote) => {
-        if (remote) invalidateSavedKills(value?.key);
-      });
-    }
+    listenRemote(mvpChangeKey, validateMvpChange, (change) => invalidateSavedKills(change.key));
 
     let lastBackgroundAt = -Infinity;
     let latestData;
     const findStatsList = () => [...document.querySelectorAll('ul[aria-label="MVP 最後一次擊殺"]')]
-      .find((list) => visible(list) && !list.closest('[hidden],[inert],[aria-hidden="true"]'));
+      .find((list) => visibleIgnoringAria(list) && !list.closest('[hidden],[inert],[aria-hidden="true"]'));
     function capture(list = findStatsList()) {
       const nativeName = nativeProfileName();
       const snap = currentSnapshot(nativeName);
@@ -5512,7 +6275,7 @@
       const api = profile && foregroundMvpSnapshot?.character.name?.trim() === profile ? foregroundMvpSnapshot : null;
       if (profile && profile !== lastProfile) {
         lastProfile = profile;
-        try { sessionStorage.setItem(profileKey, profile); } catch {}
+        try { sessionStorage.setItem(profileKey, profile); } catch { log("mvp", "無法取得或同步本機 MVP 設定"); }
       }
       const live = new Map();
       function record(name, at) {
@@ -5613,7 +6376,7 @@
 
     function captureBackground() {
       const now = performance.now();
-      if (now - lastBackgroundAt >= 1000) {
+      if (now - lastBackgroundAt >= TIMING.mvpCaptureGap) {
         capture();
         lastBackgroundAt = now;
       }
@@ -5831,7 +6594,7 @@
     function draggable(el, handle) {
       const key = el.id + '-position-v1';
       let saved, drag, suppress = false;
-      try { saved = JSON.parse(localStorage.getItem(key)); } catch {}
+      try { saved = JSON.parse(localStorage.getItem(key)); } catch { log("mvp", "無法取得或同步本機 MVP 設定"); }
       function place(x,y) {
         const rect = el.getBoundingClientRect();
         Object.assign(el.style, {margin:'0',right:'auto',bottom:'auto',
@@ -5860,7 +6623,7 @@
       handle.addEventListener('lostpointercapture',()=>{
         if (drag && suppress) {
           const r=el.getBoundingClientRect(); saved={x:r.left,y:r.top};
-          try {localStorage.setItem(key,JSON.stringify(saved));} catch {}
+          try {localStorage.setItem(key,JSON.stringify(saved));} catch { log("mvp", "無法取得或同步本機 MVP 設定"); }
         }
         drag=null;
       });
@@ -5883,7 +6646,7 @@
       clearInterval(refreshTimer);
       refreshTimer = window.setInterval(() => {
         if (isRadarOpen() && !document.hidden) render(captureBackground());
-      }, 30000);
+      }, TIMING.mvpRender);
     }
     function toggleRadar() {
       if (isRadarOpen()) closeRadar();
@@ -5909,7 +6672,7 @@
     });
 
     captureBackground();
-    window.setInterval(() => { if (!document.hidden) captureBackground(); }, 15000);
+    window.setInterval(() => { if (!document.hidden) captureBackground(); }, TIMING.mvpBackground);
     document.addEventListener('visibilitychange', captureBackground);
     window.addEventListener('pagehide', captureBackground);
     document.addEventListener('click', event => {
@@ -5924,26 +6687,27 @@
     try {
       mvpRadar = createMvpSchedule();
     } catch (error) {
-      console.warn('個人 MVP 時刻表初始化失敗', error);
+      log('mvp', '時刻表初始化失敗', error.name);
     }
   }
 
   document.querySelectorAll('.log-window .log-line').forEach(queueLogLine);
   listenSharedSettings();
-  if (canShareCharPoll()) {
-    GM_addValueChangeListener(charPollKey, (_key, _old, value, remote) => {
-      if (remote) applySharedCharPoll(validateCharPoll(value));
-    });
-  }
+  if (canShareCharPoll()) listenRemote(charPollKey, validateCharPoll, applySharedCharPoll);
   window.addEventListener('focus', runPageRouter);
+  // Remove the previous version's classes from nodes left in the live page.
+  const oldRowClass = ['ro', 'wh', 'locked'].join('-');
+  const oldBadgeClasses = ['lock', 'unlock'].map(kind => ['ro', 'badge', kind].join('-'));
+  document.querySelectorAll(`li.${oldRowClass}`).forEach(row => row.classList.remove(oldRowClass));
+  document.querySelectorAll('button[data-ro-lock]').forEach(button => button.classList.remove(...oldBadgeClasses));
   ensureHUD(); pollChars(); runPageRouter();
   setInterval(() => {
-    clearTransientCharAlerts(null, Date.now() - 600000);
+    clearTransientCharAlerts(null, Date.now() - TIMING.charAlertExpiry);
     if (document.hidden) return;
     ensureHUD(); updateHUD();
     if (Date.now() - lastRouterAt > 1200) refreshRareHelper();
     const itemGroup = document.querySelector('[role="group"][aria-label="道具設定的複製與匯出匯入"]');
     if (itemGroup) lootSyncPanels.get(itemGroup)?.();
-  }, 1500);
+  }, TIMING.hudRefresh);
   setInterval(pollChars, charPollInterval);
 })();
