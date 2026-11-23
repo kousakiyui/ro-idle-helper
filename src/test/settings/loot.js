@@ -318,16 +318,21 @@
         const p = monsterDraft(), ids = mapMonsterIds();
         if (!p || !ids) { status.textContent = '無法讀取本圖怪物清單或設定草稿，請重新開啟掛機設定'; return; }
         if (!ids.length) { status.textContent = '目前地圖沒有可同步的怪物'; return; }
-        const current = readMonsterRules(p.draft);
-        const oldById = new Map(current.map((rule) => [Number(rule.monsterId), rule]));
-        const rules = ids.map((id) => oldById.get(id) || { monsterId: id, action: 'attack' });
-        if (rules.length > 200) { status.textContent = '本圖怪物超過 200 隻，無法同步'; return; }
+        const rules = readMonsterRules(p.draft);
+        const existing = new Set(rules.map((rule) => Number(rule.monsterId)));
+        const missing = ids.filter((id) => !existing.has(id));
+        if (!missing.length) { status.textContent = '本圖怪物都已設定，草稿未變更'; return; }
+        if (rules.length + missing.length > 200) {
+          status.textContent = '加入本圖怪物會超過 200 隻上限，草稿未變更';
+          return;
+        }
+        // 與原生加入怪物相同，寫入時將舊版黑名單、危險怪保留成表格規則。
         p.update({
-          monsterRules: rules,
+          monsterRules: [...rules, ...missing.map((monsterId) => ({ monsterId, action: 'attack' }))],
           targets: { ...p.draft.targets, blacklist: [] },
           escape: { ...p.draft.escape, dangerMonsters: [] }
         });
-        status.textContent = '已同步本圖 ' + rules.length + ' 隻怪物，請按套用設定';
+        status.textContent = `已新增本圖 ${missing.length} 隻怪物，保留既有 ${rules.length} 隻設定，請按「套用設定」`;
       });
       addBtn('不逃 ⇄ 看到就逃', () => {
         const p = monsterDraft();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.5.2.3
+// @version      3.5.2.4
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -2362,16 +2362,21 @@
         const p = monsterDraft(), ids = mapMonsterIds();
         if (!p || !ids) { status.textContent = '無法讀取本圖怪物清單或設定草稿，請重新開啟掛機設定'; return; }
         if (!ids.length) { status.textContent = '目前地圖沒有可同步的怪物'; return; }
-        const current = readMonsterRules(p.draft);
-        const oldById = new Map(current.map((rule) => [Number(rule.monsterId), rule]));
-        const rules = ids.map((id) => oldById.get(id) || { monsterId: id, action: 'attack' });
-        if (rules.length > 200) { status.textContent = '本圖怪物超過 200 隻，無法同步'; return; }
+        const rules = readMonsterRules(p.draft);
+        const existing = new Set(rules.map((rule) => Number(rule.monsterId)));
+        const missing = ids.filter((id) => !existing.has(id));
+        if (!missing.length) { status.textContent = '本圖怪物都已設定，草稿未變更'; return; }
+        if (rules.length + missing.length > 200) {
+          status.textContent = '加入本圖怪物會超過 200 隻上限，草稿未變更';
+          return;
+        }
+        // 與原生加入怪物相同，寫入時將舊版黑名單、危險怪保留成表格規則。
         p.update({
-          monsterRules: rules,
+          monsterRules: [...rules, ...missing.map((monsterId) => ({ monsterId, action: 'attack' }))],
           targets: { ...p.draft.targets, blacklist: [] },
           escape: { ...p.draft.escape, dangerMonsters: [] }
         });
-        status.textContent = '已同步本圖 ' + rules.length + ' 隻怪物，請按套用設定';
+        status.textContent = `已新增本圖 ${missing.length} 隻怪物，保留既有 ${rules.length} 隻設定，請按「套用設定」`;
       });
       addBtn('不逃 ⇄ 看到就逃', () => {
         const p = monsterDraft();
@@ -4392,7 +4397,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.2.3 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.2.4 測試版</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
