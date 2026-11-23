@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.5.2.1
+// @version      3.5.2.2
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -2986,19 +2986,30 @@
   function waitForRefineResult(session, uid, options) {
     const { root, curPlus, material, beforeMatQty, beforeZeny, beforeSp, useSkill, settleGate } = options;
     let previouslyConfirmed = false;
+    const skillMaterialGate = { since: settleGate.since, candidate: null };
+    let previousMaterialOutcome = null;
     return waitForRefineUi(session, expired => {
       const b = assertRefineTarget(session, uid, true);
       const nowSt = b?.s.inventory.find(x => x.uid === uid);
       if (!b) {
         previouslyConfirmed = false;
-        settleGate.candidate = null;
+        settleGate.candidate = skillMaterialGate.candidate = null;
+        previousMaterialOutcome = null;
         return null;
       }
       const paid = useSkill ? b.s.character.sp <= beforeSp - 5 : b.s.character.zeny < beforeZeny;
       if (nowSt && (nowSt.refine || 0) === curPlus + 1) return { kind: 'success', b, nowSt };
       if (!nowSt && paid) return { kind: 'broken', b };
-      const confirmedNoUpgrade = Boolean(nowSt && paid && (nowSt.refine || 0) <= curPlus &&
-        (!material || materialCount(b.s.inventory, material) < beforeMatQty));
+      const materialUsed = Boolean(material && materialCount(b.s.inventory, material) < beforeMatQty);
+      const atOrBelow = nowSt && (nowSt.refine || 0) <= curPlus;
+      // A recovered SP value can hide the skill cost. Confirm the same equipment
+      // outcome twice against the depleted ore and a settled request.
+      const materialOutcome = useSkill && !paid && materialUsed ?
+        (!nowSt ? 'broken' : atOrBelow ? 'failed' : null) : null;
+      if (materialOutcome !== previousMaterialOutcome) skillMaterialGate.candidate = null;
+      previousMaterialOutcome = materialOutcome;
+      if (refineNoUpgradeSettled(skillMaterialGate, Boolean(materialOutcome), pageNet)) return { kind: materialOutcome, b };
+      const confirmedNoUpgrade = Boolean(atOrBelow && paid && (!material || materialUsed));
       if (refineNoUpgradeSettled(settleGate, confirmedNoUpgrade, pageNet) ||
           (expired && previouslyConfirmed && confirmedNoUpgrade && pageNet.inFlight === 0)) return { kind: 'failed', b };
       previouslyConfirmed = confirmedNoUpgrade;
@@ -4380,7 +4391,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.2.1</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.2.2</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
