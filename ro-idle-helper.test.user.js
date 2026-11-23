@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.5.2.3
+// @version      3.5.2.5
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -153,6 +153,10 @@
         modes[cat] = profile.modes[cat];
       }
       result[id] = { enabled: profile.enabled, modes };
+      if (profile.currentMap !== undefined) {
+        if (typeof profile.currentMap !== 'string' || !/^[\w-]{1,80}$/.test(profile.currentMap)) throw Error('掛機地圖格式不符');
+        result[id].currentMap = profile.currentMap;
+      }
     }
     return result;
   }
@@ -2122,6 +2126,7 @@
   }
 
   const lootSyncPanels = new WeakMap();
+  const monsterSyncPanels = new WeakMap();
   const lootModes = ['off', 'store', 'valuable'];
   const lootOres = new Set([984, 985, 756, 757, 1010, 1011]);
   const isValuableLoot = (id, name = '') => classifyItem(id, name).cat === 'card' || lootOres.has(id)
@@ -2210,12 +2215,22 @@
       auto.type = 'checkbox';
       auto.dataset.roiLootAuto = '';
       auto.disabled = true;
+      const thisMap = element('input');
+      thisMap.type = 'checkbox';
+      thisMap.dataset.roiLootAutoHere = '';
+      thisMap.disabled = true;
       const autoLabel = element('label', '隨地圖自動設定 ');
-      autoLabel.style.gridColumn = '1 / -1';
       autoLabel.prepend(auto);
-      box.append(autoLabel);
-      let boundCharacter = null, preferences = null, lastAutoKey = null, request = 0;
+      const thisMapLabel = element('label', '自動設定本圖 ');
+      thisMapLabel.title = '只對目前選定的掛機地圖自動設定';
+      thisMapLabel.prepend(thisMap);
+      const toggles = element('div', '', 'grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:10px');
+      toggles.append(autoLabel, thisMapLabel);
+      box.append(toggles);
+      let boundCharacter = null, displayedMap = null, preferences = null, lastAutoKey = null, request = 0;
       const characterKey = (p) => String(p.snap.character.id ?? p.snap.character.name);
+      const mapKey = (p) => typeof p.draft.lockMap === 'string' && /^[\w-]{1,80}$/.test(p.draft.lockMap) ? p.draft.lockMap : null;
+      const autoForMap = (map) => Boolean(map && (preferences.enabled || preferences.currentMap === map));
       const getPreferences = (key) => {
         const all = readValidatedSetting(settingsKey, validateCategoryProfiles, {});
         const saved = plainObject(all) && plainObject(all[key]) ? all[key] : null;
@@ -2224,7 +2239,7 @@
         const modes = Object.fromEntries(Object.keys(lootCategoryLabels).map((cat) => [
           cat, saved && Object.hasOwn(lootCategoryModes, saved.modes?.[cat]) ? saved.modes[cat] : legacyMode
         ]));
-        return { enabled: saved ? saved.enabled === true : legacyMode !== 'off', modes };
+        return { enabled: saved ? saved.enabled === true : legacyMode !== 'off', modes, currentMap: saved?.currentMap };
       };
       const bindCharacter = (p) => {
         const key = characterKey(p);
@@ -2245,15 +2260,15 @@
         GM_setValue(settingsKey, validateCategoryProfiles(next));
       };
       const sync = async (automatic = false) => {
-        let pendingKey = null;
+        let pendingKey = null, token = null;
         try {
           const before = getProps();
           bindCharacter(before);
           const id = boundCharacter, mapId = before.draft.lockMap;
           const modes = { ...preferences.modes };
-          pendingKey = JSON.stringify([id, mapId, modes, preferences.enabled]);
-          if (automatic && (!preferences.enabled || pendingKey === lastAutoKey)) return;
-          const token = ++request;
+          pendingKey = JSON.stringify([id, mapId, modes]);
+          if (automatic && (!autoForMap(mapKey(before)) || pendingKey === lastAutoKey)) return;
+          token = ++request;
           lastAutoKey = pendingKey;
           status.textContent = '讀取本圖掉落…';
           const pack = await loadLootPack();
@@ -2270,6 +2285,7 @@
           const summary = `新增 ${result.added} 種，保留既有設定 ${result.preserved} 種，略過背包已有 ${result.skippedCarried} 種`;
           status.textContent = result.added ? summary + '，請按「套用設定」' : summary;
         } catch (error) {
+          if (token !== null && (token !== request || !itemGroup.isConnected)) return;
           if (pendingKey === lastAutoKey) lastAutoKey = null;
           status.textContent = '⚠️ ' + error.message;
         }
@@ -2294,7 +2310,7 @@
             if (characterKey(p) !== boundCharacter) { bindCharacter(p); return; }
             preferences.modes[cat] = select.value;
             saveSettings(); lastAutoKey = null; request++;
-            if (preferences.enabled) void sync(true);
+            if (autoForMap(mapKey(p))) void sync(true);
             else status.textContent = '設定已記住，按「設定本圖」寫入草稿';
           } catch (error) { status.textContent = '⚠️ ' + error.message; }
         };
@@ -2308,8 +2324,30 @@
           if (characterKey(p) !== boundCharacter) { bindCharacter(p); return; }
           preferences.enabled = auto.checked;
           saveSettings(); lastAutoKey = null; request++;
-          if (preferences.enabled) void sync(true);
+          if (autoForMap(mapKey(p))) void sync(true);
           else status.textContent = '已關閉自動設定';
+        } catch (error) { status.textContent = '⚠️ ' + error.message; }
+      };
+      thisMap.onchange = () => {
+        const checked = thisMap.checked;
+        try {
+          const p = getProps();
+          const map = mapKey(p);
+          if (characterKey(p) !== boundCharacter || !map || map !== displayedMap) { tick(); return; }
+          const previousMap = preferences.currentMap;
+          preferences.currentMap = checked ? map : undefined;
+          try { saveSettings(); }
+          catch (error) {
+            preferences.currentMap = previousMap;
+            thisMap.checked = previousMap === map;
+            throw error;
+          }
+          if (checked) void sync(true);
+          else if (!autoForMap(map)) {
+            lastAutoKey = null;
+            request++;
+            status.textContent = '已關閉本圖自動設定';
+          }
         } catch (error) { status.textContent = '⚠️ ' + error.message; }
       };
       const note = element('span', '只補本圖掉落；保留既有設定，略過背包已有的道具與補給。', 'grid-column:1 / -1;color:var(--text-dim)');
@@ -2317,9 +2355,17 @@
       box.append(note, syncNow, status);
       const tick = () => {
         try {
-          bindCharacter(getProps());
-          if (preferences.enabled) void sync(true);
-        } catch (error) { if (!(error instanceof FiberTraversalTimeout)) auto.disabled = true; }
+          const p = getProps();
+          bindCharacter(p);
+          const map = mapKey(p);
+          displayedMap = map;
+          thisMap.disabled = !map;
+          thisMap.checked = Boolean(map && preferences.currentMap === map);
+          if (autoForMap(map)) void sync(true);
+          else lastAutoKey = null;
+        } catch (error) {
+          if (!(error instanceof FiberTraversalTimeout)) auto.disabled = thisMap.disabled = true;
+        }
       };
       lootSyncPanels.set(itemGroup, tick);
       itemGroup.append(box);
@@ -2330,8 +2376,9 @@
     const monHost = monSel?.parentElement;
     const liveMonsterSelect = () => monHost?.querySelector('select[aria-label="怪物控制：加入怪物"]');
     const monsterDraft = () => getCommittedProps(liveMonsterSelect(), (x) => typeof x.update === 'function' && x.draft?.targets && x.draft?.escape);
-    const mapMonsterIds = () => {
-      const fromProps = getCommittedProps(liveMonsterSelect(), (x) => Array.isArray(x.mapMonsters) || Array.isArray(x.monsterIds));
+    const mapMonsterIds = (p) => {
+      const fromProps = Array.isArray(p?.mapMonsters) ? p
+        : getCommittedProps(liveMonsterSelect(), (x) => Array.isArray(x.mapMonsters) || Array.isArray(x.monsterIds));
       const raw = fromProps?.mapMonsters || fromProps?.monsterIds
         || findRareRoots().map((root) => getRareContext(root)?.p.monsterIds).find(Array.isArray);
       return raw && [...new Set(raw.map((m) => Number(typeof m === 'object' ? m.id ?? m.monsterId : m)))]
@@ -2355,24 +2402,32 @@
           }
         };
       };
-      addBtn('🔄 同步本圖怪物', () => {
+      const syncMonsters = (p, automatic = false) => {
         const status = monHost.querySelector('[data-roi-mon-status]') || document.createElement('span');
+        const ids = p && mapMonsterIds(p);
+        if (automatic && !ids) return false;
         status.dataset.roiMonStatus = '';
         if (!status.isConnected) monHost.append(status);
-        const p = monsterDraft(), ids = mapMonsterIds();
-        if (!p || !ids) { status.textContent = '無法讀取本圖怪物清單或設定草稿，請重新開啟掛機設定'; return; }
-        if (!ids.length) { status.textContent = '目前地圖沒有可同步的怪物'; return; }
-        const current = readMonsterRules(p.draft);
-        const oldById = new Map(current.map((rule) => [Number(rule.monsterId), rule]));
-        const rules = ids.map((id) => oldById.get(id) || { monsterId: id, action: 'attack' });
-        if (rules.length > 200) { status.textContent = '本圖怪物超過 200 隻，無法同步'; return; }
+        if (!ids) { status.textContent = '無法讀取本圖怪物清單或設定草稿，請重新開啟掛機設定'; return false; }
+        if (!ids.length) { status.textContent = '目前地圖沒有可同步的怪物'; return true; }
+        const rules = readMonsterRules(p.draft);
+        const existing = new Set(rules.map((rule) => Number(rule.monsterId)));
+        const missing = ids.filter((id) => !existing.has(id));
+        if (!missing.length) { status.textContent = '本圖怪物都已設定，草稿未變更'; return true; }
+        if (rules.length + missing.length > 200) {
+          status.textContent = '加入本圖怪物會超過 200 隻上限，草稿未變更';
+          return true;
+        }
+        // 與原生加入怪物相同，寫入時將舊版黑名單、危險怪保留成表格規則。
         p.update({
-          monsterRules: rules,
+          monsterRules: [...rules, ...missing.map((monsterId) => ({ monsterId, action: 'attack' }))],
           targets: { ...p.draft.targets, blacklist: [] },
           escape: { ...p.draft.escape, dangerMonsters: [] }
         });
-        status.textContent = '已同步本圖 ' + rules.length + ' 隻怪物，請按套用設定';
-      });
+        status.textContent = `已新增本圖 ${missing.length} 隻怪物，保留既有 ${rules.length} 隻設定，請按「套用設定」`;
+        return true;
+      };
+      addBtn('🔄 同步本圖怪物', () => syncMonsters(monsterDraft()));
       addBtn('不逃 ⇄ 看到就逃', () => {
         const p = monsterDraft();
         if (!p) { const status = monHost.querySelector('[data-roi-mon-status]'); if (status) status.textContent = '⚠️ 無法讀取怪物設定草稿'; return; }
@@ -2392,6 +2447,58 @@
         const allLure = p.draft.monsterRules.every((r) => r.action === 'lure');
         p.update({ monsterRules: p.draft.monsterRules.map((r) => ({ ...r, action: allLure ? 'attack' : 'lure' })) });
       });
+      if (!monHost.querySelector('[data-roi-mon-auto]')) {
+        const auto = document.createElement('input');
+        auto.type = 'checkbox';
+        auto.dataset.roiMonAuto = '';
+        auto.disabled = true;
+        const label = document.createElement('label');
+        label.append(auto, ' 隨地圖自動同步怪物');
+        monHost.append(label);
+        const actorId = () => {
+          const context = getCommittedProps(liveMonsterSelect(), (x) => x.snap?.character);
+          return snapshotCharacterId(context?.snap);
+        };
+        const settingKey = (id) => 'roi-monster-auto-map-v1:' + id;
+        const validateToggle = (value) => {
+          if (typeof value !== 'boolean') throw Error('怪物自動同步設定格式不符');
+          return value;
+        };
+        let boundId = null, enabled = false, lastMap = null;
+        const tick = () => {
+          try {
+            const id = actorId();
+            auto.disabled = id === null;
+            if (id !== boundId) {
+              boundId = id;
+              enabled = id !== null && readValidatedSetting(settingKey(id), validateToggle, false);
+              auto.checked = enabled;
+              lastMap = null;
+            }
+            if (!enabled || document.hidden) return;
+            const p = monsterDraft();
+            const map = p?.draft.lockMap;
+            if (map && map !== lastMap && syncMonsters(p, true)) lastMap = map;
+          } catch (error) {
+            if (!(error instanceof FiberTraversalTimeout)) log('monster', error);
+          }
+        };
+        auto.onchange = () => {
+          try {
+            const id = actorId();
+            if (id === null || id !== boundId) { tick(); return; }
+            GM_setValue(settingKey(id), validateToggle(auto.checked));
+            enabled = auto.checked;
+            lastMap = null;
+            if (enabled) tick();
+          } catch (error) {
+            auto.checked = enabled;
+            log('monster', error);
+          }
+        };
+        monsterSyncPanels.set(monHost, tick);
+      }
+      monsterSyncPanels.get(monHost)?.();
     }
   }
 
@@ -4392,7 +4499,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.2.3 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.2.5 測試版</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
