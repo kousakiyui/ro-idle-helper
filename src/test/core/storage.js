@@ -137,11 +137,8 @@
         if (!['off', 'store', 'priority', 'valuable'].includes(profile.modes[cat])) throw Error('道具分類處理方式不符');
         modes[cat] = profile.modes[cat];
       }
-      result[id] = { enabled: profile.enabled, modes };
-      if (profile.currentMap !== undefined) {
-        if (typeof profile.currentMap !== 'string' || !/^[\w-]{1,80}$/.test(profile.currentMap)) throw Error('掛機地圖格式不符');
-        result[id].currentMap = profile.currentMap;
-      }
+      const usedMapToggle = typeof profile.currentMap === 'string' && /^[\w-]{1,80}$/.test(profile.currentMap);
+      result[id] = { enabled: profile.enabled || usedMapToggle, modes };
     }
     return result;
   }

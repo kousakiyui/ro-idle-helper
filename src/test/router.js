@@ -83,7 +83,7 @@
     if (document.querySelector('input[aria-label="搜尋物品"]') || refPanel) refreshRefinePanel();
     const legends = [...document.querySelectorAll('fieldset > legend')].map((l) => clean(l.textContent));
     if (
-      document.querySelector('[aria-label="道具設定的複製與匯出匯入"],select[aria-label="怪物控制：加入怪物"]') ||
+      document.querySelector(lootItemGroupSelector + ',' + lootOpenKoreSelector + ',select[aria-label="怪物控制：加入怪物"]') ||
       rareKnownRoots.size > 0 ||
       legends.some((t) => /^必撿稀有掉落/.test(t))
     ) mountSettingsTools();

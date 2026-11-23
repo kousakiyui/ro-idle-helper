@@ -5,7 +5,7 @@ const { JSDOM } = require('jsdom');
 const source = fs.readFileSync(process.argv[2], 'utf8');
 const read = (start, end) => source.slice(source.indexOf(start), source.indexOf(end));
 const production = read('  function readMonsterRules(', '  const itemIds =')
-  + 'const lootSyncPanels = new WeakMap(), monsterSyncPanels = new WeakMap();'
+  + read('  const lootSyncPanels = ', '  const lootModes =')
   + read('  function mountSettingsTools()', '  const refSelected =');
 const dom = new JSDOM('<div><select aria-label="怪物控制：加入怪物"></select></div>', { pretendToBeVisual: true });
 const { document } = dom.window;
