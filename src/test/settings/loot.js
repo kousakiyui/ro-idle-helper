@@ -69,7 +69,8 @@
       for (const skill of monster.skills ?? []) {
         if (skill.skill === 'NPC_METAMORPHOSIS') pending.push(...(skill.vals ?? []));
       }
-      for (const drop of [...(monster.drops ?? []), monster.card, ...(monster.mvpDrops ?? [])]) {
+      // 道具設定的「本圖掉落」使用怪物的一般掉落清單。
+      for (const drop of monster.drops ?? []) {
         const item = pack.items.get(drop?.itemId);
         if (item) loot.set(item.id, item.name);
       }
@@ -99,28 +100,23 @@
       : cat === 'card' || cat === 'consumable' ? cat : 'other';
   }
 
-  function buildCategoryLootPatch(draft, loot, pack, modes, inventory) {
-    if (!Array.isArray(inventory)) throw Error('無法讀取背包，請重新開啟掛機設定');
+  function buildCategoryLootPatch(draft, loot, pack, modes) {
     const storage = storageRule(draft.autoStorage);
     const priority = listItems(draft.lootPriority);
-    const configured = new Set([...storage.items, ...priority, ...listItems(draft.autoSell)]);
-    const carried = new Set(itemIds(inventory));
+    const configured = new Set([
+      ...storage.items, ...priority, ...listItems(draft.autoSell), ...listItems(draft.lootFilter),
+      ...lootSupplyIds(draft)
+    ]);
     const stored = [], prioritized = [];
-    const supplies = lootSupplyIds(draft);
     const counts = Object.fromEntries(Object.keys(lootCategoryLabels).map((cat) => [cat, 0]));
-    let preserved = 0, skippedCarried = 0;
+    let preserved = 0;
     for (const [id, name] of loot) {
       const category = lootCategory(id, name, pack);
       const mode = modes[category];
       if (mode === 'off' || !Object.hasOwn(lootCategoryModes, mode)) continue;
       if (mode === 'valuable' && !isValuableLoot(id, name)) continue;
-      if (supplies.has(id)) continue;
       if (configured.has(id)) {
         preserved++;
-        continue;
-      }
-      if (carried.has(id)) {
-        skippedCarried++;
         continue;
       }
       counts[category]++;
@@ -133,16 +129,13 @@
     }
     const patch = {};
     if (stored.length) {
-      // 若玩家暫停了既有存倉規則，補入項目時維持停用狀態。
-      const enabled = !storage.items.length || storage.enabled !== false;
-      patch.autoStorage = { ...storage, enabled, items: [...storage.items, ...stored] };
-      patch.autoLoot = true;
+      patch.autoStorage = { ...storage, items: [...storage.items, ...stored] };
     }
     if (prioritized.length) {
       const rule = draft.lootPriority;
       patch.lootPriority = { ...(Array.isArray(rule) ? {} : rule), items: [...priority, ...prioritized] };
     }
-    return { patch, counts, added: stored.length, preserved, skippedCarried };
+    return { patch, counts, added: stored.length, preserved };
   }
 
   function mountSettingsTools() {
@@ -231,11 +224,12 @@
             return;
           }
           const loot = getMapLoot(pack, mapId);
-          const result = buildCategoryLootPatch(current.draft, loot, pack, modes, current.snap.inventory);
+          const result = buildCategoryLootPatch(current.draft, loot, pack, modes);
           if (result.added) current.update(result.patch);
           for (const [cat, count] of Object.entries(result.counts)) counters.get(cat).textContent = count + ' 種';
-          const summary = `新增 ${result.added} 種，保留既有設定 ${result.preserved} 種，略過背包已有 ${result.skippedCarried} 種`;
-          status.textContent = result.added ? summary + '，請按「套用設定」' : summary;
+          const summary = `新增 ${result.added} 種，保留既有設定 ${result.preserved} 種`;
+          const storageNote = result.patch.autoStorage?.enabled === false ? '（回城存倉目前關閉）' : '';
+          status.textContent = result.added ? summary + '，請按「套用設定」' + storageNote : summary;
         } catch (error) {
           if (token !== null && (token !== request || !itemGroup.isConnected)) return;
           if (pendingKey === lastAutoKey) lastAutoKey = null;
@@ -302,7 +296,7 @@
           }
         } catch (error) { status.textContent = '⚠️ ' + error.message; }
       };
-      const note = element('span', '只補本圖掉落；保留既有設定，略過背包已有的道具與補給。', 'grid-column:1 / -1;color:var(--text-dim)');
+      const note = element('span', '只設定本圖掉落中尚未設定的道具。', 'grid-column:1 / -1;color:var(--text-dim)');
       status.style.gridColumn = '2 / -1';
       box.append(note, syncNow, status);
       const tick = () => {

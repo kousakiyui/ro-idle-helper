@@ -9,17 +9,26 @@ const production = read('  const itemIds = ', '  let lootPack;')
 const dom = new JSDOM('<div role="group" aria-label="道具設定的複製與匯出匯入"></div>');
 const { document } = dom.window;
 const pack = {
-  items: new Map([101, 102, 103, 104, 105, 106, 107, 108].map((id) => [id, { id, name: String(id), category: 'equipment' }])),
+  items: new Map([101, 102, 103, 104, 105, 106, 107, 108, 111, 112, 113, 114, 115]
+    .map((id) => [id, { id, name: String(id), category: 'equipment' }])),
   maps: new Map([['a', { spawns: [{ monsterId: 1 }] }], ['b', { spawns: [{ monsterId: 2 }] }]]),
-  monsters: new Map([[1, { drops: [101, 102, 103, 104, 105, 106].map((itemId) => ({ itemId })) }],
-    [2, { drops: [101, 104, 106, 107, 108].map((itemId) => ({ itemId })) }]])
+  monsters: new Map([
+    [1, {
+      drops: [101, 102, 103, 104, 105, 111].map((itemId) => ({ itemId })),
+      card: { itemId: 113 }, mvpDrops: [{ itemId: 114 }],
+      skills: [{ skill: 'NPC_METAMORPHOSIS', vals: [3] }]
+    }],
+    [2, { drops: [101, 104, 106, 107, 108].map((itemId) => ({ itemId })) }],
+    [3, { drops: [{ itemId: 106 }, { itemId: 115 }] }]
+  ])
 };
 const modes = { consumable: 'off', equipment: 'priority', card: 'off', other: 'off' };
 const draft = {
   lockMap: 'a', autoSell: [101], autoStorage: { enabled: true, abovePercent: 80, items: [102] },
-  lootPriority: { rare: true, items: [103] }, restock: [{ itemId: 105 }]
+  lootPriority: { rare: true, items: [103] }, restock: [{ itemId: 105 }],
+  autoLoot: false, lootFilter: { mode: 'except', items: [111, 115] }
 };
-const inventory = [{ itemId: 104 }, { itemId: '104' }];
+const inventory = [{ itemId: 104 }, { itemId: '104' }, { itemId: 112 }];
 const profiles = { player: { enabled: true, modes } };
 const changes = [];
 const props = {
@@ -56,36 +65,41 @@ function check(label, fn) {
 const settle = () => new Promise(setImmediate);
 
 async function run() {
-  check('既有販賣、存倉、優先撿取、補給及背包物品不受本圖分類覆蓋', () => {
-    const result = buildCategoryLootPatch(draft, getMapLoot(pack, 'a'), pack, modes, inventory);
+  check('官方已設定的販賣、存倉、優先撿取、補給和撿取清單全部保留', () => {
+    const result = buildCategoryLootPatch(draft, getMapLoot(pack, 'a'), pack, modes);
     assert.deepEqual(result.patch, {
-      autoStorage: { enabled: true, abovePercent: 80, items: [102, 106] },
-      autoLoot: true, lootPriority: { rare: true, items: [103, 106] }
+      autoStorage: { enabled: true, abovePercent: 80, items: [102, 104, 106] },
+      lootPriority: { rare: true, items: [103, 104, 106] }
     });
-    assert.deepEqual([result.added, result.preserved, result.skippedCarried, result.counts.equipment], [1, 3, 1, 1]);
+    assert.deepEqual([result.added, result.preserved, result.counts.equipment], [2, 6, 2]);
   });
-  check('舊格式和停用的存倉規則在補項目時保留', () => {
+  check('選圖只用一般掉落和變身怪物，排除只在背包及額外 MVP 獎勵的品項', () => {
+    assert.deepEqual([...getMapLoot(pack, 'a').keys()], [101, 102, 103, 104, 105, 111, 106, 115]);
+  });
+  check('舊格式和停用的存倉規則在補項目時保留，空清單也不改開關', () => {
     const result = buildCategoryLootPatch({
       ...draft, autoStorage: { ...draft.autoStorage, enabled: false }, lootPriority: [103]
-    }, getMapLoot(pack, 'a'), pack, modes, inventory);
+    }, getMapLoot(pack, 'a'), pack, modes);
     assert.equal(result.patch.autoStorage.enabled, false);
-    assert.deepEqual(result.patch.lootPriority, { items: [103, 106] });
+    assert.deepEqual(result.patch.lootPriority, { items: [103, 104, 106] });
+    const empty = buildCategoryLootPatch({ autoLoot: false }, new Map([[104, '104']]), pack, modes);
+    assert.equal(empty.patch.autoStorage.enabled, false);
+    assert.equal(Object.hasOwn(empty.patch, 'autoLoot'), false);
   });
-  check('背包快照缺失或超過清單上限時拒絕寫入', () => {
+  check('超過清單上限時拒絕寫入', () => {
     const loot = getMapLoot(pack, 'a');
-    assert.throws(() => buildCategoryLootPatch(draft, loot, pack, modes, undefined), /無法讀取背包/);
     assert.throws(() => buildCategoryLootPatch({
       ...draft, lootPriority: Array.from({ length: 500 }, (_, i) => 3000 + i)
-    }, loot, pack, modes, inventory), /超過存倉或優先撿取上限/);
+    }, loot, pack, modes), /超過存倉或優先撿取上限/);
     assert.throws(() => buildCategoryLootPatch({
       ...draft, autoStorage: Array.from({ length: 2000 }, (_, i) => 3000 + i)
-    }, loot, pack, modes, inventory), /超過存倉或優先撿取上限/);
+    }, loot, pack, modes), /超過存倉或優先撿取上限/);
   });
   mountSettingsTools();
   await settle();
   check('背包有 1300 多項、畫面沒有道具列時，自動設定仍只新增本圖缺漏', () => {
     assert.equal(changes.length, 1);
-    assert.match(document.body.textContent, /新增 1 種，保留既有設定 3 種，略過背包已有 1 種/);
+    assert.match(document.body.textContent, /新增 2 種，保留既有設定 6 種/);
   });
   props.draft.lockMap = 'b';
   props.snap.inventory.push({ itemId: 107 });
@@ -94,15 +108,17 @@ async function run() {
   check('換圖保留前次新增和玩家既有規則，只補新圖符合條件的道具', () => {
     assert.equal(changes.length, 2);
     assert.deepEqual(props.draft.autoSell, [101]);
-    assert.deepEqual(props.draft.autoStorage.items, [102, 106, 108]);
-    assert.deepEqual(props.draft.lootPriority.items, [103, 106, 108]);
-    assert.match(document.body.textContent, /新增 1 種，保留既有設定 2 種，略過背包已有 2 種/);
+    assert.deepEqual(props.draft.autoStorage.items, [102, 104, 106, 107, 108]);
+    assert.deepEqual(props.draft.lootPriority.items, [103, 104, 106, 107, 108]);
+    assert.deepEqual(props.draft.lootFilter, draft.lootFilter);
+    assert.equal(props.draft.autoLoot, false);
+    assert.match(document.body.textContent, /新增 2 種，保留既有設定 3 種/);
   });
   document.querySelector('[data-roi-settings-tools] button').click();
   await settle();
   check('手動重複按設定本圖沒有缺漏時不寫入草稿', () => {
     assert.equal(changes.length, 2);
-    assert.match(document.body.textContent, /新增 0 種，保留既有設定 3 種，略過背包已有 2 種/);
+    assert.match(document.body.textContent, /新增 0 種，保留既有設定 5 種/);
   });
   const follow = document.querySelector('[data-roi-loot-auto]');
   const onlyHere = document.querySelector('[data-roi-loot-auto-here]');
@@ -140,7 +156,7 @@ async function run() {
   await selectMap('a');
   check('開啟隨地圖自動設定後可同步新圖，原有規則仍保留', () => {
     assert.equal(changes.length, 4);
-    assert.deepEqual(props.draft.autoStorage.items, [102, 106, 108, 110, 109]);
+    assert.deepEqual(props.draft.autoStorage.items, [102, 104, 106, 107, 108, 110, 109]);
   });
 }
 
