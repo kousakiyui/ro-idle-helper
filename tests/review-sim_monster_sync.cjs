@@ -5,21 +5,23 @@ const { JSDOM } = require('jsdom');
 const source = fs.readFileSync(process.argv[2], 'utf8');
 const read = (start, end) => source.slice(source.indexOf(start), source.indexOf(end));
 const production = read('  function readMonsterRules(', '  const itemIds =')
-  + 'const lootSyncPanels = new WeakMap();'
+  + 'const lootSyncPanels = new WeakMap(), monsterSyncPanels = new WeakMap();'
   + read('  function mountSettingsTools()', '  const refSelected =');
-const dom = new JSDOM('<div><select aria-label="怪物控制：加入怪物"></select></div>');
+const dom = new JSDOM('<div><select aria-label="怪物控制：加入怪物"></select></div>', { pretendToBeVisual: true });
 const { document } = dom.window;
 const original = [
   { monsterId: 30, action: 'priority', minHp: 75, siegeWeight: 2 },
   { monsterId: 10, action: 'lure', escape: 'sight', minSp: 20 }
 ];
 const initial = {
+  lockMap: 'a',
   monsterRules: original,
   targets: { blacklist: [40], whitelist: [99] },
   escape: { dangerMonsters: [50], danger: 'teleport' }
 };
 const changes = [];
 const props = {
+  snap: { character: { id: 1 } },
   draft: initial,
   mapMonsters: [10, 50, 60, { id: '60' }, 70],
   update(patch) {
@@ -27,9 +29,18 @@ const props = {
     this.draft = { ...this.draft, ...patch };
   }
 };
-const mount = new Function('document', 'getCommittedProps', 'findRareRoots', production + 'return mountSettingsTools;')(
-  document, (select, check) => select?.isConnected && check(props) ? props : null, () => []
-);
+const settings = new Map();
+const env = {
+  document,
+  getCommittedProps: (select, check) => select?.isConnected && check(props) ? props : null,
+  findRareRoots: () => [],
+  snapshotCharacterId: (snapshot) => snapshot?.character?.id ?? null,
+  readValidatedSetting: (key, validate, fallback) => settings.has(key) ? validate(settings.get(key)) : fallback,
+  GM_setValue: (key, value) => settings.set(key, value),
+  FiberTraversalTimeout: class extends Error {},
+  log: (_scope, error) => { throw error; }
+};
+const mount = new Function(...Object.keys(env), production + 'return mountSettingsTools;')(...Object.values(env));
 const message = () => document.querySelector('[data-roi-mon-status]').textContent;
 const sync = () => [...document.querySelectorAll('[data-roi-mon-btn]')]
   .find((button) => button.textContent.includes('同步本圖怪物')).click();
@@ -84,6 +95,32 @@ try {
     assert.equal(changes.length, 2);
     assert.equal(props.draft.monsterRules.length, 200);
     assert.deepEqual(props.draft.monsterRules.at(-1), { monsterId: 60, action: 'attack' });
+  });
+  check('怪物自動同步預設關閉，啟用後換圖只補一次', () => {
+    const toggle = document.querySelector('[data-roi-mon-auto]');
+    assert.equal(toggle.checked, false);
+    props.draft = initial;
+    props.mapMonsters = [10, 60];
+    toggle.click();
+    assert.equal(changes.length, 3);
+    props.draft.lockMap = 'b';
+    props.mapMonsters = [70];
+    mount();
+    mount();
+    assert.equal(changes.length, 4);
+    assert.deepEqual(props.draft.monsterRules.map((rule) => rule.monsterId), [30, 10, 40, 50, 60, 70]);
+    assert.equal(document.querySelectorAll('[data-roi-mon-auto]').length, 1);
+  });
+  check('切角後載入該角色的自動同步設定', () => {
+    props.snap = { character: { id: 2 } };
+    props.draft = { ...initial, lockMap: 'b' };
+    mount();
+    assert.equal(document.querySelector('[data-roi-mon-auto]').checked, false);
+    assert.equal(changes.length, 4);
+    props.snap = { character: { id: 1 } };
+    mount();
+    assert.equal(document.querySelector('[data-roi-mon-auto]').checked, true);
+    assert.equal(changes.length, 5);
   });
 } finally {
   dom.window.close();

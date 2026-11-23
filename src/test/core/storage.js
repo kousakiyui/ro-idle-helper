@@ -138,6 +138,10 @@
         modes[cat] = profile.modes[cat];
       }
       result[id] = { enabled: profile.enabled, modes };
+      if (profile.currentMap !== undefined) {
+        if (typeof profile.currentMap !== 'string' || !/^[\w-]{1,80}$/.test(profile.currentMap)) throw Error('掛機地圖格式不符');
+        result[id].currentMap = profile.currentMap;
+      }
     }
     return result;
   }

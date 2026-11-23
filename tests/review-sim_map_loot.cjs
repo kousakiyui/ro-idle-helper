@@ -38,10 +38,11 @@ const env = {
   classifyItem: () => ({ cat: 'weapon' }),
   loadLootPack: async () => pack,
   readValidatedSetting: () => profiles,
-  validateCategoryProfiles: () => {},
+  validateCategoryProfiles: (value) => value,
   salvageCategoryProfiles: () => {},
   plainObject: (value) => !!value && typeof value === 'object',
   GM_getValue: (_key, fallback) => fallback,
+  GM_setValue(_key, value) { Object.assign(profiles, value); },
   FiberTraversalTimeout: class extends Error {}
 };
 const { buildCategoryLootPatch, getMapLoot, mountSettingsTools } = new Function(
@@ -102,6 +103,44 @@ async function run() {
   check('手動重複按設定本圖沒有缺漏時不寫入草稿', () => {
     assert.equal(changes.length, 2);
     assert.match(document.body.textContent, /新增 0 種，保留既有設定 3 種，略過背包已有 2 種/);
+  });
+  const follow = document.querySelector('[data-roi-loot-auto]');
+  const onlyHere = document.querySelector('[data-roi-loot-auto-here]');
+  const selectMap = async (map) => {
+    props.draft.lockMap = map;
+    mountSettingsTools();
+    await settle();
+  };
+  follow.click();
+  onlyHere.click();
+  await settle();
+  check('本圖自動設定綁定地圖，獨立於隨地圖選項', () => {
+    assert.equal(profiles.player.enabled, false);
+    assert.equal(profiles.player.currentMap, 'b');
+    assert.equal(onlyHere.checked, true);
+  });
+  pack.items.set(109, { id: 109, name: '新圖掉落', category: 'equipment' });
+  pack.monsters.get(1).drops.push({ itemId: 109 });
+  await selectMap('a');
+  check('只勾自動設定本圖，切到別張圖時不會寫入', () => {
+    assert.equal(onlyHere.checked, false);
+    assert.equal(changes.length, 2);
+  });
+  pack.items.set(110, { id: 110, name: '本圖新掉落', category: 'equipment' });
+  pack.monsters.get(2).drops.push({ itemId: 110 });
+  await selectMap('b');
+  check('回到綁定地圖自動補設定，兩個開關都開也不重複寫入', () => {
+    assert.equal(onlyHere.checked, true);
+    assert.equal(changes.length, 3);
+    assert.ok(props.draft.autoStorage.items.includes(110));
+    follow.click();
+  });
+  await settle();
+  assert.equal(changes.length, 3);
+  await selectMap('a');
+  check('開啟隨地圖自動設定後可同步新圖，原有規則仍保留', () => {
+    assert.equal(changes.length, 4);
+    assert.deepEqual(props.draft.autoStorage.items, [102, 106, 108, 110, 109]);
   });
 }
 
