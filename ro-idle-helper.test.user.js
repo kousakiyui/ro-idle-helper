@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.5.1.9
+// @version      3.5.2.1
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -216,6 +216,8 @@
     activeLogFlush: 120, idleLogFlush: 250, alertRenderGap: 250,
     // MVP background and render cadence.
     mvpCaptureGap: 1000, mvpBackground: 15000, mvpRender: 30000,
+    // Minimum spacing between native refinement-related requests (not a UI readiness check).
+    refineCommandGap: 1000,
     // Market refresh and query spacing.
     marketRefresh: 15000, marketSnapshotWait: 800, marketCrossSearchGap: 2200
   });
@@ -2769,6 +2771,22 @@
     button.click();
   }
 
+  let lastRefineCommandAt = -Infinity;
+  async function waitForRefineCommandSlot(session) {
+    let remaining = TIMING.refineCommandGap - (performance.now() - lastRefineCommandAt);
+    while (remaining > 0) {
+      await refineAwait(session, sleep(remaining));
+      remaining = TIMING.refineCommandGap - (performance.now() - lastRefineCommandAt);
+    }
+    assertRefineSession(session, session.restoring === true);
+  }
+
+  function clickRefineCommand(session, button, uid) {
+    // Reserve the slot before dispatching the native click, including synchronous responses.
+    lastRefineCommandAt = performance.now();
+    clickRefineControl(session, button, uid);
+  }
+
   function stopRefine() {
     refStop = true;
     pageNet.events.dispatchEvent(new Event('ui-abort'));
@@ -2808,7 +2826,8 @@
     if (Object.values(b.s.equipment || {}).includes(uid)) return b;
     const eqBtn = await readRefineDetail(b.table, uid, (t) => t === '裝備', session);
     if (!eqBtn || eqBtn.disabled) throw Error('此職業無法穿戴該裝備進行忽克連精煉');
-    clickRefineControl(session, eqBtn, uid);
+    await waitForRefineCommandSlot(session);
+    clickRefineCommand(session, findNativeDetailBtn(b.table, uid, t => t === '裝備'), uid);
     const equipped = await waitForRefineUi(session, () => {
       const live = assertRefineTarget(session, uid);
       return live && Object.values(live.s.equipment || {}).includes(uid) && live;
@@ -2884,6 +2903,7 @@
         if (selected.size >= maxItems) break;
       }
       if (!selected.size) return [];
+      await waitForRefineCommandSlot(session);
       const boxes = checked();
       for (const [cb, expected] of selected) {
         const row = cb.closest('li');
@@ -2903,7 +2923,7 @@
       setStatus(`📦 領取 ${selected.size} 項` + (materialQuantity !== null ? `（${[...selected.values()].reduce((sum, item) => sum + item.quantity, 0)} 個材料）` : ''));
       // The batch above is verified against the native selection, including rows hidden by the custom tab.
       refineWarehouseSubmitButton = btn;
-      try { clickRefineControl(session, btn); }
+      try { clickRefineCommand(session, btn); }
       finally { refineWarehouseSubmitButton = null; }
       submitted = true;
       const acknowledged = await waitForRefineUi(session, () =>
@@ -3086,6 +3106,7 @@
           if (curPlus < safeTarget && (modeType === 'safe_only' || safeTarget <= refTargetPlus)) {
             setStatus(`⚡ 一鍵安全值：【${target.name}】+${curPlus} ➔ +${safeTarget}...`);
             if (refStop || document.hidden) throw Error('已中止精煉');
+            await waitForRefineCommandSlot(session);
             const originalConfirm = page.confirm;
             let accepted = true;
             try {
@@ -3095,7 +3116,8 @@
                 return accepted;
               };
               if ((assertRefineTarget(session, uid).s.inventory.find((item) => item.uid === uid).refine || 0) !== curPlus) throw Error('精煉值已變動');
-              clickRefineControl(session, safeBtn, uid);
+              const liveSafeBtn = findNativeDetailBtn(b.table, uid, t => Number(t.match(/^一鍵精煉到安全值\s*\+(\d+)/)?.[1]) === safeTarget);
+              clickRefineCommand(session, liveSafeBtn, uid);
             } finally {
               page.confirm = originalConfirm;
             }
@@ -3158,6 +3180,10 @@
           : `【${target.name}】精煉按鈕不可用（礦石已用盡、Zeny/SP不足或不在主城）`);
 
         if (refStop || document.hidden) throw Error('已中止精煉');
+        const useSkill = activeBtn === skillBtn;
+        await waitForRefineCommandSlot(session);
+        b = assertRefineTarget(session, uid);
+        activeBtn = findNativeDetailBtn(b.table, uid, useSkill ? isWeaponRefineButton : isNpcRefineButton);
         const beforeMatQty = material ? materialCount(b.s.inventory, material) : 0;
         const beforeZeny = b.s.character.zeny, beforeSp = b.s.character.sp;
         setStatus(`🔨 衝裝中：【${target.name}】+${curPlus} ➔ +${curPlus + 1} (成功:${successCnt} 爆:${brokenCnt})`);
@@ -3172,7 +3198,7 @@
           };
           if ((assertRefineTarget(session, uid).s.inventory.find((item) => item.uid === uid).refine || 0) !== curPlus) throw Error('精煉值已變動');
           settleGate = { since: pageNet.settled, candidate: null };
-          clickRefineControl(session, activeBtn, uid);
+          clickRefineCommand(session, activeBtn, uid);
         } finally {
           page.confirm = origConfirm;
         }
@@ -3180,7 +3206,7 @@
 
         const result = await waitForRefineResult(session, uid, {
           root: b.host?.parentElement, curPlus, material, beforeMatQty, beforeZeny, beforeSp,
-          useSkill: activeBtn === skillBtn, settleGate
+          useSkill, settleGate
         });
         if (!result) throw Error('精煉結果不明，請核對裝備與消耗');
         b = result.b;
@@ -3191,7 +3217,8 @@
             if (refAutoWh && result.nowSt.refine >= refTargetPlus && !refStop && !document.hidden) {
               const stBtn = await readRefineDetail(b.table, uid, (t) => /^存入倉庫|^存倉$/.test(t), session);
               if (stBtn && !stBtn.disabled) {
-                clickRefineControl(session, stBtn, uid);
+                await waitForRefineCommandSlot(session);
+                clickRefineCommand(session, findNativeDetailBtn(b.table, uid, t => /^存入倉庫|^存倉$/.test(t)), uid);
                 const stored = await waitForRefineUi(session, () => {
                   const live = assertRefineTarget(session, uid, true);
                   return live && !live.s.inventory.some(x => x.uid === uid);
@@ -4353,7 +4380,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.1.9 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.2.1 測試版</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">

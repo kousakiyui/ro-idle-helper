@@ -11,6 +11,8 @@
     activeLogFlush: 120, idleLogFlush: 250, alertRenderGap: 250,
     // MVP background and render cadence.
     mvpCaptureGap: 1000, mvpBackground: 15000, mvpRender: 30000,
+    // Minimum spacing between native refinement-related requests (not a UI readiness check).
+    refineCommandGap: 1000,
     // Market refresh and query spacing.
     marketRefresh: 15000, marketSnapshotWait: 800, marketCrossSearchGap: 2200
   });
