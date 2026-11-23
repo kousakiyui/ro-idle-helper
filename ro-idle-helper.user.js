@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.5.2.2
+// @version      3.5.2.3
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -2131,7 +2131,6 @@
   const lootCategoryModes = {
     off: '保留原設定', store: '全部存倉', priority: '優先撿取＋存倉', valuable: '僅貴重物優先撿取＋存倉'
   };
-  const categorySyncByCharacter = new Map();
 
   function lootCategory(id, name, pack) {
     const item = pack.items.get(id);
@@ -2143,48 +2142,50 @@
       : cat === 'card' || cat === 'consumable' ? cat : 'other';
   }
 
-  function buildCategoryLootPatch(draft, loot, pack, modes, previous) {
+  function buildCategoryLootPatch(draft, loot, pack, modes, inventory) {
+    if (!Array.isArray(inventory)) throw Error('無法讀取背包，請重新開啟掛機設定');
     const storage = storageRule(draft.autoStorage);
     const priority = listItems(draft.lootPriority);
-    const storageBase = storage.items.filter((id) => !previous?.storage.has(id));
-    const priorityBase = priority.filter((id) => !previous?.priority.has(id));
-    const stored = new Set(), prioritized = new Set();
+    const configured = new Set([...storage.items, ...priority, ...listItems(draft.autoSell)]);
+    const carried = new Set(itemIds(inventory));
+    const stored = [], prioritized = [];
     const supplies = lootSupplyIds(draft);
     const counts = Object.fromEntries(Object.keys(lootCategoryLabels).map((cat) => [cat, 0]));
+    let preserved = 0, skippedCarried = 0;
     for (const [id, name] of loot) {
       const category = lootCategory(id, name, pack);
       const mode = modes[category];
       if (mode === 'off' || !Object.hasOwn(lootCategoryModes, mode)) continue;
       if (mode === 'valuable' && !isValuableLoot(id, name)) continue;
-      // 沿用既有補品、補給排除規則。
       if (supplies.has(id)) continue;
+      if (configured.has(id)) {
+        preserved++;
+        continue;
+      }
+      if (carried.has(id)) {
+        skippedCarried++;
+        continue;
+      }
       counts[category]++;
-      stored.add(id);
-      if (mode === 'priority' || mode === 'valuable') prioritized.add(id);
+      stored.push(id);
+      if (mode === 'priority' || mode === 'valuable') prioritized.push(id);
     }
-    const storageItems = [...new Set([...storageBase, ...stored])];
-    const priorityItems = [...new Set([...priorityBase, ...prioritized])];
-    if (storageItems.length > 2000 || priorityItems.length > 500) {
+    if ((stored.length && storage.items.length + stored.length > 2000)
+      || (prioritized.length && priority.length + prioritized.length > 500)) {
       throw Error('分類設定會超過存倉或優先撿取上限，請縮小範圍');
     }
     const patch = {};
-    if (stored.size || JSON.stringify(storageItems) !== JSON.stringify(storage.items)) {
-      patch.autoStorage = { ...storage, ...(stored.size ? { enabled: true } : {}), items: storageItems };
-    }
-    if (prioritized.size || JSON.stringify(priorityItems) !== JSON.stringify(priority)) {
-      patch.lootPriority = { ...(draft.lootPriority?.rare ? { rare: true } : {}), items: priorityItems };
-    }
-    if (stored.size) {
+    if (stored.length) {
+      // 若玩家暫停了既有存倉規則，補入項目時維持停用狀態。
+      const enabled = !storage.items.length || storage.enabled !== false;
+      patch.autoStorage = { ...storage, enabled, items: [...storage.items, ...stored] };
       patch.autoLoot = true;
-      patch.autoSell = itemIds(draft.autoSell).filter((id) => !stored.has(id));
     }
-    return {
-      patch, counts,
-      tracked: {
-        storage: new Set([...stored].filter((id) => !storageBase.includes(id))),
-        priority: new Set([...prioritized].filter((id) => !priorityBase.includes(id)))
-      }
-    };
+    if (prioritized.length) {
+      const rule = draft.lootPriority;
+      patch.lootPriority = { ...(Array.isArray(rule) ? {} : rule), items: [...priority, ...prioritized] };
+    }
+    return { patch, counts, added: stored.length, preserved, skippedCarried };
   }
 
   function mountSettingsTools() {
@@ -2263,11 +2264,11 @@
             return;
           }
           const loot = getMapLoot(pack, mapId);
-          const result = buildCategoryLootPatch(current.draft, loot, pack, modes, categorySyncByCharacter.get(id));
-          if (Object.keys(result.patch).length) current.update(result.patch);
-          categorySyncByCharacter.set(id, result.tracked);
+          const result = buildCategoryLootPatch(current.draft, loot, pack, modes, current.snap.inventory);
+          if (result.added) current.update(result.patch);
           for (const [cat, count] of Object.entries(result.counts)) counters.get(cat).textContent = count + ' 種';
-          status.textContent = Object.keys(result.patch).length ? '已更新草稿，請按「套用設定」' : '分類設定已同步';
+          const summary = `新增 ${result.added} 種，保留既有設定 ${result.preserved} 種，略過背包已有 ${result.skippedCarried} 種`;
+          status.textContent = result.added ? summary + '，請按「套用設定」' : summary;
         } catch (error) {
           if (pendingKey === lastAutoKey) lastAutoKey = null;
           status.textContent = '⚠️ ' + error.message;
@@ -2311,7 +2312,7 @@
           else status.textContent = '已關閉自動設定';
         } catch (error) { status.textContent = '⚠️ ' + error.message; }
       };
-      const note = element('span', '依本圖掉落設定；已指定的補品與補給會排除。', 'grid-column:1 / -1;color:var(--text-dim)');
+      const note = element('span', '只補本圖掉落；保留既有設定，略過背包已有的道具與補給。', 'grid-column:1 / -1;color:var(--text-dim)');
       status.style.gridColumn = '2 / -1';
       box.append(note, syncNow, status);
       const tick = () => {
@@ -4391,7 +4392,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.2.2</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.2.3</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
