@@ -12,7 +12,7 @@ function slice(name) {
 }
 const names = ['tryWithdrawFromWarehouse','assertRefineSession','assertRefineTarget','refineAwait','clickRefineControl','refineActor',
   'readBackpackContext','getCommittedProps','currentFiberRoot','getReactFiber','nativeStoreActor','findRefineNativeStore',
-  'warehouseItemId','materialWithdrawalAmount','validMaterialBatch'];
+  'warehouseItemId','materialWithdrawalAmount','validMaterialBatch','waitForUi','waitForRefineUi'];
 if (!stale) names.push('createFiberScanBudget');
 const parts = names.map(slice).filter(Boolean);
 const v351 = /createFiberScanBudget/.test(src);
@@ -40,7 +40,7 @@ function build(withBag = false) {
   const hooks = { onCheck: null, onSubmit: null };
   const sync = () => { const n = field.querySelectorAll('ul input:checked').length; submit.textContent = `取出 ${n} 項`; submit.disabled = n === 0; };
   for (const cb of field.querySelectorAll('ul input')) cb.addEventListener('click', () => { sync(); hooks.onCheck?.(); });
-  submit.addEventListener('click', () => { counters.submit++; hooks.onSubmit?.(); });
+  submit.addEventListener('click', () => { counters.submit++; hooks.onSubmit?.(); for (const cb of field.querySelectorAll("ul input")) cb.checked = false; sync(); });
   for (const b of document.querySelectorAll('nav button')) b.addEventListener('click', () => counters.tabClicks++);
   // 假 React：HostRoot -> fieldset（props.snap 帶角色）
   const snap = { character: { id: 1, name: '甲', zeny: 100 }, inventory: [], mapId: 'prontera' };
@@ -54,7 +54,7 @@ function build(withBag = false) {
     fsFiber.sibling = tableFiber; table.__reactFiber$test = tableFiber;
   }
   const env = {
-    document, state: { activeCharId: 1 }, performance, requestAnimationFrame: f => setTimeout(f, 16), runPageRouter() {},
+    document, MutationObserver: dom.window.MutationObserver, pageNet: { events: new dom.window.EventTarget() }, state: { activeCharId: 1 }, performance, requestAnimationFrame: f => setTimeout(f, 16), runPageRouter() {},
     clean: s => String(s || '').normalize('NFKC').replace(/\s+/g, ' ').trim(),
     visible: el => Boolean(el && el.isConnected && !el.closest('[hidden]')),
     sleep: ms => new Promise(r => setTimeout(r, Math.min(ms, 5))), console
@@ -84,5 +84,5 @@ async function scenario(label, setup, expectSubmit, withBag = false) {
   r.push(await scenario('S5 背包同時可見（refineActor 走背包快照）同角色領倉', () => ({}), 1, true));
   r.push(await scenario('S6 背包可見、提交後切角', t => { t.hooks.onSubmit = () => t.switchRole(2); return {}; }, 1, true));
   r.push(await scenario('S7 背包可見、切到角色2後新 session', t => { t.switchRole(2); return { session: { characterId: 2, epoch: t.api.epoch(), targetUid: null, items: new Map() } }; }, 1, true));
-  console.log(r.every(Boolean) ? 'ALL PASS' : 'SOME FAIL');
+  console.log(r.every(Boolean) ? 'ALL PASS' : 'SOME FAIL'); if (!r.every(Boolean)) process.exitCode = 1;
 })();

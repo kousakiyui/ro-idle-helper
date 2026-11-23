@@ -33,6 +33,68 @@ function make({ roster }) {
   return { api, env, store, alerts, get fetches() { return fetches; }, advance: ms => { now += ms; }, set: v => { now = v; }, now: () => now };
 }
 let ok = true; const check = (l, c) => { console.log((c ? 'PASS ' : 'FAIL ') + l); ok &&= c; };
+async function refineEvents() {
+  const { JSDOM } = require('jsdom');
+  const assert = require('node:assert/strict');
+  const dom = new JSDOM('<body><main></main></body>', { pretendToBeVisual: true });
+  const w = dom.window;
+  const root = w.document.querySelector('main');
+  const document = w.document;
+  const pageNet = { events: new w.EventTarget(), settled: 0, inFlight: 1 };
+  const equipment = { uid: 7, itemId: 1201, refine: 3 };
+  const materials = { uid: 8, itemId: 984, qty: 2 };
+  const b = { s: { inventory: [equipment, materials], character: { zeny: 100, sp: 20 } } };
+  const materialCount = (inventory, id) => inventory.find(item => item.itemId === id)?.qty || 0;
+  const names = ['waitForUi', 'waitForRefineUi', 'waitForRefineResult', 'refineNoUpgradeSettled'];
+  const env = {
+    pageNet, document, MutationObserver: w.MutationObserver, materialCount,
+    assertRefineSession() {}, assertRefineTarget: () => b,
+    refineIdentityEpoch: 0, state: { activeCharId: 1 }, refStop: false
+  };
+  const waitForResult = new Function(...Object.keys(env), names.map(slice).join('\n') +
+    '\nreturn waitForRefineResult;')(...Object.values(env));
+  const begin = () => {
+    equipment.refine = 3; materials.qty = 2; b.s.character.zeny = 100;
+    b.s.inventory = [equipment, materials]; pageNet.inFlight = 1;
+    return waitForResult({ characterId: 1, epoch: 0 }, 7, {
+      root, curPlus: 3, material: 984, beforeMatQty: 2, beforeZeny: 100,
+      useSkill: false, settleGate: { since: pageNet.settled, candidate: null }
+    });
+  };
+  const spend = () => { materials.qty--; b.s.character.zeny--; };
+  const settle = () => { pageNet.inFlight = 0; pageNet.settled++; pageNet.events.dispatchEvent(new w.Event('settled')); };
+  const commit = () => root.append(document.createTextNode('更新'));
+  try {
+    let result = begin();
+    equipment.refine++; commit();
+    check('精煉成功由背包提交喚醒', (await result).kind === 'success');
+
+    result = begin();
+    spend(); b.s.inventory = [materials]; settle();
+    check('精煉損壞由網路回應喚醒', (await result).kind === 'broken');
+
+    result = begin();
+    spend(); settle(); await Promise.resolve();
+    let finished = false;
+    result.then(() => { finished = true; });
+    await Promise.resolve();
+    check('扣款後首讀不能完成未升階判定', !finished);
+    commit();
+    check('精煉未升階須等下一次訊號再確認', (await result).kind === 'failed');
+
+    result = begin();
+    spend(); settle(); await Promise.resolve();
+    equipment.refine++; commit();
+    check('第二次確認收到晚到的升階', (await result).kind === 'success');
+
+    result = begin();
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    document.dispatchEvent(new w.Event('visibilitychange'));
+    await assert.rejects(result, /停止/);
+    check('精煉中途切背景即中止', true);
+  } finally { w.close(); }
+}
+
 (async () => {
   console.log('==', require('path').basename(process.argv[2]));
   { // A
@@ -64,5 +126,7 @@ let ok = true; const check = (l, c) => { console.log((c ? 'PASS ' : 'FAIL ') + l
     for (let n = 0; n < 40; n++) { tick += 45000 + Math.floor(Math.random() * 3); t.set(tick); const before = t.fetches; await t.api.pollChars(); if (t.fetches > before) polls++; }
     check(`D 單頁 45 秒計時器 40 輪 → 實際發出名單請求 ${polls} 輪（應接近 40）`, polls >= 38);
   }
+  await refineEvents();
   console.log(ok ? 'ALL PASS' : 'SOME FAIL');
+  if (!ok) process.exitCode = 1;
 })();

@@ -33,12 +33,12 @@ let ok = true; const check = (label, cond) => { console.log((cond ? 'PASS ' : 'F
 // ---- 2. 未升階判定：網路回應完成後連續兩次一致才確定；無 fetch 活動時不提前判定
 {
   const fn = slice('refineNoUpgradeSettled', true);
-  check('精煉迴圈有呼叫 refineNoUpgradeSettled', !!fn && /if \(refineNoUpgradeSettled\(settleGate, confirmedNoUpgrade, pageNet\)\) break;/.test(src));
+  check('事件式精煉結果讀取有呼叫 refineNoUpgradeSettled', !!fn && /if \(refineNoUpgradeSettled\(settleGate, confirmedNoUpgrade, pageNet\) \|\|/.test(src));
   if (fn) {
     const settled = new Function(fn + 'return refineNoUpgradeSettled;')();
     const run = (timeline) => { const gate = { since: 10, candidate: null }; for (let i = 0; i < timeline.length; i++) if (settled(gate, ...timeline[i])) return i + 1; return null; };
-    // 每 100ms 一讀：[confirmed, {inFlight, settled}]
-    check('正常：第 1 讀請求中、第 2 讀回應後扣款 → 第 3 讀確定（約 0.3 秒）',
+    // 每次訊號觸發一讀：[confirmed, {inFlight, settled}]
+    check('正常：第 1 讀請求中、第 2 讀回應後扣款 → 第 3 讀確定',
       run([[false, { inFlight: 1, settled: 10 }], [true, { inFlight: 0, settled: 11 }], [true, { inFlight: 0, settled: 11 }]]) === 3);
     check('遊戲不走 fetch（settled 不變）→ 不提前判定，沿用 8 秒上限', run(Array.from({ length: 80 }, () => [true, { inFlight: 0, settled: 10 }])) === null);
     check('兩讀之間又有新回應 → 重新確認', run([[true, { inFlight: 0, settled: 11 }], [true, { inFlight: 0, settled: 12 }], [true, { inFlight: 0, settled: 12 }]]) === 3);
