@@ -363,19 +363,30 @@
   function waitForRefineResult(session, uid, options) {
     const { root, curPlus, material, beforeMatQty, beforeZeny, beforeSp, useSkill, settleGate } = options;
     let previouslyConfirmed = false;
+    const skillMaterialGate = { since: settleGate.since, candidate: null };
+    let previousMaterialOutcome = null;
     return waitForRefineUi(session, expired => {
       const b = assertRefineTarget(session, uid, true);
       const nowSt = b?.s.inventory.find(x => x.uid === uid);
       if (!b) {
         previouslyConfirmed = false;
-        settleGate.candidate = null;
+        settleGate.candidate = skillMaterialGate.candidate = null;
+        previousMaterialOutcome = null;
         return null;
       }
       const paid = useSkill ? b.s.character.sp <= beforeSp - 5 : b.s.character.zeny < beforeZeny;
       if (nowSt && (nowSt.refine || 0) === curPlus + 1) return { kind: 'success', b, nowSt };
       if (!nowSt && paid) return { kind: 'broken', b };
-      const confirmedNoUpgrade = Boolean(nowSt && paid && (nowSt.refine || 0) <= curPlus &&
-        (!material || materialCount(b.s.inventory, material) < beforeMatQty));
+      const materialUsed = Boolean(material && materialCount(b.s.inventory, material) < beforeMatQty);
+      const atOrBelow = nowSt && (nowSt.refine || 0) <= curPlus;
+      // A recovered SP value can hide the skill cost. Confirm the same equipment
+      // outcome twice against the depleted ore and a settled request.
+      const materialOutcome = useSkill && !paid && materialUsed ?
+        (!nowSt ? 'broken' : atOrBelow ? 'failed' : null) : null;
+      if (materialOutcome !== previousMaterialOutcome) skillMaterialGate.candidate = null;
+      previousMaterialOutcome = materialOutcome;
+      if (refineNoUpgradeSettled(skillMaterialGate, Boolean(materialOutcome), pageNet)) return { kind: materialOutcome, b };
+      const confirmedNoUpgrade = Boolean(atOrBelow && paid && (!material || materialUsed));
       if (refineNoUpgradeSettled(settleGate, confirmedNoUpgrade, pageNet) ||
           (expired && previouslyConfirmed && confirmedNoUpgrade && pageNet.inFlight === 0)) return { kind: 'failed', b };
       previouslyConfirmed = confirmedNoUpgrade;

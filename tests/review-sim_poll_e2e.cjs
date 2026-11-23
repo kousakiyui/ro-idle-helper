@@ -48,17 +48,18 @@ async function refineEvents() {
   const names = ['waitForUi', 'waitForRefineUi', 'waitForRefineResult', 'refineNoUpgradeSettled'];
   const env = {
     pageNet, document, MutationObserver: w.MutationObserver, materialCount,
+    setTimeout: (callback, delay) => setTimeout(callback, Math.min(delay, 100)),
     assertRefineSession() {}, assertRefineTarget: () => b,
     refineIdentityEpoch: 0, state: { activeCharId: 1 }, refStop: false
   };
   const waitForResult = new Function(...Object.keys(env), names.map(slice).join('\n') +
     '\nreturn waitForRefineResult;')(...Object.values(env));
-  const begin = () => {
+  const begin = (useSkill = false) => {
     equipment.refine = 3; materials.qty = 2; b.s.character.zeny = 100;
     b.s.inventory = [equipment, materials]; pageNet.inFlight = 1;
     return waitForResult({ characterId: 1, epoch: 0 }, 7, {
       root, curPlus: 3, material: 984, beforeMatQty: 2, beforeZeny: 100,
-      useSkill: false, settleGate: { since: pageNet.settled, candidate: null }
+      beforeSp: 20, useSkill, settleGate: { since: pageNet.settled, candidate: null }
     });
   };
   const spend = () => { materials.qty--; b.s.character.zeny--; };
@@ -86,6 +87,27 @@ async function refineEvents() {
     spend(); settle(); await Promise.resolve();
     equipment.refine++; commit();
     check('第二次確認收到晚到的升階', (await result).kind === 'success');
+
+    result = begin(true);
+    materials.qty--; b.s.inventory = [materials]; settle(); await Promise.resolve();
+    commit();
+    check('神工匠 SP 已回復，扣礦和 UID 消失兩次確認後辨識損壞', (await result).kind === 'broken');
+
+    result = begin(true);
+    materials.qty--; settle(); await Promise.resolve(); commit();
+    check('神工匠 SP 已回復，扣礦且精煉值持平可辨識未升階', (await result).kind === 'failed');
+
+    result = begin(true);
+    materials.qty--; settle(); await Promise.resolve(); equipment.refine++; commit();
+    check('神工匠第二次讀取收到晚到的成功', (await result).kind === 'success');
+
+    result = begin(true);
+    settle(); commit();
+    check('請求結束但未扣礦，維持結果不明', await result === null);
+
+    result = begin(true);
+    materials.qty--; b.s.inventory = [materials]; commit();
+    check('扣礦和 UID 消失但請求未結束，維持結果不明', await result === null);
 
     result = begin();
     Object.defineProperty(document, 'hidden', { value: true, configurable: true });
