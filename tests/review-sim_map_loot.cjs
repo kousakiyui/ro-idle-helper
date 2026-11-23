@@ -46,6 +46,8 @@ const props = {
 };
 const env = {
   document,
+  positiveId: (value) => /^[1-9]\d*$/.test(String(value)) ? Number(value) : null,
+  snapshotCharacterId: () => null,
   element(tag, text = '') { const el = document.createElement(tag); el.textContent = text; return el; },
   getCommittedProps(node, check) {
     const candidate = node?.getAttribute('role') === 'tablist'
