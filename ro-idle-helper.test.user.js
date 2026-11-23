@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.5.2.7
+// @version      3.5.3.1
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -2127,6 +2127,12 @@
   const lootItemGroupSelector = '[role="group"][aria-label="道具設定的複製與匯出匯入"]';
   const lootOpenKoreSelector = '[role="tablist"][aria-label="OpenKore 設定檔"]';
   const monsterSyncPanels = new WeakMap();
+  const monsterSelectSelector = 'select[aria-label="怪物控制：加入怪物"]';
+  const monsterSyncModes = {
+    off: '關閉自動同步',
+    add: '自動新增本地圖怪物',
+    replace: '自動換成只有本地圖怪物'
+  };
   const lootModes = ['off', 'store', 'valuable'];
   const lootOres = new Set([984, 985, 756, 757, 1010, 1011]);
   const isValuableLoot = (id, name = '') => classifyItem(id, name).cat === 'card' || lootOres.has(id)
@@ -2185,6 +2191,121 @@
     return { patch, counts, added: stored.length, preserved };
   }
 
+  function readOpenKoreSection(anchor, title, match) {
+    if (!anchor) return null;
+    const section = (props) => Array.isArray(props?.children) && props.children
+      .find((child) => child?.props?.title === title)?.props.children?.props;
+    return section(getCommittedProps(anchor, (props) => match(section(props))));
+  }
+
+  const isMonsterDraft = (props) => typeof props?.update === 'function' && props.draft?.targets && props.draft?.escape;
+
+  function buildMonsterSyncPatch(draft, ids, mode) {
+    if (!ids.length) return { message: '目前地圖沒有可同步的怪物，草稿未變更' };
+    const rules = readMonsterRules(draft);
+    const mapIds = new Set(ids);
+    const retained = mode === 'replace' ? rules.filter((rule) => mapIds.has(Number(rule.monsterId))) : rules;
+    const existing = new Set(retained.map((rule) => Number(rule.monsterId)));
+    const missing = ids.filter((id) => !existing.has(id));
+    const removed = rules.length - retained.length;
+    if (!missing.length && !removed) return { message: '本圖怪物都已設定，草稿未變更' };
+    if (retained.length + missing.length > 200) {
+      return { message: '同步會超過 200 隻上限，草稿未變更' };
+    }
+    return {
+      patch: {
+        monsterRules: [...retained, ...missing.map((monsterId) => ({ monsterId, action: 'attack' }))],
+        targets: { ...draft.targets, blacklist: [] },
+        escape: { ...draft.escape, dangerMonsters: [] }
+      },
+      message: `新增 ${missing.length} 隻，保留 ${retained.length} 隻${removed ? `，移除 ${removed} 隻非本圖怪物` : ''}，請按「套用設定」`
+    };
+  }
+
+  function createMonsterSyncPanel(anchor, openKore) {
+    const select = element('select');
+    select.className = 'xp-input';
+    select.dataset.roiMonMode = '';
+    select.disabled = true;
+    for (const [value, text] of Object.entries(monsterSyncModes)) {
+      const option = element('option', text);
+      option.value = value;
+      select.append(option);
+    }
+    const label = element('label', '同步本圖怪物 ');
+    label.append(select);
+    const status = element('span');
+    status.dataset.roiMonStatus = '';
+    status.setAttribute('role', 'status');
+    const validateMode = (value) => {
+      if (typeof value === 'boolean') return value ? 'add' : 'off';
+      if (typeof value !== 'string' || !Object.hasOwn(monsterSyncModes, value)) throw Error('怪物同步模式格式不符');
+      return value;
+    };
+    const settingKey = (id) => 'roi-monster-auto-map-v1:' + id;
+    const target = () => openKore ?? anchor.querySelector(monsterSelectSelector);
+    const readActor = (node) => {
+      const context = node && getCommittedProps(node, (props) => props.snap?.character &&
+        (positiveId(props.characterId) || snapshotCharacterId(props.snap)));
+      return positiveId(context?.characterId) || snapshotCharacterId(context?.snap);
+    };
+    let boundId = null, mode = 'off', lastMap = null;
+    const sync = (node) => {
+      if (!node || mode === 'off' || document.hidden) return;
+      const props = readOpenKoreSection(openKore, '怪物控制', isMonsterDraft) ||
+        getCommittedProps(node, isMonsterDraft);
+      const map = props?.draft.lockMap;
+      if (!map || map === lastMap) return;
+      const raw = props.mapMonsters;
+      const ids = Array.isArray(raw) && raw.map((entry) => positiveId(entry?.id ?? entry?.monsterId ?? entry));
+      if (!ids || ids.includes(null)) {
+        if (status.textContent !== '無法確認本圖怪物清單，草稿未變更') status.textContent = '無法確認本圖怪物清單，草稿未變更';
+        return;
+      }
+      const { message, patch } = buildMonsterSyncPatch(props.draft, [...new Set(ids)], mode);
+      if (patch) props.update(patch);
+      lastMap = map;
+      status.textContent = message;
+      return patch ? 'updated' : undefined;
+    };
+    const tick = (host) => {
+      if (host && label.parentElement !== host) host.prepend(label, status);
+      try {
+        const node = target();
+        const id = readActor(node);
+        select.disabled = id === null;
+        if (id !== boundId) {
+          boundId = id;
+          mode = id === null ? 'off' : readValidatedSetting(settingKey(id), validateMode, 'off');
+          select.value = mode;
+          lastMap = null;
+          status.textContent = '';
+        }
+        if (id === null && host && !status.textContent) status.textContent = '尚未讀到正在編輯的角色';
+        return sync(node);
+      } catch (error) {
+        if (!(error instanceof FiberTraversalTimeout)) log('monster', error);
+      }
+    };
+    select.onchange = () => {
+      try {
+        const node = target();
+        const id = readActor(node);
+        if (id === null || id !== boundId) { tick(); return; }
+        const next = validateMode(select.value);
+        GM_setValue(settingKey(id), next);
+        mode = next;
+        lastMap = null;
+        if (mode === 'off') status.textContent = '已關閉怪物自動同步';
+        else sync(node);
+      } catch (error) {
+        select.value = mode;
+        status.textContent = error.message;
+      }
+    };
+    return tick;
+  }
+
   function mountSettingsTools() {
     const itemGroup = document.querySelector(lootItemGroupSelector);
     const openKore = document.querySelector(lootOpenKoreSelector);
@@ -2199,11 +2320,9 @@
       box.style.width = '100%';
       box.style.boxSizing = 'border-box';
       const isDraft = (x) => typeof x?.update === 'function' && x.draft && x.snap?.character;
-      const fromSection = (x) => Array.isArray(x?.children) && x.children
-        .find((child) => child?.props?.title === '道具設定')?.props.children?.props;
       const getProps = () => {
         // OpenKore 切離道具頁時會卸載面板，設定容器仍持有這一版草稿的道具區 props。
-        const section = openKore && fromSection(getCommittedProps(openKore, (x) => isDraft(fromSection(x))));
+        const section = readOpenKoreSection(openKore, '道具設定', isDraft);
         const group = openKore ? document.querySelector(lootItemGroupSelector) : lootAnchor;
         const p = section || (group && getCommittedProps(group, isDraft));
         if (!p) throw Error('無法讀取設定草稿');
@@ -2336,18 +2455,10 @@
       lootSyncPanels.set(lootAnchor, tick);
     }
 
-    const monSel = document.querySelector('select[aria-label="怪物控制：加入怪物"]');
+    const monSel = document.querySelector(monsterSelectSelector);
     const monHost = monSel?.parentElement;
-    const liveMonsterSelect = () => monHost?.querySelector('select[aria-label="怪物控制：加入怪物"]');
-    const monsterDraft = () => getCommittedProps(liveMonsterSelect(), (x) => typeof x.update === 'function' && x.draft?.targets && x.draft?.escape);
-    const mapMonsterIds = (p) => {
-      const fromProps = Array.isArray(p?.mapMonsters) ? p
-        : getCommittedProps(liveMonsterSelect(), (x) => Array.isArray(x.mapMonsters) || Array.isArray(x.monsterIds));
-      const raw = fromProps?.mapMonsters || fromProps?.monsterIds
-        || findRareRoots().map((root) => getRareContext(root)?.p.monsterIds).find(Array.isArray);
-      return raw && [...new Set(raw.map((m) => Number(typeof m === 'object' ? m.id ?? m.monsterId : m)))]
-        .filter((id) => Number.isSafeInteger(id) && id > 0);
-    };
+    const monAnchor = openKore ?? monHost;
+    const monsterDraft = () => getCommittedProps(monHost?.querySelector(monsterSelectSelector), isMonsterDraft);
     if (monHost) {
       const addBtn = (txt, fn) => {
         let b = [...monHost.querySelectorAll('[data-roi-mon-btn]')].find((button) => button.textContent === txt);
@@ -2366,32 +2477,6 @@
           }
         };
       };
-      const syncMonsters = (p, automatic = false) => {
-        const status = monHost.querySelector('[data-roi-mon-status]') || document.createElement('span');
-        const ids = p && mapMonsterIds(p);
-        if (automatic && !ids) return false;
-        status.dataset.roiMonStatus = '';
-        if (!status.isConnected) monHost.append(status);
-        if (!ids) { status.textContent = '無法讀取本圖怪物清單或設定草稿，請重新開啟掛機設定'; return false; }
-        if (!ids.length) { status.textContent = '目前地圖沒有可同步的怪物'; return true; }
-        const rules = readMonsterRules(p.draft);
-        const existing = new Set(rules.map((rule) => Number(rule.monsterId)));
-        const missing = ids.filter((id) => !existing.has(id));
-        if (!missing.length) { status.textContent = '本圖怪物都已設定，草稿未變更'; return true; }
-        if (rules.length + missing.length > 200) {
-          status.textContent = '加入本圖怪物會超過 200 隻上限，草稿未變更';
-          return true;
-        }
-        // 與原生加入怪物相同，寫入時將舊版黑名單、危險怪保留成表格規則。
-        p.update({
-          monsterRules: [...rules, ...missing.map((monsterId) => ({ monsterId, action: 'attack' }))],
-          targets: { ...p.draft.targets, blacklist: [] },
-          escape: { ...p.draft.escape, dangerMonsters: [] }
-        });
-        status.textContent = `已新增本圖 ${missing.length} 隻怪物，保留既有 ${rules.length} 隻設定，請按「套用設定」`;
-        return 'updated';
-      };
-      addBtn('🔄 同步本圖怪物', () => syncMonsters(monsterDraft()));
       addBtn('不逃 ⇄ 看到就逃', () => {
         const p = monsterDraft();
         if (!p) { const status = monHost.querySelector('[data-roi-mon-status]'); if (status) status.textContent = '⚠️ 無法讀取怪物設定草稿'; return; }
@@ -2411,64 +2496,12 @@
         const allLure = p.draft.monsterRules.every((r) => r.action === 'lure');
         p.update({ monsterRules: p.draft.monsterRules.map((r) => ({ ...r, action: allLure ? 'attack' : 'lure' })) });
       });
-      if (!monHost.querySelector('[data-roi-mon-auto]')) {
-        const auto = document.createElement('input');
-        auto.type = 'checkbox';
-        auto.dataset.roiMonAuto = '';
-        auto.disabled = true;
-        const label = document.createElement('label');
-        label.append(auto, ' 隨地圖自動同步怪物');
-        monHost.append(label);
-        const actorId = () => {
-          const context = getCommittedProps(liveMonsterSelect(), (x) => x.snap?.character);
-          return snapshotCharacterId(context?.snap);
-        };
-        const settingKey = (id) => 'roi-monster-auto-map-v1:' + id;
-        const validateToggle = (value) => {
-          if (typeof value !== 'boolean') throw Error('怪物自動同步設定格式不符');
-          return value;
-        };
-        let boundId = null, enabled = false, lastMap = null;
-        const tick = () => {
-          try {
-            const id = actorId();
-            auto.disabled = id === null;
-            if (id !== boundId) {
-              boundId = id;
-              enabled = id !== null && readValidatedSetting(settingKey(id), validateToggle, false);
-              auto.checked = enabled;
-              lastMap = null;
-            }
-            if (!enabled || document.hidden) return;
-            const p = monsterDraft();
-            const map = p?.draft.lockMap;
-            if (map && map !== lastMap) {
-              const result = syncMonsters(p, true);
-              if (result) lastMap = map;
-              return result;
-            }
-          } catch (error) {
-            if (!(error instanceof FiberTraversalTimeout)) log('monster', error);
-          }
-        };
-        auto.onchange = () => {
-          try {
-            const id = actorId();
-            if (id === null || id !== boundId) { tick(); return; }
-            GM_setValue(settingKey(id), validateToggle(auto.checked));
-            enabled = auto.checked;
-            lastMap = null;
-            if (enabled) tick();
-          } catch (error) {
-            auto.checked = enabled;
-            log('monster', error);
-          }
-        };
-        monsterSyncPanels.set(monHost, tick);
-      }
+    }
+    if (monAnchor && !monsterSyncPanels.has(monAnchor)) {
+      monsterSyncPanels.set(monAnchor, createMonsterSyncPanel(monAnchor, openKore));
     }
     // 怪物自動同步也會更新同一份草稿，等原生提交這次變動後再補道具。
-    if (monsterSyncPanels.get(monHost)?.() !== 'updated') lootSyncPanels.get(lootAnchor)?.(itemGroup);
+    if (monsterSyncPanels.get(monAnchor)?.(monHost) !== 'updated') lootSyncPanels.get(lootAnchor)?.(itemGroup);
   }
 
   const refSelected = new Set();
@@ -4468,7 +4501,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.2.7 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.3.1 測試版</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -5410,7 +5443,7 @@
     if (document.querySelector('input[aria-label="搜尋物品"]') || refPanel) refreshRefinePanel();
     const legends = [...document.querySelectorAll('fieldset > legend')].map((l) => clean(l.textContent));
     if (
-      document.querySelector(lootItemGroupSelector + ',' + lootOpenKoreSelector + ',select[aria-label="怪物控制：加入怪物"]') ||
+      document.querySelector([lootItemGroupSelector, lootOpenKoreSelector, monsterSelectSelector].join(',')) ||
       rareKnownRoots.size > 0 ||
       legends.some((t) => /^必撿稀有掉落/.test(t))
     ) mountSettingsTools();
