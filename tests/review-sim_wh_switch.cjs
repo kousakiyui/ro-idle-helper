@@ -12,12 +12,13 @@ function slice(name) {
 }
 const names = ['tryWithdrawFromWarehouse','assertRefineSession','assertRefineTarget','refineAwait','clickRefineControl','refineActor',
   'readBackpackContext','getCommittedProps','currentFiberRoot','getReactFiber','nativeStoreActor','findRefineNativeStore',
-  'warehouseItemId','materialWithdrawalAmount','validMaterialBatch','waitForUi','waitForRefineUi'];
+  'warehouseItemId','materialWithdrawalAmount','validMaterialBatch','waitForUi','waitForRefineUi','waitForRefineCommandSlot','clickRefineCommand'];
 if (!stale) names.push('createFiberScanBudget');
 const parts = names.map(slice).filter(Boolean);
 const v351 = /createFiberScanBudget/.test(src);
 const prelude = `
   let refineIdentityEpoch = 0, refineNativeStore = null, cachedFiberKey = null, bagMemo = null, fiberRetryScheduled = false;
+  const TIMING = { refineCommandGap: 1000 }; let lastRefineCommandAt = -Infinity;
   let refineWarehouseSubmitButton = null, visitingWarehouse = false, refStop = false;
   const fiberRouteMap = new WeakMap(), bagFastMiss = ${v351 && !staleSet ? 'new WeakMap()' : 'new WeakSet()'};
   const propsScanRetries = new WeakMap(), backpackScanRetries = new WeakMap(), detailScanRetries = new WeakMap();

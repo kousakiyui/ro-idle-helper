@@ -148,6 +148,22 @@
     button.click();
   }
 
+  let lastRefineCommandAt = -Infinity;
+  async function waitForRefineCommandSlot(session) {
+    let remaining = TIMING.refineCommandGap - (performance.now() - lastRefineCommandAt);
+    while (remaining > 0) {
+      await refineAwait(session, sleep(remaining));
+      remaining = TIMING.refineCommandGap - (performance.now() - lastRefineCommandAt);
+    }
+    assertRefineSession(session, session.restoring === true);
+  }
+
+  function clickRefineCommand(session, button, uid) {
+    // Reserve the slot before dispatching the native click, including synchronous responses.
+    lastRefineCommandAt = performance.now();
+    clickRefineControl(session, button, uid);
+  }
+
   function stopRefine() {
     refStop = true;
     pageNet.events.dispatchEvent(new Event('ui-abort'));
@@ -187,7 +203,8 @@
     if (Object.values(b.s.equipment || {}).includes(uid)) return b;
     const eqBtn = await readRefineDetail(b.table, uid, (t) => t === '裝備', session);
     if (!eqBtn || eqBtn.disabled) throw Error('此職業無法穿戴該裝備進行忽克連精煉');
-    clickRefineControl(session, eqBtn, uid);
+    await waitForRefineCommandSlot(session);
+    clickRefineCommand(session, findNativeDetailBtn(b.table, uid, t => t === '裝備'), uid);
     const equipped = await waitForRefineUi(session, () => {
       const live = assertRefineTarget(session, uid);
       return live && Object.values(live.s.equipment || {}).includes(uid) && live;
@@ -263,6 +280,7 @@
         if (selected.size >= maxItems) break;
       }
       if (!selected.size) return [];
+      await waitForRefineCommandSlot(session);
       const boxes = checked();
       for (const [cb, expected] of selected) {
         const row = cb.closest('li');
@@ -282,7 +300,7 @@
       setStatus(`📦 領取 ${selected.size} 項` + (materialQuantity !== null ? `（${[...selected.values()].reduce((sum, item) => sum + item.quantity, 0)} 個材料）` : ''));
       // The batch above is verified against the native selection, including rows hidden by the custom tab.
       refineWarehouseSubmitButton = btn;
-      try { clickRefineControl(session, btn); }
+      try { clickRefineCommand(session, btn); }
       finally { refineWarehouseSubmitButton = null; }
       submitted = true;
       const acknowledged = await waitForRefineUi(session, () =>
@@ -465,6 +483,7 @@
           if (curPlus < safeTarget && (modeType === 'safe_only' || safeTarget <= refTargetPlus)) {
             setStatus(`⚡ 一鍵安全值：【${target.name}】+${curPlus} ➔ +${safeTarget}...`);
             if (refStop || document.hidden) throw Error('已中止精煉');
+            await waitForRefineCommandSlot(session);
             const originalConfirm = page.confirm;
             let accepted = true;
             try {
@@ -474,7 +493,8 @@
                 return accepted;
               };
               if ((assertRefineTarget(session, uid).s.inventory.find((item) => item.uid === uid).refine || 0) !== curPlus) throw Error('精煉值已變動');
-              clickRefineControl(session, safeBtn, uid);
+              const liveSafeBtn = findNativeDetailBtn(b.table, uid, t => Number(t.match(/^一鍵精煉到安全值\s*\+(\d+)/)?.[1]) === safeTarget);
+              clickRefineCommand(session, liveSafeBtn, uid);
             } finally {
               page.confirm = originalConfirm;
             }
@@ -537,6 +557,10 @@
           : `【${target.name}】精煉按鈕不可用（礦石已用盡、Zeny/SP不足或不在主城）`);
 
         if (refStop || document.hidden) throw Error('已中止精煉');
+        const useSkill = activeBtn === skillBtn;
+        await waitForRefineCommandSlot(session);
+        b = assertRefineTarget(session, uid);
+        activeBtn = findNativeDetailBtn(b.table, uid, useSkill ? isWeaponRefineButton : isNpcRefineButton);
         const beforeMatQty = material ? materialCount(b.s.inventory, material) : 0;
         const beforeZeny = b.s.character.zeny, beforeSp = b.s.character.sp;
         setStatus(`🔨 衝裝中：【${target.name}】+${curPlus} ➔ +${curPlus + 1} (成功:${successCnt} 爆:${brokenCnt})`);
@@ -551,7 +575,7 @@
           };
           if ((assertRefineTarget(session, uid).s.inventory.find((item) => item.uid === uid).refine || 0) !== curPlus) throw Error('精煉值已變動');
           settleGate = { since: pageNet.settled, candidate: null };
-          clickRefineControl(session, activeBtn, uid);
+          clickRefineCommand(session, activeBtn, uid);
         } finally {
           page.confirm = origConfirm;
         }
@@ -559,7 +583,7 @@
 
         const result = await waitForRefineResult(session, uid, {
           root: b.host?.parentElement, curPlus, material, beforeMatQty, beforeZeny, beforeSp,
-          useSkill: activeBtn === skillBtn, settleGate
+          useSkill, settleGate
         });
         if (!result) throw Error('精煉結果不明，請核對裝備與消耗');
         b = result.b;
@@ -570,7 +594,8 @@
             if (refAutoWh && result.nowSt.refine >= refTargetPlus && !refStop && !document.hidden) {
               const stBtn = await readRefineDetail(b.table, uid, (t) => /^存入倉庫|^存倉$/.test(t), session);
               if (stBtn && !stBtn.disabled) {
-                clickRefineControl(session, stBtn, uid);
+                await waitForRefineCommandSlot(session);
+                clickRefineCommand(session, findNativeDetailBtn(b.table, uid, t => /^存入倉庫|^存倉$/.test(t)), uid);
                 const stored = await waitForRefineUi(session, () => {
                   const live = assertRefineTarget(session, uid, true);
                   return live && !live.s.inventory.some(x => x.uid === uid);

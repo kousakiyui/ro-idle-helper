@@ -78,6 +78,35 @@ async function run() {
   pageNet.events.dispatchEvent(new w.Event('settled'));
   await assert.rejects(errorWait, /讀取失敗/);
   checkClean('讀取拋錯後清理');
+
+  const cadenceSource = source.slice(source.indexOf('  let lastRefineCommandAt'), source.indexOf('  function stopRefine'));
+  const timingSource = source.match(/refineCommandGap: (\d+)/);
+  assert.ok(timingSource, 'missing refinement request gap');
+  const gap = Number(timingSource[1]);
+  let now = 0, interrupted = false;
+  const sent = [];
+  const assertSession = () => { if (interrupted) throw Error('角色已變更'); };
+  const pace = new Function('TIMING','performance','sleep','refineAwait','assertRefineSession','clickRefineControl',
+    cadenceSource + 'return { waitForRefineCommandSlot, clickRefineCommand };')(
+    { refineCommandGap: gap }, { now: () => now },
+    async ms => { now += ms; },
+    async (_, pending) => { await pending; assertSession(); },
+    assertSession, (_, button) => { assertSession(); sent.push([button, now]); }
+  );
+  const session = {};
+  for (const action of ['裝備', '精煉', '存入', '領倉']) {
+    await pace.waitForRefineCommandSlot(session);
+    pace.clickRefineCommand(session, action);
+  }
+  assert.deepEqual(sent.map(([, at]) => at), [0, gap, gap * 2, gap * 3]);
+  console.log('PASS 瞬間回應時，連續原生背包操作仍依節奏送出');
+  interrupted = true;
+  await assert.rejects(async () => {
+    await pace.waitForRefineCommandSlot(session);
+    pace.clickRefineCommand(session, '精煉');
+  }, /角色已變更/);
+  assert.equal(sent.length, 4);
+  console.log('PASS 節流等待期間切角，不額外提交');
   console.log('ALL PASS');
 }
 run().catch(e => { console.error(e); process.exitCode = 1; }).finally(() => w.close());
