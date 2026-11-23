@@ -334,6 +334,18 @@
   const materialCount = (inventory, id) => inventory.reduce((sum, item) =>
     item.itemId === id && Number.isSafeInteger(item.qty) && item.qty > 0 ? sum + item.qty : sum, 0);
 
+  function safeRefineCost(steps, from, to) {
+    if (!steps || !Number.isSafeInteger(to) || to <= from || to > steps.length) return null;
+    const materials = new Map();
+    let zeny = 0;
+    for (const step of steps.slice(from, to)) {
+      if (!step || step.rate !== 100 || !positiveId(step.material) || !Number.isSafeInteger(step.price) || step.price < 0) return null;
+      zeny += step.price;
+      materials.set(step.material, (materials.get(step.material) ?? 0) + 1);
+    }
+    return { materials, zeny };
+  }
+
   // 已付費、材料已扣、等級未升，且點擊後遊戲送出的請求都已回應（且之後沒有新的回應）時，
   // 不同事件喚醒的連續兩讀一致才提前判定；8 秒上限會再做一次最終確認。
   function refineNoUpgradeSettled(gate, confirmed, net) {
@@ -343,13 +355,13 @@
     return false;
   }
 
-  async function waitForRefineMaterial(session, id, beforeQty) {
+  async function waitForRefineMaterial(session, id, expectedQty) {
     let backpackReady = false;
     try {
       const received = await waitForRefineUi(session, () => {
         const b = readBackpackContext(true);
         backpackReady = Boolean(b);
-        return b && materialCount(b.s.inventory, id) > beforeQty;
+        return b && materialCount(b.s.inventory, id) >= expectedQty;
       }, { timeout: 4000 });
       if (received) return;
     } catch (error) {
@@ -358,6 +370,29 @@
     throw Error(backpackReady
       ? '已送出領倉，但材料入帳逾時。請確認背包與倉庫。'
       : '已送出領倉，但等待入帳逾時時背包介面仍未就緒。請確認背包與倉庫。');
+  }
+
+  async function replenishRefineMaterials(session, uid, refine, materials, setStatus) {
+    const readInventory = () => {
+      const { inventory } = assertRefineTarget(session, uid).s;
+      if ((inventory.find((item) => item.uid === uid).refine ?? 0) !== refine) throw Error('補料期間裝備精煉值已變動');
+      return inventory;
+    };
+    for (const [id, required] of materials) {
+      let quantity = materialCount(readInventory(), id);
+      while (quantity < required) {
+        session.targetUid = null;
+        const picked = await tryWithdrawFromWarehouse(new Set([id]), 10, setStatus, null, 1, session, refMaterialBatch);
+        const expected = quantity + (picked[0]?.quantity ?? 0);
+        if (picked.length) await waitForRefineMaterial(session, id, expected);
+        session.targetUid = uid;
+        const received = materialCount(readInventory(), id);
+        if (!picked.length) return id;
+        if (expected <= quantity || received < expected) throw Error('補料後無法確認背包材料增加，已停止');
+        quantity = received;
+      }
+    }
+    return null;
   }
 
   function waitForRefineResult(session, uid, options) {
@@ -486,9 +521,25 @@
         b = await refineAwait(session, selectBagItemRow(uid, session));
         if (!b || refStop || document.hidden) throw Error('已離開背包或中止精煉');
 
-        const safeBtn = !skillOnly && await readRefineDetail(b.table, uid, (t) => /^一鍵精煉到安全值\s*\+\d+/.test(t), session);
+        const recipeItem = refinePack?.items?.get(target.st.itemId);
+        const weaponLevel = Math.min(4, Math.max(1, recipeItem?.weaponLevel ?? 1));
+        const steps = recipeItem?.slots?.includes('weapon') ? refinePack?.refine?.weapon?.[weaponLevel] : refinePack?.refine?.armor;
+        const step = steps?.[curPlus];
+        const material = step?.material;
+        const isSafeButton = (t) => /^一鍵精煉到安全值\s*\+\d+/.test(t);
+        let safeBtn = !skillOnly && await readRefineDetail(b.table, uid, isSafeButton, session);
         const nativeLimit = Number(clean(safeBtn?.textContent).match(/\+(\d+)/)?.[1]);
         if (modeType === 'safe_only' && nativeLimit > 0) safeLimits.set(target.st.itemId, nativeLimit);
+        let unavailableMaterial = null;
+        if (refAutoWh && safeBtn?.disabled && curPlus < nativeLimit && (modeType === 'safe_only' || nativeLimit <= limitPlus)) {
+          const cost = safeRefineCost(steps, curPlus, nativeLimit);
+          if (cost && b.s.character.zeny >= cost.zeny &&
+              [...cost.materials].some(([id, count]) => materialCount(b.s.inventory, id) < count)) {
+            unavailableMaterial = await replenishRefineMaterials(session, uid, curPlus, cost.materials, setStatus);
+            b = await refineAwait(session, selectBagItemRow(uid, session));
+            safeBtn = await readRefineDetail(b.table, uid, isSafeButton, session);
+          }
+        }
         if (safeBtn && !safeBtn.disabled) {
           const safeTarget = Number(safeBtn.textContent.match(/\+(\d+)/)?.[1]) || 4;
           if (curPlus < safeTarget && (modeType === 'safe_only' || safeTarget <= refTargetPlus)) {
@@ -542,28 +593,17 @@
         }
 
         let activeBtn = skillBtn && !skillBtn.disabled ? skillBtn : npcBtn;
-        const recipeItem = refinePack?.items?.get(target.st.itemId);
-        const weaponLevel = Math.min(4, Math.max(1, recipeItem?.weaponLevel ?? 1));
-        const steps = recipeItem?.slots?.includes('weapon') ? refinePack?.refine?.weapon?.[weaponLevel] : refinePack?.refine?.armor;
-        const material = steps?.[curPlus]?.material;
-        if ((!activeBtn || activeBtn.disabled) && refAutoWh && (!skillOnly || (skillBtn && b.s.character.sp >= 5))) {
-          if (!material) throw Error(`【${target.name}】找不到精煉材料資料`);
-          const beforeOreQty = materialCount(b.s.inventory, material);
-          session.targetUid = null;
-          const pulledOres = material ? await tryWithdrawFromWarehouse(new Set([material]), limitPlus, setStatus, null, 1, session, refMaterialBatch) : [];
-          if (pulledOres.length) {
-            await waitForRefineMaterial(session, material, beforeOreQty);
-            session.targetUid = uid;
-            b = await refineAwait(session, selectBagItemRow(uid, session));
-            if (!b || refStop || document.hidden) throw Error('已離開背包或中止精煉');
-            skillBtn = await readRefineDetail(b.table, uid, isWeaponRefineButton, session);
-            npcBtn = skillOnly ? null : await readRefineDetail(b.table, uid, isNpcRefineButton, session);
-            activeBtn = skillBtn && !skillBtn.disabled ? skillBtn : npcBtn;
-          } else {
-            assertRefineSession(session);
-          }
+        if ((!activeBtn || activeBtn.disabled) && refAutoWh && material && material !== unavailableMaterial &&
+            materialCount(b.s.inventory, material) === 0 &&
+            ((skillBtn && b.s.character.sp >= 5) || (npcBtn && b.s.character.zeny >= step.price))) {
+          unavailableMaterial = await replenishRefineMaterials(session, uid, curPlus, new Map([[material, 1]]), setStatus);
+          b = await refineAwait(session, selectBagItemRow(uid, session));
+          skillBtn = await readRefineDetail(b.table, uid, isWeaponRefineButton, session);
+          npcBtn = skillOnly ? null : await readRefineDetail(b.table, uid, isNpcRefineButton, session);
+          activeBtn = skillBtn && !skillBtn.disabled ? skillBtn : npcBtn;
         }
-        if (!activeBtn || activeBtn.disabled) throw Error(skillOnly
+        if (!activeBtn || activeBtn.disabled) throw Error(unavailableMaterial && unavailableMaterial === material
+          ? `【${target.name}】倉庫沒有可領取的精煉材料` : skillOnly
           ? `【${target.name}】武器精練不可用，請確認技能等級、材料與 SP（至少 5）`
           : `【${target.name}】精煉按鈕不可用（礦石已用盡、Zeny/SP不足或不在主城）`);
 
