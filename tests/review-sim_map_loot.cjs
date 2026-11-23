@@ -6,7 +6,7 @@ const source = fs.readFileSync(process.argv[2], 'utf8');
 const read = (start, end) => source.slice(source.indexOf(start), source.indexOf(end));
 const production = read('  const itemIds = ', '  let lootPack;')
   + read('  function getMapLoot(', '  const refSelected =');
-const dom = new JSDOM('<div role="group" aria-label="道具設定的複製與匯出匯入"></div>');
+const dom = new JSDOM('<div role="tablist" aria-label="OpenKore 設定檔"></div><div role="group" aria-label="道具設定的複製與匯出匯入"></div>');
 const { document } = dom.window;
 const pack = {
   items: new Map([101, 102, 103, 104, 105, 106, 107, 108, 111, 112, 113, 114, 115]
@@ -29,7 +29,11 @@ const draft = {
   autoLoot: false, lootFilter: { mode: 'except', items: [111, 115] }
 };
 const inventory = [{ itemId: 104 }, { itemId: '104' }, { itemId: 112 }];
-const profiles = { player: { enabled: true, modes } };
+let profiles = { player: { enabled: false, modes, currentMap: 'a' }, alt: { enabled: false, modes } };
+const validation = new Function('isPlainRecord',
+  read('  function validateCategoryProfiles(', '  function prepareBackupWrites(')
+  + 'return { validateCategoryProfiles, salvageCategoryProfiles };'
+)((value) => !!value && typeof value === 'object' && !Array.isArray(value));
 const changes = [];
 const props = {
   snap: { character: { id: 'player' }, inventory: inventory.concat(
@@ -43,15 +47,19 @@ const props = {
 const env = {
   document,
   element(tag, text = '') { const el = document.createElement(tag); el.textContent = text; return el; },
-  getCommittedProps: () => props,
+  getCommittedProps(node, check) {
+    const candidate = node?.getAttribute('role') === 'tablist'
+      ? { children: [{ props: { title: '道具設定', children: { props } } }] }
+      : props;
+    return node?.isConnected && check(candidate) ? candidate : null;
+  },
   classifyItem: () => ({ cat: 'weapon' }),
   loadLootPack: async () => pack,
-  readValidatedSetting: () => profiles,
-  validateCategoryProfiles: (value) => value,
-  salvageCategoryProfiles: () => {},
+  readValidatedSetting: (_key, validate) => validate(profiles),
+  ...validation,
   plainObject: (value) => !!value && typeof value === 'object',
   GM_getValue: (_key, fallback) => fallback,
-  GM_setValue(_key, value) { Object.assign(profiles, value); },
+  GM_setValue(_key, value) { profiles = value; },
   FiberTraversalTimeout: class extends Error {}
 };
 const { buildCategoryLootPatch, getMapLoot, mountSettingsTools } = new Function(
@@ -101,62 +109,72 @@ async function run() {
     assert.equal(changes.length, 1);
     assert.match(document.body.textContent, /新增 2 種，保留既有設定 6 種/);
   });
+  const group = document.querySelector('[role="group"]');
+  const follow = document.querySelector('[data-roi-loot-auto]');
+  check('舊版本圖勾選移轉到唯一的隨地圖開關，移除手動按鈕', () => {
+    assert.equal(follow.checked, true);
+    assert.equal(group.querySelectorAll('input[type="checkbox"]').length, 1);
+    assert.equal(group.querySelector('[data-roi-settings-tools] button'), null);
+  });
+  group.remove();
   props.draft.lockMap = 'b';
   props.snap.inventory.push({ itemId: 107 });
   mountSettingsTools();
   await settle();
-  check('換圖保留前次新增和玩家既有規則，只補新圖符合條件的道具', () => {
+  check('OpenKore 道具頁卸載後仍可換圖同步，只補新圖未設定品項', () => {
     assert.equal(changes.length, 2);
     assert.deepEqual(props.draft.autoSell, [101]);
     assert.deepEqual(props.draft.autoStorage.items, [102, 104, 106, 107, 108]);
     assert.deepEqual(props.draft.lootPriority.items, [103, 104, 106, 107, 108]);
     assert.deepEqual(props.draft.lootFilter, draft.lootFilter);
     assert.equal(props.draft.autoLoot, false);
+  });
+  const nextGroup = group.cloneNode(false);
+  document.body.append(nextGroup);
+  mountSettingsTools();
+  await settle();
+  check('重開道具頁勾選仍在，同張圖不重複修改草稿', () => {
+    assert.equal(changes.length, 2);
+    assert.equal(nextGroup.querySelector('[data-roi-loot-auto]').checked, true);
     assert.match(document.body.textContent, /新增 2 種，保留既有設定 3 種/);
   });
-  document.querySelector('[data-roi-settings-tools] button').click();
-  await settle();
-  check('手動重複按設定本圖沒有缺漏時不寫入草稿', () => {
-    assert.equal(changes.length, 2);
-    assert.match(document.body.textContent, /新增 0 種，保留既有設定 5 種/);
-  });
-  const follow = document.querySelector('[data-roi-loot-auto]');
-  const onlyHere = document.querySelector('[data-roi-loot-auto-here]');
   const selectMap = async (map) => {
     props.draft.lockMap = map;
     mountSettingsTools();
     await settle();
   };
   follow.click();
-  onlyHere.click();
   await settle();
-  check('本圖自動設定綁定地圖，獨立於隨地圖選項', () => {
+  check('取消勾選後，舊版單圖設定不會讓它重新開啟', () => {
     assert.equal(profiles.player.enabled, false);
-    assert.equal(profiles.player.currentMap, 'b');
-    assert.equal(onlyHere.checked, true);
+    assert.equal(Object.hasOwn(profiles.player, 'currentMap'), false);
   });
   pack.items.set(109, { id: 109, name: '新圖掉落', category: 'equipment' });
   pack.monsters.get(1).drops.push({ itemId: 109 });
   await selectMap('a');
-  check('只勾自動設定本圖，切到別張圖時不會寫入', () => {
-    assert.equal(onlyHere.checked, false);
+  check('關閉後換圖不寫入，重新勾選立即補本圖', () => {
+    assert.equal(follow.checked, false);
     assert.equal(changes.length, 2);
-  });
-  pack.items.set(110, { id: 110, name: '本圖新掉落', category: 'equipment' });
-  pack.monsters.get(2).drops.push({ itemId: 110 });
-  await selectMap('b');
-  check('回到綁定地圖自動補設定，兩個開關都開也不重複寫入', () => {
-    assert.equal(onlyHere.checked, true);
-    assert.equal(changes.length, 3);
-    assert.ok(props.draft.autoStorage.items.includes(110));
     follow.click();
   });
   await settle();
   assert.equal(changes.length, 3);
-  await selectMap('a');
-  check('開啟隨地圖自動設定後可同步新圖，原有規則仍保留', () => {
+  assert.ok(props.draft.autoStorage.items.includes(109));
+  pack.items.set(110, { id: 110, name: '本圖新掉落', category: 'equipment' });
+  pack.monsters.get(2).drops.push({ itemId: 110 });
+  await selectMap('b');
+  check('再次換圖保持勾選並保留前一張圖已寫入的規則', () => {
+    assert.equal(follow.checked, true);
     assert.equal(changes.length, 4);
-    assert.deepEqual(props.draft.autoStorage.items, [102, 104, 106, 107, 108, 110, 109]);
+    assert.deepEqual(props.draft.autoStorage.items, [102, 104, 106, 107, 108, 109, 110]);
+  });
+  props.snap = { character: { id: 'alt' } };
+  props.draft = draft;
+  mountSettingsTools();
+  await settle();
+  check('切換角色載入各自開關，關閉的角色不自動寫入', () => {
+    assert.equal(changes.length, 4);
+    assert.equal(follow.checked, false);
   });
 }
 

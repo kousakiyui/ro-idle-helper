@@ -79,6 +79,8 @@
   }
 
   const lootSyncPanels = new WeakMap();
+  const lootItemGroupSelector = '[role="group"][aria-label="道具設定的複製與匯出匯入"]';
+  const lootOpenKoreSelector = '[role="tablist"][aria-label="OpenKore 設定檔"]';
   const monsterSyncPanels = new WeakMap();
   const lootModes = ['off', 'store', 'valuable'];
   const lootOres = new Set([984, 985, 756, 757, 1010, 1011]);
@@ -139,8 +141,10 @@
   }
 
   function mountSettingsTools() {
-    const itemGroup = document.querySelector('[role="group"][aria-label="道具設定的複製與匯出匯入"]');
-    if (itemGroup && !itemGroup.querySelector('[data-roi-settings-tools]')) {
+    const itemGroup = document.querySelector(lootItemGroupSelector);
+    const openKore = document.querySelector(lootOpenKoreSelector);
+    const lootAnchor = openKore ?? itemGroup;
+    if (lootAnchor && !lootSyncPanels.has(lootAnchor)) {
       const box = document.createElement('div');
       box.dataset.roiSettingsTools = '';
       box.style.cssText = 'flex-basis:100%;display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px;padding:6px 10px;background:linear-gradient(90deg,rgba(30,41,59,0.9),rgba(15,23,42,0.75));border-left:3px solid #38bdf8;border-radius:6px;font-size:11.5px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
@@ -149,8 +153,14 @@
       box.style.gridTemplateColumns = 'minmax(56px,auto) minmax(0,1fr) auto';
       box.style.width = '100%';
       box.style.boxSizing = 'border-box';
+      const isDraft = (x) => typeof x?.update === 'function' && x.draft && x.snap?.character;
+      const fromSection = (x) => Array.isArray(x?.children) && x.children
+        .find((child) => child?.props?.title === '道具設定')?.props.children?.props;
       const getProps = () => {
-        const p = getCommittedProps(itemGroup, (x) => typeof x.update === 'function' && x.draft && x.snap?.character);
+        // OpenKore 切離道具頁時會卸載面板，設定容器仍持有這一版草稿的道具區 props。
+        const section = openKore && fromSection(getCommittedProps(openKore, (x) => isDraft(fromSection(x))));
+        const group = openKore ? document.querySelector(lootItemGroupSelector) : lootAnchor;
+        const p = section || (group && getCommittedProps(group, isDraft));
         if (!p) throw Error('無法讀取設定草稿');
         return p;
       };
@@ -160,22 +170,12 @@
       auto.type = 'checkbox';
       auto.dataset.roiLootAuto = '';
       auto.disabled = true;
-      const thisMap = element('input');
-      thisMap.type = 'checkbox';
-      thisMap.dataset.roiLootAutoHere = '';
-      thisMap.disabled = true;
       const autoLabel = element('label', '隨地圖自動設定 ');
+      autoLabel.style.gridColumn = '1 / -1';
       autoLabel.prepend(auto);
-      const thisMapLabel = element('label', '自動設定本圖 ');
-      thisMapLabel.title = '只對目前選定的掛機地圖自動設定';
-      thisMapLabel.prepend(thisMap);
-      const toggles = element('div', '', 'grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:10px');
-      toggles.append(autoLabel, thisMapLabel);
-      box.append(toggles);
-      let boundCharacter = null, displayedMap = null, preferences = null, lastAutoKey = null, request = 0;
+      box.append(autoLabel);
+      let boundCharacter = null, preferences = null, lastAutoKey = null, request = 0;
       const characterKey = (p) => String(p.snap.character.id ?? p.snap.character.name);
-      const mapKey = (p) => typeof p.draft.lockMap === 'string' && /^[\w-]{1,80}$/.test(p.draft.lockMap) ? p.draft.lockMap : null;
-      const autoForMap = (map) => Boolean(map && (preferences.enabled || preferences.currentMap === map));
       const getPreferences = (key) => {
         const all = readValidatedSetting(settingsKey, validateCategoryProfiles, {});
         const saved = plainObject(all) && plainObject(all[key]) ? all[key] : null;
@@ -184,7 +184,7 @@
         const modes = Object.fromEntries(Object.keys(lootCategoryLabels).map((cat) => [
           cat, saved && Object.hasOwn(lootCategoryModes, saved.modes?.[cat]) ? saved.modes[cat] : legacyMode
         ]));
-        return { enabled: saved ? saved.enabled === true : legacyMode !== 'off', modes, currentMap: saved?.currentMap };
+        return { enabled: saved ? saved.enabled === true : legacyMode !== 'off', modes };
       };
       const bindCharacter = (p) => {
         const key = characterKey(p);
@@ -198,26 +198,27 @@
         lastAutoKey = null;
         request++;
       };
-      const saveSettings = () => {
+      const saveSettings = (prefs) => {
         const all = readValidatedSetting(settingsKey, salvageCategoryProfiles, {});
         const next = plainObject(all) ? { ...all } : {};
-        next[boundCharacter] = preferences;
+        next[boundCharacter] = prefs;
         GM_setValue(settingsKey, validateCategoryProfiles(next));
+        preferences = prefs;
+        lastAutoKey = null;
+        request++;
       };
-      const sync = async (automatic = false) => {
+      const sync = async (before) => {
         let pendingKey = null, token = null;
         try {
-          const before = getProps();
-          bindCharacter(before);
           const id = boundCharacter, mapId = before.draft.lockMap;
           const modes = { ...preferences.modes };
           pendingKey = JSON.stringify([id, mapId, modes]);
-          if (automatic && (!autoForMap(mapKey(before)) || pendingKey === lastAutoKey)) return;
+          if (!preferences.enabled || !mapId || pendingKey === lastAutoKey) return;
           token = ++request;
           lastAutoKey = pendingKey;
           status.textContent = '讀取本圖掉落…';
           const pack = await loadLootPack();
-          if (token !== request || !itemGroup.isConnected) return;
+          if (token !== request || !lootAnchor.isConnected) return;
           const current = getProps();
           if (characterKey(current) !== id || current.draft.lockMap !== mapId) {
             lastAutoKey = null;
@@ -231,8 +232,8 @@
           const storageNote = result.patch.autoStorage?.enabled === false ? '（回城存倉目前關閉）' : '';
           status.textContent = result.added ? summary + '，請按「套用設定」' + storageNote : summary;
         } catch (error) {
-          if (token !== null && (token !== request || !itemGroup.isConnected)) return;
-          if (pendingKey === lastAutoKey) lastAutoKey = null;
+          if (token !== null && (token !== request || !lootAnchor.isConnected)) return;
+          if (error instanceof FiberTraversalTimeout && pendingKey === lastAutoKey) lastAutoKey = null;
           status.textContent = '⚠️ ' + error.message;
         }
       };
@@ -254,69 +255,41 @@
           try {
             const p = getProps();
             if (characterKey(p) !== boundCharacter) { bindCharacter(p); return; }
-            preferences.modes[cat] = select.value;
-            saveSettings(); lastAutoKey = null; request++;
-            if (autoForMap(mapKey(p))) void sync(true);
-            else status.textContent = '設定已記住，按「設定本圖」寫入草稿';
-          } catch (error) { status.textContent = '⚠️ ' + error.message; }
+            saveSettings({ ...preferences, modes: { ...preferences.modes, [cat]: select.value } });
+            if (preferences.enabled) void sync(p);
+          } catch (error) {
+            select.value = preferences.modes[cat];
+            status.textContent = '⚠️ ' + error.message;
+          }
         };
       }
-      const syncNow = element('button', '設定本圖');
-      syncNow.type = 'button'; syncNow.className = 'xp-btn small';
-      syncNow.onclick = () => { void sync(); };
       auto.onchange = () => {
         try {
           const p = getProps();
           if (characterKey(p) !== boundCharacter) { bindCharacter(p); return; }
-          preferences.enabled = auto.checked;
-          saveSettings(); lastAutoKey = null; request++;
-          if (autoForMap(mapKey(p))) void sync(true);
+          saveSettings({ ...preferences, enabled: auto.checked });
+          if (preferences.enabled) void sync(p);
           else status.textContent = '已關閉自動設定';
-        } catch (error) { status.textContent = '⚠️ ' + error.message; }
-      };
-      thisMap.onchange = () => {
-        const checked = thisMap.checked;
-        try {
-          const p = getProps();
-          const map = mapKey(p);
-          if (characterKey(p) !== boundCharacter || !map || map !== displayedMap) { tick(); return; }
-          const previousMap = preferences.currentMap;
-          preferences.currentMap = checked ? map : undefined;
-          try { saveSettings(); }
-          catch (error) {
-            preferences.currentMap = previousMap;
-            thisMap.checked = previousMap === map;
-            throw error;
-          }
-          if (checked) void sync(true);
-          else if (!autoForMap(map)) {
-            lastAutoKey = null;
-            request++;
-            status.textContent = '已關閉本圖自動設定';
-          }
-        } catch (error) { status.textContent = '⚠️ ' + error.message; }
+        } catch (error) {
+          auto.checked = preferences?.enabled === true;
+          status.textContent = '⚠️ ' + error.message;
+        }
       };
       const note = element('span', '只設定本圖掉落中尚未設定的道具。', 'grid-column:1 / -1;color:var(--text-dim)');
-      status.style.gridColumn = '2 / -1';
-      box.append(note, syncNow, status);
-      const tick = () => {
+      status.style.gridColumn = '1 / -1';
+      box.append(note, status);
+      const tick = (group) => {
+        if (group && box.parentElement !== group) group.append(box);
         try {
           const p = getProps();
           bindCharacter(p);
-          const map = mapKey(p);
-          displayedMap = map;
-          thisMap.disabled = !map;
-          thisMap.checked = Boolean(map && preferences.currentMap === map);
-          if (autoForMap(map)) void sync(true);
-          else lastAutoKey = null;
+          if (preferences.enabled) void sync(p);
         } catch (error) {
-          if (!(error instanceof FiberTraversalTimeout)) auto.disabled = thisMap.disabled = true;
+          if (!(error instanceof FiberTraversalTimeout)) auto.disabled = true;
         }
       };
-      lootSyncPanels.set(itemGroup, tick);
-      itemGroup.append(box);
+      lootSyncPanels.set(lootAnchor, tick);
     }
-    lootSyncPanels.get(itemGroup)?.();
 
     const monSel = document.querySelector('select[aria-label="怪物控制：加入怪物"]');
     const monHost = monSel?.parentElement;
@@ -371,7 +344,7 @@
           escape: { ...p.draft.escape, dangerMonsters: [] }
         });
         status.textContent = `已新增本圖 ${missing.length} 隻怪物，保留既有 ${rules.length} 隻設定，請按「套用設定」`;
-        return true;
+        return 'updated';
       };
       addBtn('🔄 同步本圖怪物', () => syncMonsters(monsterDraft()));
       addBtn('不逃 ⇄ 看到就逃', () => {
@@ -424,7 +397,11 @@
             if (!enabled || document.hidden) return;
             const p = monsterDraft();
             const map = p?.draft.lockMap;
-            if (map && map !== lastMap && syncMonsters(p, true)) lastMap = map;
+            if (map && map !== lastMap) {
+              const result = syncMonsters(p, true);
+              if (result) lastMap = map;
+              return result;
+            }
           } catch (error) {
             if (!(error instanceof FiberTraversalTimeout)) log('monster', error);
           }
@@ -444,8 +421,9 @@
         };
         monsterSyncPanels.set(monHost, tick);
       }
-      monsterSyncPanels.get(monHost)?.();
     }
+    // 怪物自動同步也會更新同一份草稿，等原生提交這次變動後再補道具。
+    if (monsterSyncPanels.get(monHost)?.() !== 'updated') lootSyncPanels.get(lootAnchor)?.(itemGroup);
   }
 
   const refSelected = new Set();
