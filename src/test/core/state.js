@@ -14,6 +14,8 @@
     whProtectPins: true, mvpMergeRoster: false, charAlerts: {}, whProtect: true, whSaleReview: true, whAutoEquipCard: true,
     whMarks: {}, whAutoLocks: {}, customProtectWords: [],
     hudMin: false, hudPos: null, mktUpperFold: false,
+    hudCompactMetrics: [...defaultCompactHudMetrics], hudNumberFormat: 'auto',
+    charAttentionOnly: false, charAttentionFirst: false,
     processedLines: new WeakMap(), lastNotifyAt: 0
   };
 
@@ -62,6 +64,7 @@
       syncMktMount();
       mvpRadar?.refreshPreferences();
       syncHudSettings();
+      if (Object.hasOwn(prefs, 'charAttentionOnly') || Object.hasOwn(prefs, 'charAttentionFirst')) renderChars();
     }, validatePrefs);
     listen(priceOptionKey, (options) => {
       priceOptions = options;
@@ -82,7 +85,8 @@
   }
 
   const prefKeys = ['sound', 'notify', 'moneyColor', 'itemHover', 'marketHover', 'whProtectPins', 'mvpMergeRoster', 'whProtect',
-    'whSaleReview', 'whAutoEquipCard', 'hudMin', 'hudPos', 'mktUpperFold', 'hudMetrics'];
+    'whSaleReview', 'whAutoEquipCard', 'hudMin', 'hudPos', 'mktUpperFold', 'hudMetrics', 'hudCompactMetrics',
+    'hudNumberFormat', 'charAttentionOnly', 'charAttentionFirst'];
   const prefValueSig = (value) => JSON.stringify(value ?? null);
   // 本頁最後一次與已存值同步時的各欄位；儲存時只寫入與此不同（本頁改過）的欄位。
   const prefsSynced = new Map(prefKeys.map((key) => [key, prefValueSig(state[key])]));

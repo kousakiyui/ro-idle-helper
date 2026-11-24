@@ -26,20 +26,29 @@
     hits: '傷害次數（累計）', hitRate: '每秒傷害次數（交戰）', taken: '承受傷害', pickups: '一般撿取量'
   };
   const defaultHudMetrics = ['bexp', 'jexp', 'kph', 'dmg', 'zeny', 'miss'];
+  const defaultCompactHudMetrics = ['dmg', 'kph', 'zeny'];
+  const hudNumberFormats = { auto: '自動（萬／億）', wan: '以萬顯示', yi: '以億顯示', full: '完整數字' };
 
   function validatePrefs(value) {
     if (!isPlainRecord(value)) throw Error('偏好設定格式不符');
     const result = {};
-    for (const key of ['sound', 'notify', 'moneyColor', 'itemHover', 'marketHover', 'whProtectPins', 'mvpMergeRoster', 'whProtect', 'whSaleReview', 'whAutoEquipCard', 'hudMin', 'mktUpperFold']) {
+    for (const key of ['sound', 'notify', 'moneyColor', 'itemHover', 'marketHover', 'whProtectPins', 'mvpMergeRoster', 'whProtect', 'whSaleReview', 'whAutoEquipCard', 'hudMin', 'mktUpperFold', 'charAttentionOnly', 'charAttentionFirst']) {
       if (!Object.hasOwn(value, key)) continue;
       if (typeof value[key] !== 'boolean') throw Error('偏好設定的 ' + key + ' 必須是開關');
       result[key] = value[key];
     }
-    if (Object.hasOwn(value, 'hudMetrics')) {
-      const metrics = value.hudMetrics;
+    for (const key of ['hudMetrics', 'hudCompactMetrics']) {
+      if (!Object.hasOwn(value, key)) continue;
+      const metrics = value[key];
       if (!Array.isArray(metrics) || metrics.length > Object.keys(hudMetricLabels).length ||
           metrics.some(key => typeof key !== 'string' || !Object.hasOwn(hudMetricLabels, key))) throw Error('儀表盤欄位不符');
-      result.hudMetrics = [...new Set(metrics)];
+      result[key] = [...new Set(metrics)];
+    }
+    if (Object.hasOwn(value, 'hudNumberFormat')) {
+      if (typeof value.hudNumberFormat !== 'string' || !Object.hasOwn(hudNumberFormats, value.hudNumberFormat)) {
+        throw Error('儀表盤數字格式不符');
+      }
+      result.hudNumberFormat = value.hudNumberFormat;
     }
     if (Object.hasOwn(value, 'hudPos')) {
       if (value.hudPos === null) result.hudPos = null;
