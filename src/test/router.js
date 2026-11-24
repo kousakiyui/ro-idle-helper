@@ -123,7 +123,8 @@
       const el = r.target.nodeType === 1 ? r.target : r.target.parentElement;
       if (!el || !el.isConnected || el.closest('#ro-helper-hud,#roi-helper-mvp-panel,#roi-item-hover-tooltip,[data-roi-market-browser],[data-ro-wh-bar],[data-ro-rare-helper],[data-roi-settings-tools],[data-roi-refine-helper],[data-roi-price-search],[data-roi-upper-fold],[data-roi-party-move-bar],[data-roi-party-move-dialog]')) continue;
       if (r.type === 'attributes' && !el.matches('fieldset') && !el.querySelector('fieldset') &&
-          !el.matches(hudSkillControls) && !el.querySelector(hudSkillControls)) continue;
+          !el.matches(hudSkillControls) && !el.querySelector(hudSkillControls) &&
+          !el.matches('[role="tabpanel"][aria-label="道具"]') && !el.querySelector('[role="tabpanel"][aria-label="道具"]')) continue;
       if (el.closest('.log-window')) {
         sawLog = true;
         if (r.type === 'characterData' || r.type === 'childList') queueLogLine(el.closest('.log-line'));

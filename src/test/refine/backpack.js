@@ -38,9 +38,61 @@
   const bagFastMiss = new WeakMap();
   let visitingWarehouse = false;
 
+  function findModernBackpack(input) {
+    const panel = input.closest('[role="tabpanel"][aria-label="道具"]');
+    if (!panel || panel.querySelector('[role="region"][aria-label="多選販售"]')) return null;
+    const list = uniqueVisible(panel, '[role="listbox"][aria-label="道具"], [role="group"][aria-label="道具"]');
+    const detail = uniqueVisible(panel, '[role="region"][aria-label="道具詳情"]');
+    const anchor = list?.parentElement?.parentElement;
+    const host = anchor?.parentElement;
+    return list && detail && host && list.parentElement === detail.parentElement ? { list, detail, anchor, host } : null;
+  }
+
+  function readModernBackpack(view) {
+    const { list, detail, anchor, host } = view;
+    const tree = currentFiberRoot(list);
+    const props = tree && getCommittedProps(list, (p) => p.label === '道具' && Array.isArray(p.items));
+    if (!props || !props.items.every((item) => Number.isSafeInteger(item?.st?.uid))) return null;
+    let fiber = getReactFiber(list);
+    let top = fiber;
+    while (top?.return) top = top.return;
+    if (top !== tree) fiber = fiber?.alternate;
+
+    // 道具列來自同一份原生背包快照。只讀取清單祖先的已提交 Hook，
+    // 避免從其他浮動面板或未提交的 React 更新取得另一個角色。
+    let s;
+    for (let depth = 0; !s && fiber && depth < 40; depth++, fiber = fiber.return) {
+      if (typeof fiber.type !== 'function') continue;
+      for (let hook = fiber.memoizedState, count = 0; hook && count < 100; hook = hook.next, count++) {
+        const snap = hook.memoizedState;
+        if (!snap?.character || !Array.isArray(snap.inventory) || typeof snap.mapId !== 'string') continue;
+        const inventory = new Set(snap.inventory);
+        if (props.items.every(({ st }) => inventory.has(st))) { s = snap; break; }
+      }
+    }
+    if (!s) return null;
+    const entries = new Map(props.items.map(({ st, def }) => [st.uid, { st, def }]));
+    const rows = [];
+    for (const row of list.querySelectorAll(':scope > [role="option"], :scope > button[aria-selected]')) {
+      const rowFiber = getReactFiber(row);
+      if (!/^\d+$/.test(rowFiber?.key || '')) continue;
+      const uid = Number(rowFiber.key);
+      const entry = entries.get(uid);
+      if (!entry || !visible(row)) continue;
+      const name = clean(entry.def?.name || row.textContent).replace(/^\+\d+\s*/, '');
+      rows.push({ uid, row, button: row, st: entry.st, name, ...classifyItem(entry.st.itemId, name) });
+    }
+    const val = { host, anchor, table: list, detail, modern: true, s, rows };
+    bagMemo = { tree, table: list, val };
+    return val;
+  }
+
   function readBackpackContext(force = false) {
     const inputs = [...document.querySelectorAll('input[aria-label="搜尋物品"]')].filter(visible);
     if (inputs.length !== 1) return null;
+    const modern = findModernBackpack(inputs[0]);
+    if (modern) return readModernBackpack(modern);
+    if (inputs[0].closest('[role="tabpanel"][aria-label="道具"]')) return null;
     let host = inputs[0].parentElement;
     while (host && host !== document.body && !host.querySelector('table.xp-table')) host = host.parentElement;
     const table = host?.querySelector('table.xp-table');
