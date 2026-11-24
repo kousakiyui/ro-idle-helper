@@ -33,7 +33,7 @@ let ok = true; const check = (label, cond) => { console.log((cond ? 'PASS ' : 'F
 // ---- 2. 未升階判定：網路回應完成後連續兩次一致才確定；無 fetch 活動時不提前判定
 {
   const fn = slice('refineNoUpgradeSettled', true);
-  check('事件式精煉結果讀取有呼叫 refineNoUpgradeSettled', !!fn && /if \(refineNoUpgradeSettled\(settleGate, confirmedNoUpgrade, pageNet\) \|\|/.test(src));
+  check('事件式精煉結果讀取有呼叫 refineNoUpgradeSettled', !!fn && /if \(refineNoUpgradeSettled\(settleGate, confirmedNoUpgrade, net\) \|\|/.test(src));
   if (fn) {
     const settled = new Function(fn + 'return refineNoUpgradeSettled;')();
     const run = (timeline) => { const gate = { since: 10, candidate: null }; for (let i = 0; i < timeline.length; i++) if (settled(gate, ...timeline[i])) return i + 1; return null; };

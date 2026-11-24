@@ -54,12 +54,12 @@ async function refineEvents() {
   };
   const waitForResult = new Function(...Object.keys(env), names.map(slice).join('\n') +
     '\nreturn waitForRefineResult;')(...Object.values(env));
-  const begin = (useSkill = false) => {
+  const begin = (useSkill = false, commandWatch) => {
     equipment.refine = 3; materials.qty = 2; b.s.character.zeny = 100;
     b.s.inventory = [equipment, materials]; pageNet.inFlight = 1;
     return waitForResult({ characterId: 1, epoch: 0 }, 7, {
       root, curPlus: 3, material: 984, beforeMatQty: 2, beforeZeny: 100,
-      beforeSp: 20, useSkill, settleGate: { since: pageNet.settled, candidate: null }
+      beforeSp: 20, useSkill, commandWatch, settleGate: { since: pageNet.settled, candidate: null }
     });
   };
   const spend = () => { materials.qty--; b.s.character.zeny--; };
@@ -108,6 +108,18 @@ async function refineEvents() {
     result = begin(true);
     materials.qty--; b.s.inventory = [materials]; commit();
     check('扣礦和 UID 消失但請求未結束，維持結果不明', await result === null);
+
+    const commandWatch = { commandId: '精練命令', pending: 1, settled: 0, status: 0 };
+    result = begin(true, commandWatch);
+    materials.qty--; b.s.inventory = [materials];
+    commit(); await Promise.resolve();
+    commandWatch.pending = 0; commandWatch.settled = 1; commandWatch.status = 200;
+    pageNet.events.dispatchEvent(new w.Event('settled'));
+    check('神工匠 SP 已回復且其他請求仍在進行，已確認扣礦及武器消失', (await result)?.kind === 'broken');
+
+    result = begin(true, { commandId: '拒絕的命令', pending: 0, settled: 1, status: 429 });
+    await assert.rejects(result, /HTTP 429/);
+    check('神工匠遭限流時回報 429 並停止', true);
 
     result = begin();
     Object.defineProperty(document, 'hidden', { value: true, configurable: true });

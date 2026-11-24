@@ -396,7 +396,7 @@
   }
 
   function waitForRefineResult(session, uid, options) {
-    const { root, curPlus, material, beforeMatQty, beforeZeny, beforeSp, useSkill, settleGate } = options;
+    const { root, curPlus, material, beforeMatQty, beforeZeny, beforeSp, useSkill, settleGate, commandWatch } = options;
     let previouslyConfirmed = false;
     const skillMaterialGate = { since: settleGate.since, candidate: null };
     let previousMaterialOutcome = null;
@@ -409,21 +409,31 @@
         previousMaterialOutcome = null;
         return null;
       }
+      const tracked = Boolean(commandWatch?.commandId);
+      const net = tracked
+        ? { inFlight: commandWatch.pending, settled: settleGate.since + commandWatch.settled }
+        : pageNet;
+      const acknowledged = !tracked || (commandWatch.status >= 200 && commandWatch.status < 300 && net.inFlight === 0);
+      if (tracked && (commandWatch.status === 429 || (expired && commandWatch.status >= 400 && commandWatch.status < 500))
+          && net.inFlight === 0) {
+        throw Error(`神工匠精練請求被拒絕（HTTP ${commandWatch.status}），請查看遊戲提示`);
+      }
       const paid = useSkill ? b.s.character.sp <= beforeSp - 5 : b.s.character.zeny < beforeZeny;
       if (nowSt && (nowSt.refine || 0) === curPlus + 1) return { kind: 'success', b, nowSt };
-      if (!nowSt && paid) return { kind: 'broken', b };
+      if (!nowSt && paid && acknowledged) return { kind: 'broken', b };
       const materialUsed = Boolean(material && materialCount(b.s.inventory, material) < beforeMatQty);
       const atOrBelow = nowSt && (nowSt.refine || 0) <= curPlus;
       // A recovered SP value can hide the skill cost. Confirm the same equipment
       // outcome twice against the depleted ore and a settled request.
-      const materialOutcome = useSkill && !paid && materialUsed ?
+      const materialOutcome = useSkill && acknowledged && materialUsed ?
         (!nowSt ? 'broken' : atOrBelow ? 'failed' : null) : null;
       if (materialOutcome !== previousMaterialOutcome) skillMaterialGate.candidate = null;
       previousMaterialOutcome = materialOutcome;
-      if (refineNoUpgradeSettled(skillMaterialGate, Boolean(materialOutcome), pageNet)) return { kind: materialOutcome, b };
-      const confirmedNoUpgrade = Boolean(atOrBelow && paid && (!material || materialUsed));
-      if (refineNoUpgradeSettled(settleGate, confirmedNoUpgrade, pageNet) ||
-          (expired && previouslyConfirmed && confirmedNoUpgrade && pageNet.inFlight === 0)) return { kind: 'failed', b };
+      if (refineNoUpgradeSettled(skillMaterialGate, Boolean(materialOutcome), net)
+          || (expired && tracked && materialOutcome && acknowledged)) return { kind: materialOutcome, b };
+      const confirmedNoUpgrade = Boolean(acknowledged && atOrBelow && paid && (!material || materialUsed));
+      if (refineNoUpgradeSettled(settleGate, confirmedNoUpgrade, net) ||
+          (expired && previouslyConfirmed && confirmedNoUpgrade && net.inFlight === 0)) return { kind: 'failed', b };
       previouslyConfirmed = confirmedNoUpgrade;
       return null;
     }, { root, timeout: 8000 });
@@ -616,26 +626,33 @@
         const beforeZeny = b.s.character.zeny, beforeSp = b.s.character.sp;
         setStatus(`🔨 衝裝中：【${target.name}】+${curPlus} ➔ +${curPlus + 1} (成功:${successCnt} 爆:${brokenCnt})`);
 
-        const origConfirm = page.confirm;
-        let userAccepted = true, settleGate = { since: pageNet.settled, candidate: null };
+        const commandWatch = useSkill ? { characterId: session.characterId, uid, pending: 0, settled: 0, status: 0 } : null;
+        let result;
+        refineCommandWatch = commandWatch;
         try {
-          page.confirm = (msg) => {
-            if (refSkipConfirm || /成功率 100%|一定成功/.test(String(msg))) return true;
-            userAccepted = origConfirm.call(page, msg);
-            return userAccepted;
-          };
-          if ((assertRefineTarget(session, uid).s.inventory.find((item) => item.uid === uid).refine || 0) !== curPlus) throw Error('精煉值已變動');
-          settleGate = { since: pageNet.settled, candidate: null };
-          clickRefineCommand(session, activeBtn, uid);
-        } finally {
-          page.confirm = origConfirm;
-        }
-        if (!userAccepted) throw Error('玩家手動取消精煉');
+          const origConfirm = page.confirm;
+          let userAccepted = true;
+          const settleGate = { since: pageNet.settled, candidate: null };
+          try {
+            page.confirm = (msg) => {
+              if (refSkipConfirm || /成功率 100%|一定成功/.test(String(msg))) return true;
+              userAccepted = origConfirm.call(page, msg);
+              return userAccepted;
+            };
+            if ((assertRefineTarget(session, uid).s.inventory.find((item) => item.uid === uid).refine || 0) !== curPlus) throw Error('精煉值已變動');
+            clickRefineCommand(session, activeBtn, uid);
+          } finally {
+            page.confirm = origConfirm;
+          }
+          if (!userAccepted) throw Error('玩家手動取消精煉');
 
-        const result = await waitForRefineResult(session, uid, {
-          root: b.host?.parentElement, curPlus, material, beforeMatQty, beforeZeny, beforeSp,
-          useSkill, settleGate
-        });
+          result = await waitForRefineResult(session, uid, {
+            root: b.host?.parentElement, curPlus, material, beforeMatQty, beforeZeny, beforeSp,
+            useSkill, settleGate, commandWatch
+          });
+        } finally {
+          refineCommandWatch = null;
+        }
         if (!result) throw Error('精煉結果不明，請核對裝備與消耗');
         b = result.b;
         if (result.kind === 'success') {

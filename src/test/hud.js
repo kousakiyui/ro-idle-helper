@@ -119,7 +119,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.4.1 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.5.1 測試版</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">

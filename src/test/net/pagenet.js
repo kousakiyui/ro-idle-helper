@@ -95,6 +95,21 @@
   // 頁面（遊戲）發出的 fetch 進行中／已完成數；腳本自己的輪詢走 pollFetch，不計入。
   // events：每個遊戲請求完成時發 'settled'（detail: path/method/status），全隊移動等流程用來取代固定等待。
   const pageNet = { inFlight: 0, settled: 0, events: new EventTarget() };
+  let refineCommandWatch = null;
+  function matchRefineCommand(path, method, body, watch) {
+    if (!watch || method !== 'POST' || path !== `/api/characters/${watch.characterId}/commands`
+        || typeof body !== 'string') return false;
+    try {
+      const { commandId, command } = JSON.parse(body);
+      if (typeof commandId !== 'string' || !commandId || command?.type !== 'refine'
+          || command.skill !== true || command.uid !== watch.uid
+          || (watch.commandId && watch.commandId !== commandId)) return false;
+      watch.commandId = commandId;
+      watch.pending++;
+      return true;
+    } catch { return false; }
+  }
+
   try {
     const origFetch = page.fetch;
     if (origFetch) {
@@ -104,11 +119,18 @@
         const isDetail = /^\/api\/characters\/\d+$/.test(path);
         const request = isDetail ? ++detailRequest : 0;
         const method = String(args[1]?.method || args[0]?.method || 'GET').toUpperCase();
+        const watch = refineCommandWatch;
+        const watched = matchRefineCommand(path, method, args[1]?.body, watch);
         pageNet.inFlight++;
         let res;
         try { res = await origFetch.apply(this, args); }
         finally {
           pageNet.inFlight--; pageNet.settled++;
+          if (watched) {
+            watch.pending--;
+            watch.status = res?.status ?? 0;
+            watch.settled++;
+          }
           try { pageNet.events.dispatchEvent(new CustomEvent('settled', { detail: { path, method, status: res?.status ?? 0 } })); } catch {}
         }
         if (path === '/api/characters' || isDetail) {
