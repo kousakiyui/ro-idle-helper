@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.5.6.1
+// @version      3.5.6.2
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -38,7 +38,7 @@
   const hudMetricLabels = {
     bexp: 'Base EXP/h', jexp: 'Job EXP/h', kph: '擊殺 (累計)', dmg: 'DPS',
     zeny: '隨身 Zeny (本角淨變動)', miss: '漏撿', total: '總輸出', peak: '最高單次傷害',
-    hits: '傷害次數（累計）', hitRate: '每秒傷害次數', taken: '承受傷害', pickups: '一般撿取量'
+    hits: '傷害次數（累計）', hitRate: '每秒傷害次數（交戰）', taken: '承受傷害', pickups: '一般撿取量'
   };
   const defaultHudMetrics = ['bexp', 'jexp', 'kph', 'dmg', 'zeny', 'miss'];
 
@@ -1080,6 +1080,7 @@
         const ch = d.snapshot.character;
         if (foreground) {
           if (state.activeCharId !== cid) {
+            combatHitMeter.reset();
             if (state.activeCharId != null) {
               clearQueuedCharacterLogs();
               state.dmgSum = state.hits = state.maxDmg = state.damageTaken = 0;
@@ -1293,6 +1294,46 @@
     return damage ? { target, damage } : null;
   }
 
+  function createCombatHitMeter(startedAt = Date.now()) {
+    const encounterStart = /^(?:發現\s+.+\s+Lv\.\d+|.+\s+Lv\.\d+\s+主動朝你衝過來)/;
+    const encounterEnd = /^成功擊敗\s+/;
+    const interrupted = /^(?:正在搜尋附近的怪物|已搜尋\s+\d+\s*秒仍找不到怪物|引怪中|略過\s+.+繼續尋找目標|瞬間移動|返回存檔點|前往|抵達|移動到|掛機開始|掛機停止)|已經死亡|戰鬥不能/;
+    let active = null, lastId = -1, elapsed = 0, hits = 0;
+    function interrupt(at) {
+      active = null;
+      startedAt = at;
+    }
+    return {
+      record(body, event, dealtDamage) {
+        if (!Number.isSafeInteger(event?.id) || event.id <= lastId ||
+            !Number.isFinite(event.wall) || event.wall < startedAt) return;
+        if (encounterStart.test(body)) {
+          if (!active || body.startsWith('發現')) active = { at: event.wall, hits: 0 };
+        } else if (interrupted.test(body)) {
+          active = null;
+        } else if (active && encounterEnd.test(body)) {
+          const duration = event.wall - active.at;
+          if (active.hits > 0 && duration > 0) {
+            elapsed += duration;
+            hits += active.hits;
+          }
+          active = null;
+        } else if (active && dealtDamage && event.wall >= active.at) {
+          active.hits++;
+        } else return;
+        lastId = event.id;
+      },
+      interrupt,
+      reset(at = Date.now()) {
+        interrupt(at);
+        lastId = -1;
+        elapsed = hits = 0;
+      },
+      get rate() { return elapsed ? hits * 1000 / elapsed : null; }
+    };
+  }
+  const combatHitMeter = createCombatHitMeter();
+
   const mvpBattleHistory = new Map();
   const mvpHistoryLimit = 150;
 
@@ -1353,11 +1394,12 @@
   }
   const rxExpLog = /獲得\s*Base EXP\s*([\d,]+)(?:\s*\(\s*\d+(?:\.\d+)?\s*%\s*\))?\s*\/\s*Job EXP\s*([\d,]+)/;
   const rxLootLog = /撿取物品\s*[:：]\s*(.+?)\s*[×xX*]\s*(\d+)/;
-  function parseLog(t, historical = false) {
+  function parseLog(t, historical = false, combatEvent = null) {
     if (state.paused) return;
     if (!historical) {
       const body = logBody(t);
       const damage = readOutgoingDamage(body)?.damage ?? 0;
+      combatHitMeter.record(body, combatEvent, damage > 0);
       if (damage) {
         state.dmgSum += damage;
         state.hits++;
@@ -4680,7 +4722,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.6.1 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.6.2 測試版</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -4697,7 +4739,7 @@
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:7px;">
             ${Object.entries(hudMetricLabels).map(([key, label]) => `<div class="ro-box" data-roi-metric="${key}" ${state.hudMetrics.includes(key) ? '' : 'hidden'}>
-              <small style="color:#94a3b8;" ${key === 'dmg' ? 'title="本角色在監測期間的輸出 ÷ 未暫停秒數，包含待機時間"' : ''}>${label}</small>
+              <small style="color:#94a3b8;" ${key === 'dmg' ? 'title="本角色在監測期間的輸出 ÷ 未暫停秒數，包含待機時間"' : key === 'hitRate' ? 'title="只計已記錄起訖的交戰，從發現怪物到擊倒。搜尋與待機不計。"' : ''}>${label}</small>
               <div id="u-${key}" style="font-size:13.5px;font-weight:bold;color:${key === 'dmg' ? '#f472b6' : '#93c5fd'};margin-top:2px;">0</div>
             </div>`).join('')}
           </div>
@@ -5022,9 +5064,11 @@
     bPause.onclick = () => {
       if (!state.paused) { state.accMs += Date.now() - state.lastResumed; state.paused = true; bPause.textContent = '▶️ 繼續監測'; bPause.style.background = 'linear-gradient(135deg,#16a34a,#15803d)'; }
       else { state.lastResumed = Date.now(); state.paused = false; bPause.textContent = '⏸️ 暫停監測'; bPause.style.background = 'linear-gradient(135deg,#d97706,#b45309)'; }
+      combatHitMeter.interrupt(Date.now());
       updateHUD();
     };
     document.getElementById('b-reset').onclick = () => {
+      combatHitMeter.reset();
       state.accMs = 0; state.lastResumed = Date.now(); state.kills = 0; state.bexp = 0; state.jexp = 0; state.dmgSum = 0; state.hits = 0; state.maxDmg = 0; state.damageTaken = 0; state.damageStartMs = 0; state.pickupQty = 0; state.missed = 0;
       state.loot = Object.create(null); state.lootRev++; state.renderedLootRev = -1;
       if (state.activeCharId) state.initZenyMap[state.activeCharId] = state.curZeny;
@@ -5083,7 +5127,8 @@
     refs.total.textContent = fmt(state.dmgSum);
     refs.peak.textContent = fmt(state.maxDmg);
     refs.hits.textContent = fmt(state.hits);
-    refs.hitRate.textContent = (state.hits / damageSeconds).toLocaleString('zh-TW', { maximumFractionDigits: 2 }) + ' 次/秒';
+    const combatRate = combatHitMeter.rate;
+    refs.hitRate.textContent = combatRate === null ? '—' : combatRate.toLocaleString('zh-TW', { maximumFractionDigits: 2 }) + ' 次/秒';
     refs.taken.textContent = fmt(state.damageTaken);
     refs.pickups.textContent = fmt(state.pickupQty);
     renderMvpHistory();
@@ -5649,7 +5694,7 @@
     renderChars();
   }
   function flushLogBatch(size) {
-    for (const { text, historical } of logSnapshots.splice(0, size)) parseLog(text, historical);
+    for (const { text, historical, combatEvent } of logSnapshots.splice(0, size)) parseLog(text, historical, combatEvent);
   }
   function scheduleLogBatch() {
     if (logTimer !== null || !logSnapshots.length) return;
@@ -5664,10 +5709,14 @@
     const text = clean(line.textContent);
     if (!text || state.processedLines.get(line) === text) return;
     state.processedLines.set(line, text);
+    let combatEvent = null;
     if (!historical) {
       const gameLog = getReactFiber(line)?.return?.memoizedProps?.l;
-      const eventId = Number.isSafeInteger(gameLog?.id) && Number.isFinite(gameLog?.wall) && text.endsWith(clean(gameLog.text))
-        ? `${gameLog.wall}/${gameLog.id}` : null;
+      if (Number.isSafeInteger(gameLog?.id) && Number.isFinite(gameLog.wall) &&
+          typeof gameLog.text === 'string' && gameLog.text.trim() && text.endsWith(clean(gameLog.text))) {
+        combatEvent = { id: gameLog.id, wall: gameLog.wall };
+      }
+      const eventId = combatEvent ? `${combatEvent.wall}/${combatEvent.id}` : null;
       recordMvpLog(text, state.activeCharId, eventId);
     }
     if (rxRareDrop.test(text)) {
@@ -5683,7 +5732,7 @@
     }
     if (state.paused) return;
     if (logSnapshots.length >= 2000) flushLogBatch(document.hidden ? 800 : 200);
-    logSnapshots.push({ text, historical });
+    logSnapshots.push({ text, historical, combatEvent });
     scheduleLogBatch();
   }
   function clearQueuedCharacterLogs() {
