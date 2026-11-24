@@ -268,8 +268,8 @@
     if (lootAnchor && !lootSyncPanels.has(lootAnchor)) {
       const box = document.createElement('div');
       box.dataset.roiSettingsTools = '';
-      box.style.cssText = 'flex-basis:100%;display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px;padding:6px 10px;background:linear-gradient(90deg,rgba(30,41,59,0.9),rgba(15,23,42,0.75));border-left:3px solid #38bdf8;border-radius:6px;font-size:11.5px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
-      const status = document.createElement('span'); status.style.color = '#4ade80';
+      box.style.cssText = 'flex-basis:100%;display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px;padding:6px 10px;background:var(--roi-panel);border-left:3px solid #38bdf8;border-radius:6px;font-size:11.5px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+      const status = document.createElement('span'); status.style.color = 'var(--roi-success)';
       box.style.display = 'grid';
       box.style.gridTemplateColumns = 'minmax(56px,auto) minmax(0,1fr) auto';
       box.style.width = '100%';

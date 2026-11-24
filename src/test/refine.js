@@ -770,19 +770,19 @@
       refPanel = document.createElement('div');
       refPanel.dataset.roiRefineHelper = '';
       refPanel.className = 'xp-sunken p-2';
-      refPanel.style.cssText = 'display:grid;gap:6px;margin-bottom:8px;border-left:3px solid #f59e0b;background:linear-gradient(90deg,rgba(15,23,42,0.94),rgba(30,41,59,0.85));border-radius:6px;font-size:12px;box-shadow:0 4px 12px rgba(0,0,0,0.35);';
+      refPanel.style.cssText = 'display:grid;gap:6px;margin-bottom:8px;border-left:3px solid #f59e0b;background:var(--roi-panel);border-radius:6px;font-size:12px;box-shadow:0 4px 12px rgba(0,0,0,0.35);';
       refPanel.innerHTML = `
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-          <button type="button" class="xp-btn small" id="ref-toggle" style="font-weight:bold;color:#fbbf24;">🔨 展開精煉清單</button>
+          <button type="button" class="xp-btn small" id="ref-toggle" style="font-weight:bold;color:var(--roi-warning);">🔨 展開精煉清單</button>
           <button type="button" class="xp-btn small" id="ref-sel-all">全選本頁裝備</button>
           <button type="button" class="xp-btn small" id="ref-sel-clr">取消全選</button>
-          <label style="color:#93c5fd;">模式：<select id="ref-mode" class="xp-input">
+          <label style="color:var(--roi-info);">模式：<select id="ref-mode" class="xp-input">
             <option value="round_robin">🔄 輪流齊頭衝 (+1輪流)</option>
             <option value="single_focus">🎯 單件直衝到底</option>
           </select></label>
-          <label style="color:#fbbf24;font-weight:bold;">目標 +<input type="number" id="ref-target" class="xp-input" value="${refTargetPlus}" min="1" max="10" style="width:48px;"></label>
-          <button type="button" class="xp-btn small" id="ref-run-safe" style="background:linear-gradient(135deg,#0284c7,#0369a1);color:#fff;border:none;">🛡️ 所選衝到安全值</button>
-          <button type="button" class="xp-btn small" id="ref-run-target" style="background:linear-gradient(135deg,#d97706,#b45309);color:#fff;font-weight:bold;border:none;">🚀 啟動衝到目標 +N</button>
+          <label style="color:var(--roi-warning);font-weight:bold;">目標 +<input type="number" id="ref-target" class="xp-input" value="${refTargetPlus}" min="1" max="10" style="width:48px;"></label>
+          <button type="button" class="xp-btn small" id="ref-run-safe" style="background:linear-gradient(135deg,#0369a1,#075581);color:#fff;border:none;">🛡️ 所選衝到安全值</button>
+          <button type="button" class="xp-btn small" id="ref-run-target" style="background:linear-gradient(135deg,#a34f05,#854009);color:#fff;font-weight:bold;border:none;">🚀 啟動衝到目標 +N</button>
           <button type="button" class="xp-btn small" id="ref-run-skill" hidden>神工匠武器精練</button>
           <button type="button" class="xp-btn small" id="ref-stop" style="background:#dc2626;color:#fff;display:none;border:none;">⏹ 停止</button>
         </div>
@@ -791,10 +791,10 @@
           <label><input type="checkbox" data-roi-ref-warehouse> 自動領料及存倉</label>
           <label>每次領料 <input type="number" data-roi-ref-batch class="xp-input" min="1" max="1000" step="1" style="width:64px;"> 個</label>
         </div>
-        <span data-roi-ref-settings-status role="status" style="color:#fde047;"></span>
+        <span data-roi-ref-settings-status role="status" style="color:var(--roi-warning);"></span>
         <div data-ref-categories role="group" aria-label="精煉裝備分類" style="display:none;gap:6px;flex-wrap:wrap;"></div>
-        <div data-ref-list style="display:none;max-height:210px;overflow:auto;gap:4px;padding:6px;background:#090d16;border-radius:6px;border:1px solid #1e293b;"></div>
-        <div data-ref-status style="font-size:11.5px;color:#4ade80;">💡 支援 Ctrl / ⌘ 點擊勾選全部同名裝備；安全值後神工匠用技能，一般職業自動穿戴找忽克連並在結束後穿回原裝。</div>
+        <div data-ref-list style="display:none;max-height:210px;overflow:auto;gap:4px;padding:6px;background:var(--roi-inset);border-radius:6px;border:1px solid var(--roi-edge);"></div>
+        <div data-ref-status style="font-size:11.5px;color:var(--roi-success);">💡 支援 Ctrl / ⌘ 點擊勾選全部同名裝備；安全值後神工匠用技能，一般職業自動穿戴找忽克連並在結束後穿回原裝。</div>
       `;
       b.host.insertBefore(refPanel, b.table.closest('.xp-sunken') || b.table);
       bindRefineSettings(refPanel, refPanel.querySelector('[data-roi-ref-settings-status]'));
@@ -871,18 +871,18 @@
       button.hidden = button.dataset.refCategory !== 'all' && !available.has(button.dataset.refCategory);
       const active = button.dataset.refCategory === refCategory;
       button.setAttribute('aria-pressed', String(active));
-      button.style.color = active ? '#fbbf24' : '';
-      button.style.borderColor = active ? '#fbbf24' : '';
+      button.style.color = active ? 'var(--roi-warning)' : '';
+      button.style.borderColor = active ? 'var(--roi-warning)' : '';
     }
     const eqRows = refineRowsForPage(b.rows);
     const sig = JSON.stringify([!!refinePack, refCategory, refBusy, [...refSelected], eqRows.map((r) => [r.uid, r.st.refine])]);
     if (listEl.dataset.sig === sig) return;
     listEl.dataset.sig = sig;
     listEl.replaceChildren();
-    if (refinePack && !eqRows.length) listEl.append(element('span', '沒有可精煉的裝備', 'color:#94a3b8'));
+    if (refinePack && !eqRows.length) listEl.append(element('span', '沒有可精煉的裝備', 'color:var(--roi-muted)'));
     eqRows.forEach((r) => {
       const lbl = document.createElement('label');
-      lbl.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 6px;cursor:pointer;border-bottom:1px dashed #1e293b;';
+      lbl.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 6px;cursor:pointer;border-bottom:1px dashed var(--roi-edge);';
       const cb = document.createElement('input');
       cb.type = 'checkbox'; cb.disabled = refBusy; cb.checked = refSelected.has(r.uid);
       cb.onclick = (e) => {
@@ -894,9 +894,9 @@
       const slots = SLOTS_MAP.get(r.st.itemId) || 0;
       const img = element('img');
       img.src = `/client/item/${r.st.itemId}.png`; img.width = img.height = 20;
-      const name = element('span', `+${r.st.refine || 0} ${r.name}${slots ? ` [${slots}]` : ''} `, `color:${r.st.refine ? '#38bdf8' : '#e2e8f0'}`);
+      const name = element('span', `+${r.st.refine || 0} ${r.name}${slots ? ` [${slots}]` : ''} `, `color:${r.st.refine ? 'var(--roi-info)' : 'var(--roi-text)'}`);
       applyRefineLevelColor(name, r.st.refine || 0);
-      name.append(element('small', `(${SUB_LABELS[r.sub] || r.cat})`, 'color:#64748b'));
+      name.append(element('small', `(${SUB_LABELS[r.sub] || r.cat})`, 'color:var(--roi-muted)'));
       lbl.append(img, name);
       lbl.prepend(cb);
       listEl.appendChild(lbl);

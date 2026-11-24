@@ -248,20 +248,20 @@
 
   function showWarehouseSaleReview(f, saleBtn, items, sig) {
     const dlg = document.createElement('dialog');
-    dlg.style.cssText = 'width:min(540px,calc(100vw - 24px));max-height:80vh;padding:16px 18px;background:rgba(15,23,42,0.98);color:#f8fafc;border:1.5px solid #f59e0b;border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,0.92);font-size:13px;backdrop-filter:blur(10px);';
+    dlg.style.cssText = 'width:min(540px,calc(100vw - 24px));max-height:80vh;padding:16px 18px;background:var(--roi-surface);color:var(--roi-text);border:1.5px solid #f59e0b;border-radius:12px;box-shadow:0 16px 48px var(--roi-shadow);font-size:13px;backdrop-filter:blur(10px);';
     dlg.innerHTML = `
-      <div style="font-weight:bold;font-size:15px;color:#fbbf24;border-bottom:1px solid #334155;padding-bottom:8px;margin-bottom:8px;">🛡️ 倉庫待售清單核對（共 ${items.length} 項）</div>
-      <div style="max-height:48vh;overflow:auto;margin-bottom:10px;border:1px solid #334155;border-radius:6px;padding:6px 10px;background:#090d16;"></div>
-      <div style="font-size:12px;color:#cbd5e1;margin-bottom:10px;"><span data-sale-caption></span>｜核對無誤後按「確認出售」，遊戲仍會顯示原生販售確認。</div>
+      <div style="font-weight:bold;font-size:15px;color:var(--roi-warning);border-bottom:1px solid var(--roi-edge);padding-bottom:8px;margin-bottom:8px;">🛡️ 倉庫待售清單核對（共 ${items.length} 項）</div>
+      <div style="max-height:48vh;overflow:auto;margin-bottom:10px;border:1px solid var(--roi-edge);border-radius:6px;padding:6px 10px;background:var(--roi-inset);"></div>
+      <div style="font-size:12px;color:var(--roi-text);margin-bottom:10px;"><span data-sale-caption></span>｜核對無誤後按「確認出售」，遊戲仍會顯示原生販售確認。</div>
       <div style="display:flex;justify-content:flex-end;gap:8px;">
         <button type="button" class="xp-btn small" id="wh-rev-cancel">取消</button>
-        <button type="button" class="xp-btn small" id="wh-rev-ok" style="background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;font-weight:bold;border:none;">確認出售</button>
+        <button type="button" class="xp-btn small" id="wh-rev-ok" style="background:linear-gradient(135deg,#16763a,#136039);color:#fff;font-weight:bold;border:none;">確認出售</button>
       </div>
     `;
     const itemsBox = dlg.children[1];
     for (const item of items) {
-      const row = element('div', null, 'display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px dashed #1e293b');
-      row.append(element('span', item.name), element('b', '×' + item.qty.toLocaleString(), 'color:#4ade80'));
+      const row = element('div', null, 'display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px dashed var(--roi-edge)');
+      row.append(element('span', item.name), element('b', '×' + item.qty.toLocaleString(), 'color:var(--roi-success)'));
       itemsBox.append(row);
     }
     dlg.querySelector('[data-sale-caption]').textContent = clean(saleBtn.textContent);
@@ -292,7 +292,7 @@
       if (!bar) {
         bar = document.createElement('div');
         bar.dataset.roWhBar = '';
-        bar.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0 6px;padding:6px 10px;background:linear-gradient(90deg,rgba(30,41,59,0.9),rgba(15,23,42,0.75));border-left:3px solid #f59e0b;border-radius:6px;font-size:11.5px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+        bar.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0 6px;padding:6px 10px;background:var(--roi-panel);border-left:3px solid #f59e0b;border-radius:6px;font-size:11.5px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
         const mkBtn = (txt, fn, bg = '') => {
           const b = document.createElement('button');
           b.type = 'button'; b.className = 'xp-btn small'; b.textContent = txt;
@@ -301,7 +301,7 @@
           return b;
         };
         const stSpan = document.createElement('span');
-        stSpan.dataset.roWhStatus = ''; stSpan.style.color = '#fde047';
+        stSpan.dataset.roWhStatus = ''; stSpan.style.color = 'var(--roi-warning)';
         const review = document.createElement('input');
         review.type = 'checkbox';
         review.dataset.roiWhSaleReview = '';
@@ -332,7 +332,7 @@
               if (li.dataset.roiWhLocked !== undefined) { if (cb.checked) { cb.click(); cnt--; } continue; }
               if (!cb.checked && cnt < 100) { cb.click(); if (++cnt % 15 === 0) await sleep(10); }
             }
-          }, 'linear-gradient(135deg,#d97706,#b45309)'),
+          }, 'linear-gradient(135deg,#a34f05,#854009)'),
           mkBtn('🔒 本頁全鎖', () => bulkWhLock(f, true)),
           mkBtn('🔓 本頁全解', () => bulkWhLock(f, false)),
           pinsLabel, reviewLabel,

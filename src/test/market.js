@@ -11,7 +11,7 @@
 
   const tooltip = document.createElement('div');
   tooltip.id = 'roi-item-hover-tooltip';
-  tooltip.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;display:none;width:320px;box-sizing:border-box;max-width:calc(100vw - 12px);max-height:calc(100vh - 12px);overflow:auto;overscroll-behavior:contain;overflow-wrap:anywhere;background:linear-gradient(160deg,#0f172a,#172554);color:#f8fafc;border:1.5px solid #38bdf8;border-radius:10px;padding:11px 13px;box-shadow:0 12px 28px rgba(0,0,0,0.88);font-size:12px;line-height:1.45;contain:layout style;will-change:transform;';
+  tooltip.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;display:none;width:320px;box-sizing:border-box;max-width:calc(100vw - 12px);max-height:calc(100vh - 12px);overflow:auto;overscroll-behavior:contain;overflow-wrap:anywhere;background:var(--roi-surface);color:var(--roi-text);border:1.5px solid #38bdf8;border-radius:10px;padding:11px 13px;box-shadow:0 12px 28px var(--roi-shadow);font-size:12px;line-height:1.45;contain:layout style;will-change:transform;';
   document.body.appendChild(tooltip);
   let hoverPoint = null;
   let tooltipVisible = false;
@@ -119,13 +119,13 @@
     return lines;
   }
 
-  function renderDescBlock(container, rawDesc, currentRefine = 0, baseColor = '#cbd5e1', fontSize = '11px') {
+  function renderDescBlock(container, rawDesc, currentRefine = 0, baseColor = 'var(--roi-text)', fontSize = '11px') {
     const items = formatItemDescLines(rawDesc, currentRefine);
     if (!items.length) return;
     const list = element('div', null, `display:flex;flex-direction:column;gap:3px;font-size:${fontSize};line-height:1.45;`);
     for (const item of items) {
       if (item.type === 'meta') {
-        const metaEl = element('div', `📋 ${item.text}`, 'color:#93c5fd;font-size:10.5px;padding-bottom:3px;margin-bottom:1px;border-bottom:1px dashed rgba(148,163,184,0.2);');
+        const metaEl = element('div', `📋 ${item.text}`, 'color:var(--roi-info);font-size:10.5px;padding-bottom:3px;margin-bottom:1px;border-bottom:1px dashed rgba(148,163,184,0.2);');
         list.append(metaEl);
       } else if (item.type === 'refine') {
         const isCur = currentRefine > 0 && currentRefine === item.refineLv;
@@ -133,10 +133,10 @@
           'div',
           `${isCur ? '▶ ' : '• '}${item.text}`,
           isCur
-            ? 'color:#fde047;font-weight:bold;background:rgba(250,204,21,0.14);padding:2px 6px;border-radius:4px;border-left:2px solid #facc15;'
+            ? 'color:var(--roi-warning);font-weight:bold;background:rgba(250,204,21,0.14);padding:2px 6px;border-radius:4px;border-left:2px solid #facc15;'
             : item.active
-              ? 'color:#86efac;padding-left:4px;'
-              : 'color:#94a3b8;padding-left:4px;'
+              ? 'color:var(--roi-success);padding-left:4px;'
+              : 'color:var(--roi-muted);padding-left:4px;'
         );
         list.append(row);
       } else {
@@ -180,50 +180,50 @@
 
     const hasCards = cards.length > 0;
     const isRefined = (data.refine || 0) > 0;
-    tooltip.style.borderColor = hasCards ? '#facc15' : isRefined ? '#38bdf8' : 'rgba(56,189,248,0.75)';
+    tooltip.style.borderColor = hasCards ? 'var(--roi-warning)' : isRefined ? 'var(--roi-info)' : 'rgba(56,189,248,0.75)';
     const header = element('div', null, 'display:flex;align-items:center;gap:9px;border-bottom:1px solid rgba(148,163,184,0.28);padding-bottom:8px;margin-bottom:8px;');
-    const iconWrap = element('div', null, `position:relative;width:34px;height:34px;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 30% 30%,rgba(56,189,248,0.2),rgba(15,23,42,0.95));border-radius:8px;border:1px solid ${hasCards ? '#facc15' : isRefined ? '#38bdf8' : '#334155'};flex-shrink:0;`);
+    const iconWrap = element('div', null, `position:relative;width:34px;height:34px;display:flex;align-items:center;justify-content:center;background:var(--roi-panel);border-radius:8px;border:1px solid ${hasCards ? 'var(--roi-warning)' : isRefined ? 'var(--roi-info)' : '#334155'};flex-shrink:0;`);
     const icon = element('img', null, 'width:26px;height:26px;object-fit:contain;');
     icon.src = `/client/item/${numId}.png`;
     iconWrap.append(icon);
     const titleBox = element('div', null, 'min-width:0;flex:1;');
-    const titleLine = element('div', data.name || data.base || dbInfo.name || `道具 #${numId}`, `font-weight:bold;font-size:13.5px;color:${hasCards ? '#fde047' : isRefined ? '#38bdf8' : '#f8fafc'};line-height:1.3;`);
-    titleLine.append(element('small', ` #${numId}`, 'color:#64748b;font-weight:normal;'));
-    const subLine = element('div', null, 'display:flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:11px;color:#94a3b8;margin-top:2px;');
-    const typePill = element('span', SUB_LABELS[sub] || CAT_TABS[cat] || cat, 'background:rgba(245,158,11,0.16);color:#fbbf24;border:1px solid rgba(245,158,11,0.35);padding:0 5px;border-radius:4px;font-weight:bold;');
+    const titleLine = element('div', data.name || data.base || dbInfo.name || `道具 #${numId}`, `font-weight:bold;font-size:13.5px;color:${hasCards ? 'var(--roi-warning)' : isRefined ? 'var(--roi-info)' : 'var(--roi-text)'};line-height:1.3;`);
+    titleLine.append(element('small', ` #${numId}`, 'color:var(--roi-muted);font-weight:normal;'));
+    const subLine = element('div', null, 'display:flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:11px;color:var(--roi-muted);margin-top:2px;');
+    const typePill = element('span', SUB_LABELS[sub] || CAT_TABS[cat] || cat, 'background:rgba(245,158,11,0.16);color:var(--roi-warning);border:1px solid rgba(245,158,11,0.35);padding:0 5px;border-radius:4px;font-weight:bold;');
     subLine.append(typePill);
     const wLv = dbInfo.wLv || (cat === 'weapon' ? WLV_MAP.get(numId) : null);
-    if (wLv) subLine.append(element('span', `Lv.${wLv}武器`, 'color:#cbd5e1;'));
-    if (dbInfo.reqLv) subLine.append(element('span', `需求Lv.${dbInfo.reqLv}`, 'color:#94a3b8;'));
-    if (dbInfo.weight != null) subLine.append(element('span', `重量 ${dbInfo.weight}`, 'color:#94a3b8;'));
+    if (wLv) subLine.append(element('span', `Lv.${wLv}武器`, 'color:var(--roi-text);'));
+    if (dbInfo.reqLv) subLine.append(element('span', `需求Lv.${dbInfo.reqLv}`, 'color:var(--roi-muted);'));
+    if (dbInfo.weight != null) subLine.append(element('span', `重量 ${dbInfo.weight}`, 'color:var(--roi-muted);'));
     titleBox.append(titleLine, subLine);
     header.append(iconWrap, titleBox);
     nodes.push(header);
 
     if (dbInfo.atk || dbInfo.matk || dbInfo.def || dbInfo.mdef || dbInfo.desc || data.rawSpecText) {
-      const statBox = element('div', null, 'background:rgba(9,13,22,0.78);padding:7px 9px;border-radius:7px;margin-bottom:7px;border:1px solid #1e293b;font-size:11.5px;');
+      const statBox = element('div', null, 'background:var(--roi-panel);padding:7px 9px;border-radius:7px;margin-bottom:7px;border:1px solid var(--roi-edge);font-size:11.5px;');
       const statParts = [
         dbInfo.atk ? `⚔️ ATK ${dbInfo.atk}` : '',
         dbInfo.matk ? `🔮 MATK ${dbInfo.matk}` : '',
         dbInfo.def ? `🛡️ DEF ${dbInfo.def}` : '',
         dbInfo.mdef ? `✨ MDEF ${dbInfo.mdef}` : ''
       ].filter(Boolean);
-      if (statParts.length) statBox.append(element('div', statParts.join(' ｜ '), 'color:#e2e8f0;font-weight:bold;margin-bottom:5px;'));
-      if (dbInfo.desc) renderDescBlock(statBox, dbInfo.desc, Number(data.refine) || 0, '#e2e8f0', '11px');
-      if (data.rawSpecText) statBox.append(element('div', `✨ ${data.rawSpecText}`, 'color:#a7f3d0;font-size:11px;margin-top:4px;padding-top:3px;border-top:1px dashed rgba(148,163,184,0.2);'));
+      if (statParts.length) statBox.append(element('div', statParts.join(' ｜ '), 'color:var(--roi-text);font-weight:bold;margin-bottom:5px;'));
+      if (dbInfo.desc) renderDescBlock(statBox, dbInfo.desc, Number(data.refine) || 0, 'var(--roi-text)', '11px');
+      if (data.rawSpecText) statBox.append(element('div', `✨ ${data.rawSpecText}`, 'color:var(--roi-success);font-size:11px;margin-top:4px;padding-top:3px;border-top:1px dashed rgba(148,163,184,0.2);'));
       nodes.push(statBox);
     }
 
     const maxSlots = Math.max(slots, cards.length);
     if (maxSlots > 0 && data.cardsKnown === false) {
-      nodes.push(element('div', `💎 插槽 ${maxSlots} 洞（目前清單未提供插卡明細）`, 'font-size:11px;color:#93c5fd;margin-bottom:6px;'));
+      nodes.push(element('div', `💎 插槽 ${maxSlots} 洞（目前清單未提供插卡明細）`, 'font-size:11px;color:var(--roi-info);margin-bottom:6px;'));
     }
     if (maxSlots > 0 && data.cardsKnown !== false) {
-      const cardBox = element('div', null, 'background:linear-gradient(180deg,rgba(15,23,42,0.92),rgba(9,13,22,0.92));padding:7px 9px;border-radius:7px;border:1px solid rgba(250,204,21,0.35);margin-bottom:7px;');
-      const cardHeader = element('div', null, 'display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#fde047;margin-bottom:5px;font-weight:bold;');
+      const cardBox = element('div', null, 'background:var(--roi-panel);padding:7px 9px;border-radius:7px;border:1px solid rgba(250,204,21,0.35);margin-bottom:7px;');
+      const cardHeader = element('div', null, 'display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--roi-warning);margin-bottom:5px;font-weight:bold;');
       cardHeader.append(
         element('span', `💎 卡片插槽 (${cards.length} / ${maxSlots})`),
-        element('span', cards.length ? '已插卡強化' : '尚未插卡', `font-size:10px;padding:1px 5px;border-radius:4px;background:${cards.length ? 'rgba(250,204,21,0.18)' : 'rgba(100,116,139,0.2)'};color:${cards.length ? '#fde047' : '#94a3b8'};`)
+        element('span', cards.length ? '已插卡強化' : '尚未插卡', `font-size:10px;padding:1px 5px;border-radius:4px;background:${cards.length ? 'rgba(250,204,21,0.18)' : 'rgba(100,116,139,0.2)'};color:${cards.length ? 'var(--roi-warning)' : 'var(--roi-muted)'};`)
       );
       cardBox.append(cardHeader);
       for (let idx = 0; idx < maxSlots; idx++) {
@@ -235,20 +235,20 @@
           const cIcon = element('img', null, 'width:18px;height:18px;object-fit:contain;margin-top:1px;flex-shrink:0;');
           cIcon.src = `/client/item/${cid}.png`;
           const cDetail = element('div', null, 'flex:1;min-width:0;');
-          const cTitle = element('div', cName, 'font-weight:bold;color:#fde047;font-size:11.5px;');
+          const cTitle = element('div', cName, 'font-weight:bold;color:var(--roi-warning);font-size:11.5px;');
           cDetail.append(cTitle);
           if (cInfo.desc) {
             const cDescWrap = element('div', null, 'margin-top:2px;');
-            renderDescBlock(cDescWrap, cInfo.desc, 0, '#a7f3d0', '10.5px');
+            renderDescBlock(cDescWrap, cInfo.desc, 0, 'var(--roi-success)', '10.5px');
             cDetail.append(cDescWrap);
           } else {
-            cDetail.append(element('div', '（卡片效果說明尚未載入）', 'color:#64748b;font-size:10px;margin-top:1px;'));
+            cDetail.append(element('div', '（卡片效果說明尚未載入）', 'color:var(--roi-muted);font-size:10px;margin-top:1px;'));
           }
           cRow.append(cIcon, cDetail);
           cardBox.append(cRow);
         } else {
-          const emptyRow = element('div', null, `display:flex;align-items:center;gap:6px;padding:3px 0;color:#64748b;font-size:11px;${idx ? 'border-top:1px dashed #1e293b;' : ''}`);
-          emptyRow.append(element('span', '◇', 'color:#475569;'), element('span', `空插槽 [${idx + 1}]（未插卡）`));
+          const emptyRow = element('div', null, `display:flex;align-items:center;gap:6px;padding:3px 0;color:var(--roi-muted);font-size:11px;${idx ? 'border-top:1px dashed var(--roi-edge);' : ''}`);
+          emptyRow.append(element('span', '◇', 'color:var(--roi-muted);'), element('span', `空插槽 [${idx + 1}]（未插卡）`));
           cardBox.append(emptyRow);
         }
       }
@@ -256,14 +256,14 @@
     }
 
     if (data.price) {
-      const foot = element('div', null, 'display:flex;justify-content:space-between;align-items:center;gap:8px;padding-top:6px;border-top:1px solid rgba(148,163,184,0.22);font-size:11px;color:#94a3b8;');
+      const foot = element('div', null, 'display:flex;justify-content:space-between;align-items:center;gap:8px;padding-top:6px;border-top:1px solid rgba(148,163,184,0.22);font-size:11px;color:var(--roi-muted);');
       const sellerText = `🏪 ${data.seller || '露天攤位'}${data.city ? ` (${TOWN_NAMES[data.city] || data.city})` : ''}`;
       const priceText = data.qty && data.qty > 1
         ? `單價 ${data.price.toLocaleString()} Z × ${data.qty} = ${(data.price * data.qty).toLocaleString()} Z`
         : `售價 ${data.price.toLocaleString()} Z`;
       foot.append(
         element('span', sellerText, 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'),
-        element('b', priceText, 'color:#4ade80;white-space:nowrap;')
+        element('b', priceText, 'color:var(--roi-success);white-space:nowrap;')
       );
       nodes.push(foot);
     }
@@ -274,18 +274,18 @@
   mktPanel.innerHTML = `
     <legend class="legend" id="roi-mkt-leg">🏪 攤位分類檢視 </legend>
     <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px;">
-      <button type="button" id="roi-mkt-auto" class="xp-btn small" style="background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;font-weight:bold;border:none;">▶️ 啟動 15s 自動整理</button>
+      <button type="button" id="roi-mkt-auto" class="xp-btn small" style="background:linear-gradient(135deg,#16763a,#136039);color:#fff;font-weight:bold;border:none;">▶️ 啟動 15s 自動整理</button>
       <input type="text" id="roi-mkt-q" class="xp-input" placeholder="篩選商品/插卡 (或跨城補查字)..." style="min-width:175px;">
       <select id="roi-mkt-sort" class="xp-input"><option value="asc">價低➔高</option><option value="desc">價高➔低</option><option value="name">名稱</option></select>
       <label><input type="checkbox" id="roi-mkt-min" checked> 同規格最低</label>
-      <button type="button" id="roi-mkt-cross" class="xp-btn small" style="background:linear-gradient(135deg,#0284c7,#0369a1);color:#fff;font-weight:bold;border:none;">🛰️ 立即跨城補查</button>
+      <button type="button" id="roi-mkt-cross" class="xp-btn small" style="background:linear-gradient(135deg,#0369a1,#075581);color:#fff;font-weight:bold;border:none;">🛰️ 立即跨城補查</button>
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-bottom:6px;">
       <div id="roi-mkt-tabs" style="display:flex;flex-wrap:wrap;gap:4px;"></div>
-      <label id="roi-mkt-sub-wrap" style="display:none;color:#fbbf24;font-weight:bold;">細分類：<select id="roi-mkt-sub" class="xp-input"></select></label>
+      <label id="roi-mkt-sub-wrap" style="display:none;color:var(--roi-warning);font-weight:bold;">細分類：<select id="roi-mkt-sub" class="xp-input"></select></label>
     </div>
-    <div id="roi-mkt-status" style="font-size:11px;color:#38bdf8;margin-bottom:5px;">目前城鎮攤位快照｜指到裝備可看精煉加成與插卡詳情，點 🔍 可切回原生購買</div>
-    <div id="roi-mkt-rows" style="max-height:60vh;overflow:auto;border:1px solid #334155;border-radius:6px;background:rgba(9,13,22,0.5);"></div>
+    <div id="roi-mkt-status" style="font-size:11px;color:var(--roi-info);margin-bottom:5px;">目前城鎮攤位快照｜指到裝備可看精煉加成與插卡詳情，點 🔍 可切回原生購買</div>
+    <div id="roi-mkt-rows" style="max-height:60vh;overflow:auto;border:1px solid var(--roi-edge);border-radius:6px;background:var(--roi-surface);color:var(--roi-text);"></div>
   `;
 
   const mktTabsBox = mktPanel.querySelector('#roi-mkt-tabs'), mktSubWrap = mktPanel.querySelector('#roi-mkt-sub-wrap'), mktSubSel = mktPanel.querySelector('#roi-mkt-sub'), mktRowsBox = mktPanel.querySelector('#roi-mkt-rows'), mktAutoBtn = mktPanel.querySelector('#roi-mkt-auto');
@@ -454,7 +454,7 @@
     crossBusy = false;
     ++crossRequest;
     mktAutoBtn.textContent = '▶️ 啟動 15s 自動整理';
-    mktAutoBtn.style.background = 'linear-gradient(135deg,#16a34a,#15803d)';
+    mktAutoBtn.style.background = 'linear-gradient(135deg,#16763a,#136039)';
     if (reason && mktPanel.querySelector('#roi-mkt-status')) mktPanel.querySelector('#roi-mkt-status').textContent = `🔴 ${reason}`;
   }
   mktAutoBtn.onclick = () => (mktAuto15s ? stopMktAuto('已手動停止 15s 自動整理') : startMktAuto());
@@ -559,18 +559,18 @@
     const rows = shown.slice(0, 120).map((r) => {
       const age = Math.floor((Date.now() - r.seen) / 60000);
       const src = r.source === 'cross' ? `·補查${age < 1 ? '剛剛' : age + '分前'}` : '';
-      const row = element('div', null, 'display:grid;grid-template-columns:minmax(240px,1fr) 165px 55px 140px;gap:6px;padding:6px 10px;border-bottom:1px solid #33415555;align-items:center;font-size:12px');
+      const row = element('div', null, 'display:grid;grid-template-columns:minmax(240px,1fr) 165px 55px 140px;gap:6px;padding:6px 10px;border-bottom:1px solid var(--roi-edge)55;align-items:center;font-size:12px');
       row.className = 'roi-mkt-row';
       row.dataset.rkey = r.key;
       const item = element('span', null, 'display:flex;align-items:center;gap:5px;min-width:0;flex-wrap:wrap');
-      const fav = element('button', mktFavs.has(r.id) ? '★' : '☆', mktFavs.has(r.id) ? 'color:#facc15' : '');
+      const fav = element('button', mktFavs.has(r.id) ? '★' : '☆', mktFavs.has(r.id) ? 'color:var(--roi-warning)' : '');
       fav.type = 'button'; fav.className = 'xp-btn small'; fav.dataset.act = 'fav';
       const img = element('img', null, 'width:21px;height:21px;object-fit:contain');
       img.src = `/client/item/${r.id}.png`; img.loading = 'lazy';
       const clip = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-      const name = element('span', r.name, `${clip};font-weight:${r.refine || r.cards.length ? 'bold' : 'normal'};color:${r.cards.length ? '#fde047' : r.refine ? '#38bdf8' : 'inherit'}`);
+      const name = element('span', r.name, `${clip};font-weight:${r.refine || r.cards.length ? 'bold' : 'normal'};color:${r.cards.length ? 'var(--roi-warning)' : r.refine ? 'var(--roi-info)' : 'inherit'}`);
       item.append(fav, img, name);
-      if (r.changeTag) item.append(element('small', r.changeTag, 'color:#fb923c'));
+      if (r.changeTag) item.append(element('small', r.changeTag, 'color:var(--roi-warning)'));
       const price = element('span', null, 'text-align:right;white-space:nowrap');
       const money = element('span', r.price.toLocaleString() + ' Z', getMoneyColorVars(r.price));
       money.className = 'roi-mc-text';
@@ -578,11 +578,11 @@
       find.type = 'button'; find.className = 'xp-btn small'; find.dataset.act = 'find'; find.title = '切回原生攤位定位購買 / 跨城搜尋';
       price.append(money, find);
       const seller = element('span', r.seller, clip);
-      seller.append(element('small', ` (${TOWN_NAMES[r.city] || r.city}${src})`, 'color:#93c5fd'));
+      seller.append(element('small', ` (${TOWN_NAMES[r.city] || r.city}${src})`, 'color:var(--roi-info)'));
       row.append(item, price, element('span', '剩 ' + r.qty, 'text-align:right'), seller);
       return row;
     });
-    mktRowsBox.replaceChildren(...(rows.length ? rows : [element('div', '無符合商品', 'padding:16px;text-align:center;color:#94a3b8')]));
+    mktRowsBox.replaceChildren(...(rows.length ? rows : [element('div', '無符合商品', 'padding:16px;text-align:center;color:var(--roi-muted)')]));
   }
 
   let lastHoveredTarget = null;

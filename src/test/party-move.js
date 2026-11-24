@@ -320,14 +320,14 @@
     return new Promise((resolve) => {
       const dlg = document.createElement('dialog');
       dlg.dataset.roiPartyMoveDialog = '';
-      dlg.style.cssText = 'width:min(560px,calc(100vw - 24px));max-height:80vh;padding:16px 18px;background:rgba(15,23,42,0.98);color:#f8fafc;border:1.5px solid #38bdf8;border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,0.92);font-size:13px;';
-      dlg.append(element('div', `🚩 全隊移到 ${mapLabel(plan.target)}`, 'font-weight:bold;font-size:15px;color:#7dd3fc;border-bottom:1px solid #334155;padding-bottom:8px;margin-bottom:8px;'));
-      const list = element('div', null, 'max-height:46vh;overflow:auto;margin-bottom:10px;border:1px solid #334155;border-radius:6px;padding:6px 10px;background:#090d16;');
+      dlg.style.cssText = 'width:min(560px,calc(100vw - 24px));max-height:80vh;padding:16px 18px;background:var(--roi-surface);color:var(--roi-text);border:1.5px solid #38bdf8;border-radius:12px;box-shadow:0 16px 48px var(--roi-shadow);font-size:13px;';
+      dlg.append(element('div', `🚩 全隊移到 ${mapLabel(plan.target)}`, 'font-weight:bold;font-size:15px;color:var(--roi-info);border-bottom:1px solid var(--roi-edge);padding-bottom:8px;margin-bottom:8px;'));
+      const list = element('div', null, 'max-height:46vh;overflow:auto;margin-bottom:10px;border:1px solid var(--roi-edge);border-radius:6px;padding:6px 10px;background:var(--roi-inset);');
       for (const r of plan.rows) {
-        const row = element('div', null, 'display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px dashed #1e293b');
+        const row = element('div', null, 'display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px dashed var(--roi-edge)');
         const who = `${r.name}${r.self ? '（你）' : ''}${r.baseLv ? ` Lv${r.baseLv}` : ''}`;
         const st = !r.ours ? '非本帳號，不動' : r.vending ? '擺攤中，不動' : r.running ? '掛機中 → 停止後移動' : '停止 → 移動';
-        row.append(element('span', who), element('span', `${mapLabel(r.mapId)} → ${r.move ? mapLabel(plan.target) : '—'}`, 'color:#cbd5e1'), element('b', st, `color:${r.move ? '#4ade80' : '#94a3b8'};white-space:nowrap`));
+        row.append(element('span', who), element('span', `${mapLabel(r.mapId)} → ${r.move ? mapLabel(plan.target) : '—'}`, 'color:var(--roi-text)'), element('b', st, `color:${r.move ? 'var(--roi-success)' : 'var(--roi-muted)'};white-space:nowrap`));
         list.append(row);
       }
       dlg.append(list);
@@ -336,7 +336,7 @@
         needApply && rare && (rare.added || rare.removed) ? `必撿稀有掉落已隨地圖同步更新（新增 ${rare.added}、取消 ${rare.removed} 項），會和地圖一起套用。` : '',
         plan.stopIds.length ? '「停止」要等那一場打完才生效，可能要等幾十秒到幾分鐘，過程中可以取消。' : '',
       ].filter(Boolean).join(' ');
-      if (notes) dlg.append(element('div', notes, 'font-size:12px;color:#cbd5e1;margin-bottom:8px;'));
+      if (notes) dlg.append(element('div', notes, 'font-size:12px;color:var(--roi-text);margin-bottom:8px;'));
       const startLabel = element('label', ' 完成後全部開始掛機', 'display:flex;gap:4px;align-items:center;font-size:12px;margin-bottom:10px;');
       const startBox = element('input'); startBox.type = 'checkbox'; startBox.checked = true; startLabel.prepend(startBox);
       dlg.append(startLabel);
@@ -420,7 +420,7 @@
       const btn = element('button', '🚩 全隊移到此地圖'); btn.type = 'button'; btn.className = 'xp-btn small'; btn.dataset.roiPartyMove = '';
       btn.title = '把同隊的自己角色停止、換到這張地圖，再一起開始掛機';
       const stop = element('button', '取消'); stop.type = 'button'; stop.className = 'xp-btn small'; stop.dataset.roiPartyMoveCancel = ''; stop.hidden = true;
-      const status = element('span', null, 'color:#38bdf8'); status.dataset.roiPartyMoveStatus = '';
+      const status = element('span', null, 'color:var(--roi-info)'); status.dataset.roiPartyMoveStatus = '';
       const out = element('div', null, 'flex-basis:100%;font-size:11.5px;line-height:1.5'); out.dataset.roiPartyMoveResult = '';
       btn.onclick = () => { void startPartyMove(bar); };
       stop.onclick = () => { partyMoveActive?.cancel(); };

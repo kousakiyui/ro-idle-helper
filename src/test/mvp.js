@@ -90,9 +90,9 @@
       }
       #roi-helper-mvp-open:hover,
       #roi-helper-mvp-open[aria-expanded="true"] {
-        border-bottom-color: #fbbf24;
-        color: #fbbf24;
-        background: rgba(30, 41, 59, 0.9);
+        border-bottom-color: var(--roi-warning);
+        color: var(--roi-warning);
+        background: var(--roi-panel);
       }
       #roi-helper-mvp-open .badge {
         display: inline-flex;
@@ -121,23 +121,22 @@
         max-height: 84vh;
         max-height: 84dvh;
         padding: 0;
-        background: linear-gradient(165deg, rgba(15, 23, 42, 0.97), rgba(9, 13, 22, 0.99));
+        background: var(--roi-surface);
         backdrop-filter: blur(12px);
-        color: #edf1f7;
-        border: 1.5px solid rgba(56, 189, 248, 0.72);
+        color: var(--roi-text);
+        border: 1.5px solid var(--roi-frame);
         border-radius: 12px;
-        box-shadow: 0 20px 64px rgba(0, 0, 0, 0.9), 0 0 18px rgba(56, 189, 248, 0.14);
+        box-shadow: 0 20px 64px var(--roi-shadow);
         font: 13.5px/1.45 system-ui, -apple-system, "Microsoft JhengHei", sans-serif;
-        color-scheme: dark;
         overflow: hidden;
       }
       #roi-helper-mvp-panel:not([open]) { display: none; }
       #roi-helper-mvp-panel[open] { display: flex; flex-direction: column; }
 
       #roi-helper-mvp-panel button {
-        border: 1px solid #485b73;
-        background: #223146;
-        color: #eef3fa;
+        border: 1px solid var(--roi-edge);
+        background: var(--roi-panel);
+        color: var(--roi-text);
         border-radius: 7px;
         padding: 6px 12px;
         font: inherit;
@@ -145,7 +144,7 @@
         transition: background .15s ease, border-color .15s ease, color .15s ease;
       }
       #roi-helper-mvp-panel button:hover {
-        background: #2b3e57;
+        background: var(--roi-selected);
         border-color: #6b84a3;
       }
       #roi-helper-mvp-panel button:focus-visible,
@@ -161,9 +160,9 @@
         justify-content: space-between;
         gap: 12px;
         padding: 11px 16px;
-        background: linear-gradient(90deg, #1e293b, #0f172a);
+        background: var(--roi-title);
         border-top: 2px solid #fbbf24;
-        border-bottom: 1px solid #334155;
+        border-bottom: 1px solid var(--roi-edge);
       }
       #roi-helper-mvp-panel .title-wrap {
         display: flex;
@@ -178,7 +177,7 @@
       }
       #roi-helper-mvp-panel h2 {
         margin: 0;
-        color: #38bdf8;
+        color: var(--roi-info);
         font-size: 16.5px;
         font-weight: 750;
         letter-spacing: .02em;
@@ -192,11 +191,11 @@
       #roi-helper-mvp-panel .btn-ghost {
         background: transparent;
         border-color: #3d4f66;
-        color: #c2d0e2;
+        color: var(--roi-muted);
       }
       #roi-helper-mvp-panel .btn-ghost:hover {
-        background: #223146;
-        color: #fff;
+        background: var(--roi-panel);
+        color: var(--roi-text);
       }
 
       #roi-helper-mvp-panel .toolbar {
@@ -206,8 +205,8 @@
         justify-content: space-between;
         gap: 10px;
         padding: 9px 16px;
-        background: rgba(15, 23, 42, 0.85);
-        border-bottom: 1px solid #263549;
+        background: var(--roi-panel);
+        border-bottom: 1px solid var(--roi-edge);
       }
       #roi-helper-mvp-panel .filters {
         display: flex;
@@ -220,33 +219,33 @@
         gap: 6px;
         padding: 4px 10px;
         border-radius: 999px;
-        border: 1px solid #384960;
-        background: #1b283b;
-        color: #b7c6da;
+        border: 1px solid var(--roi-edge);
+        background: var(--roi-panel);
+        color: var(--roi-muted);
         font-size: 12.5px;
         font-weight: 500;
       }
       #roi-helper-mvp-panel .filter-chip:hover {
         border-color: #5a7291;
-        color: #fff;
+        color: var(--roi-text);
       }
       #roi-helper-mvp-panel .filter-chip[aria-pressed="true"] {
-        background: #2b415e;
+        background: var(--roi-selected);
         border-color: #82a6d1;
-        color: #fff;
+        color: var(--roi-text);
         font-weight: 650;
       }
       #roi-helper-mvp-panel .filter-chip .count {
         padding: 0 5px;
         border-radius: 999px;
-        background: #0f1724;
-        color: #9fb3cc;
+        background: var(--roi-surface);
+        color: var(--roi-muted);
         font-size: 11px;
         font-variant-numeric: tabular-nums;
       }
       #roi-helper-mvp-panel .filter-chip[aria-pressed="true"] .count {
-        background: #17263a;
-        color: #ffd894;
+        background: var(--roi-panel);
+        color: var(--roi-warning);
       }
 
       #roi-helper-mvp-panel .search-wrap {
@@ -258,14 +257,14 @@
         width: 100%;
         box-sizing: border-box;
         padding: 5px 28px 5px 10px;
-        border: 1px solid #3c4e66;
+        border: 1px solid var(--roi-edge);
         border-radius: 7px;
-        background: #090d16;
-        color: #eef3fa;
+        background: var(--roi-surface);
+        color: var(--roi-text);
         font: inherit;
         font-size: 13px;
       }
-      #roi-helper-mvp-panel .search-input::placeholder { color: #7588a3; }
+      #roi-helper-mvp-panel .search-input::placeholder { color: var(--roi-muted); }
       #roi-helper-mvp-panel .search-clear {
         position: absolute;
         right: 4px;
@@ -274,16 +273,16 @@
         padding: 1px 6px;
         border: none;
         background: transparent;
-        color: #8ca0bc;
+        color: var(--roi-muted);
         font-size: 14px;
         line-height: 1;
       }
       #roi-helper-mvp-panel .search-clear:hover {
         background: transparent;
-        color: #fff;
+        color: var(--roi-text);
       }
 
-      #roi-helper-mvp-panel small { color: #a9b9ce; font-size: 12px; }
+      #roi-helper-mvp-panel small { color: var(--roi-muted); font-size: 12px; }
 
       #roi-helper-mvp-panel main {
         padding: 14px 16px;
@@ -297,15 +296,15 @@
         margin: 0;
         padding: 8px 12px;
         border-radius: 8px;
-        background: rgba(30, 41, 59, 0.75);
-        border: 1px solid #344761;
-        color: #c8d7ea;
+        background: var(--roi-panel);
+        border: 1px solid var(--roi-edge);
+        color: var(--roi-text);
         font-size: 12.5px;
       }
       #roi-helper-mvp-panel .notice-bar.warn {
-        background: #2d2118;
+        background: var(--roi-inset);
         border-color: #7c5330;
-        color: #fbd3a8;
+        color: var(--roi-warning);
       }
 
       #roi-helper-mvp-panel .group-section {
@@ -318,8 +317,8 @@
         align-items: center;
         gap: 8px;
         padding-bottom: 4px;
-        border-bottom: 1px solid #263549;
-        color: #cddbf0;
+        border-bottom: 1px solid var(--roi-edge);
+        color: var(--roi-text);
         font-size: 13px;
         font-weight: 700;
         letter-spacing: .03em;
@@ -335,7 +334,7 @@
       #roi-helper-mvp-panel .group-dot.passed { background: #34d399; }
       #roi-helper-mvp-panel .group-dot.unknown { background: #64748b; }
       #roi-helper-mvp-panel .group-count {
-        color: #889cb8;
+        color: var(--roi-muted);
         font-size: 12px;
         font-weight: 500;
       }
@@ -354,7 +353,7 @@
         justify-content: space-between;
         gap: 10px;
         padding: 11px 12px 11px 14px;
-        background: rgba(30, 41, 59, 0.72);
+        background: var(--roi-panel);
         border: 1px solid rgba(71, 85, 105, 0.65);
         border-left-width: 4px;
         border-radius: 10px;
@@ -365,7 +364,7 @@
       }
       #roi-helper-mvp-panel article.mvp-card[data-state="window"] {
         border-left-color: #f59e0b;
-        background: linear-gradient(145deg, rgba(66, 44, 16, 0.55), rgba(30, 41, 59, 0.78));
+        background: var(--roi-panel);
       }
       #roi-helper-mvp-panel article.mvp-card[data-state="upcoming"] {
         border-left-color: #60a5fa;
@@ -388,9 +387,9 @@
         height: 64px;
         display: grid;
         place-items: center;
-        border: 1px solid #3c4f66;
+        border: 1px solid var(--roi-edge);
         border-radius: 8px;
-        background: radial-gradient(circle at 50% 45%, #37485d, #090d16 82%);
+        background: var(--roi-panel);
         overflow: hidden;
       }
       #roi-helper-mvp-panel canvas {
@@ -399,7 +398,7 @@
         image-rendering: pixelated;
       }
       #roi-helper-mvp-panel .no-portrait {
-        color: #7d90aa;
+        color: var(--roi-muted);
         font-size: 11px;
       }
       #roi-helper-mvp-panel .boss-info {
@@ -417,7 +416,7 @@
       }
       #roi-helper-mvp-panel h3 {
         margin: 0;
-        color: #fff;
+        color: var(--roi-text);
         font-size: 16px;
         font-weight: 700;
         letter-spacing: .02em;
@@ -432,39 +431,39 @@
         font-size: 11.5px;
         font-weight: 650;
         font-variant-numeric: tabular-nums;
-        background: #243347;
-        color: #b7c8de;
-        border: 1px solid #394d68;
+        background: var(--roi-panel);
+        color: var(--roi-muted);
+        border: 1px solid var(--roi-edge);
       }
       #roi-helper-mvp-panel .status-pill[data-state="window"] {
-        background: #422c10;
+        background: var(--roi-inset);
         border-color: #b46914;
-        color: #ffd584;
+        color: var(--roi-warning);
       }
       #roi-helper-mvp-panel .status-pill[data-state="upcoming"] {
-        background: #172e4c;
+        background: var(--roi-inset);
         border-color: #2f629e;
-        color: #9ecbff;
+        color: var(--roi-info);
       }
       #roi-helper-mvp-panel .status-pill[data-state="passed"] {
-        background: #13352c;
+        background: var(--roi-inset);
         border-color: #256e59;
-        color: #8ce9c3;
+        color: var(--roi-success);
       }
 
       #roi-helper-mvp-panel .kill-meta {
         display: flex;
         align-items: center;
         gap: 6px;
-        color: #9eb0c7;
+        color: var(--roi-muted);
         font-size: 12px;
         font-variant-numeric: tabular-nums;
       }
       #roi-helper-mvp-panel .source-tag {
         padding: 0 5px;
         border-radius: 4px;
-        background: #233348;
-        color: #9ec3e6;
+        background: var(--roi-panel);
+        color: var(--roi-info);
         font-size: 11px;
       }
 
@@ -473,10 +472,10 @@
         flex-direction: column;
         gap: 7px;
         padding-top: 8px;
-        border-top: 1px solid #29384d;
+        border-top: 1px solid var(--roi-edge);
       }
       #roi-helper-mvp-panel .multi-map-hint {
-        color: #9fb2ca;
+        color: var(--roi-muted);
         font-size: 11.5px;
       }
       #roi-helper-mvp-panel .map-row {
@@ -485,8 +484,8 @@
         gap: 5px;
         padding: 7px 9px;
         border-radius: 7px;
-        background: rgba(9, 13, 22, 0.72);
-        border: 1px solid #263549;
+        background: var(--roi-panel);
+        border: 1px solid var(--roi-edge);
       }
       #roi-helper-mvp-panel .map-top {
         display: flex;
@@ -499,26 +498,26 @@
         align-items: center;
         gap: 5px;
         padding: 4px 9px;
-        background: #21364c;
+        background: var(--roi-panel);
         border-color: #395878;
-        color: #dceeff;
+        color: var(--roi-text);
         font-size: 12.5px;
         font-weight: 600;
         text-align: left;
       }
       #roi-helper-mvp-panel .map-btn:hover {
-        background: #2a4663;
+        background: var(--roi-selected);
         border-color: #5b87b5;
-        color: #fff;
+        color: var(--roi-text);
       }
       #roi-helper-mvp-panel .map-btn::after {
         content: '前往 ›';
-        color: #8cc5ea;
+        color: var(--roi-info);
         font-size: 11.5px;
         font-weight: 500;
       }
       #roi-helper-mvp-panel .interval-tag {
-        color: #8da1bc;
+        color: var(--roi-muted);
         font-size: 11.5px;
         white-space: nowrap;
         font-variant-numeric: tabular-nums;
@@ -531,18 +530,18 @@
         font-size: 12.5px;
       }
       #roi-helper-mvp-panel .window-label {
-        color: #93a7c2;
+        color: var(--roi-muted);
         font-size: 11.5px;
       }
       #roi-helper-mvp-panel .time {
-        color: #ffdc9c;
+        color: var(--roi-warning);
         font-weight: 650;
         font-variant-numeric: tabular-nums;
       }
       #roi-helper-mvp-panel .progress-track {
         height: 3px;
         border-radius: 999px;
-        background: #223044;
+        background: var(--roi-panel);
         overflow: hidden;
       }
       #roi-helper-mvp-panel .progress-fill {
@@ -556,8 +555,8 @@
       #roi-helper-mvp-panel .empty-state {
         padding: 28px 16px;
         text-align: center;
-        color: #92a5bf;
-        background: #162131;
+        color: var(--roi-muted);
+        background: var(--roi-panel);
         border: 1px dashed #32445c;
         border-radius: 10px;
       }
@@ -568,8 +567,8 @@
         justify-content: space-between;
         gap: 12px;
         padding: 9px 16px;
-        background: rgba(15, 23, 42, 0.9);
-        border-top: 1px solid #2b3a4f;
+        background: var(--roi-panel);
+        border-top: 1px solid var(--roi-edge);
       }
 
       @media (max-width: 560px) {

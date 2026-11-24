@@ -79,6 +79,32 @@
     const st = document.querySelector('style[data-roi-style]') || document.createElement('style');
     st.dataset.roiStyle = '';
     st.textContent = `
+      /* 直接繼承遊戲的主題色，切換介面或夜間模式時由 CSS 更新。 */
+      :root {
+        --roi-surface:var(--face,#fff); --roi-panel:var(--face-2,#f4f6fb);
+        --roi-inset:var(--face,#fff); --roi-selected:var(--select-soft,#d3e0fb);
+        --roi-edge:var(--edge-mid,#b4c0da); --roi-frame:var(--win-border,#7d8fbc);
+        --roi-title:var(--title-2,#dbe4f5); --roi-title-text:var(--title-text,#1d2d5a);
+        --roi-text:var(--text,#1b1b1b); --roi-muted:#4b5563;
+        --roi-info:#165587; --roi-warning:#854009; --roi-success:#136039;
+        --roi-danger:#a5222d; --roi-damage:#9d2664; --roi-shadow:rgba(0,0,0,.28);
+        --roi-scheme:light; --roi-ref-glow:none;
+        --roi-ref-4:#1e568f; --roi-ref-5:#136039; --roi-ref-6:#4d6318;
+        --roi-ref-7:#7a5200; --roi-ref-8:#934307; --roi-ref-9:#a5222d; --roi-ref-10:#9b1740;
+      }
+      html.night {
+        --roi-surface:var(--face,#1e222b); --roi-panel:var(--face-2,#252a35);
+        --roi-inset:var(--face,#151923); --roi-selected:var(--select-soft,#2f3d63);
+        --roi-edge:var(--edge-mid,#444d63); --roi-frame:var(--win-border,#4a5570);
+        --roi-title:var(--title-2,#2b3244); --roi-title-text:var(--title-text,#d6def2);
+        --roi-text:var(--text,#dde2ec); --roi-muted:#b0bccf;
+        --roi-info:#93c5fd; --roi-warning:#fde047; --roi-success:#86efac;
+        --roi-danger:#fda4af; --roi-damage:#f9a8d4; --roi-shadow:rgba(0,0,0,.65);
+        --roi-scheme:dark; --roi-ref-glow:0 0 5px color-mix(in srgb,currentColor 45%,transparent);
+        --roi-ref-4:#93c5fd; --roi-ref-5:#6ee7b7; --roi-ref-6:#bef264;
+        --roi-ref-7:#fde047; --roi-ref-8:#fdba74; --roi-ref-9:#fda4af; --roi-ref-10:#ff91ad;
+      }
+      #ro-helper-hud, #roi-helper-mvp-panel, [data-roi-party-move-dialog] { color-scheme:var(--roi-scheme); }
       [data-roi-browse-hidden], [data-roi-native-fold] { display: none !important; }
       table[data-roi-town-results] { display: block; overflow: auto; }
       table[data-roi-town-results] > :is(thead, tbody) > tr > :first-child:not([colspan]) { width: 100%; }
@@ -94,11 +120,9 @@
       #ro-fab.roi-stop-alert { outline:3px solid #ef4444; animation:roi-stop-pulse 1.2s ease-out infinite; }
       @media (prefers-reduced-motion:reduce) { #ro-fab.roi-stop-alert { animation:none; } }
       [data-roi-wh-pin], [data-roi-wh-pin-search] { flex:none; inline-size:16px; padding:0; border:0; background:transparent; color:inherit; line-height:1; cursor:pointer; }
-      [data-roi-wh-pin][aria-pressed="true"] { color:#b45309; }
-      html.night [data-roi-wh-pin][aria-pressed="true"] { color:#fbbf24; }
+      [data-roi-wh-pin][aria-pressed="true"] { color:var(--roi-warning); }
       html:not([data-roi-money-off]) .roi-mc-text { color: var(--roi-mc) !important; font-weight: bold !important; font-variant-numeric: tabular-nums; }
-      html:not([data-roi-money-off]):is(.night,[data-info-night]) .roi-mc-text,
-      html:not([data-roi-money-off]) #roi-mkt-rows .roi-mc-text { color: var(--roi-mn) !important; -webkit-text-fill-color: currentColor !important; }
+      html:not([data-roi-money-off]):is(.night,[data-info-night]) .roi-mc-text { color: var(--roi-mn) !important; -webkit-text-fill-color: currentColor !important; }
       .roi-mkt-row:hover { background:rgba(56,189,248,0.12) !important; }
       table.roi-market-table { width:100% !important; table-layout:fixed !important; }
       table.roi-market-table tr > [data-roi-market-col] { box-sizing:border-box !important; }
@@ -108,7 +132,7 @@
       table.roi-market-table tr > [data-roi-market-col="input"] { width:85px !important; text-align:right !important; white-space:nowrap !important; }
       table.roi-market-table tr > [data-roi-market-col="input-stock"] { width:150px !important; text-align:right !important; white-space:nowrap !important; }
       table.roi-market-table tr > [data-roi-market-col^="input"] input[type="number"] { width:64px !important; max-width:100% !important; box-sizing:border-box !important; }
-      table.roi-market-table td[data-roi-market-col="price"] > button[data-roi-price-search] { position:absolute; right:22px; top:50%; transform:translateY(-50%); width:21px; height:21px; padding:0; border:0; background:transparent; color:#38bdf8 !important; font:14px sans-serif; cursor:pointer; }
+      table.roi-market-table td[data-roi-market-col="price"] > button[data-roi-price-search] { position:absolute; right:22px; top:50%; transform:translateY(-50%); width:21px; height:21px; padding:0; border:0; background:transparent; color:var(--roi-info) !important; font:14px sans-serif; cursor:pointer; }
       @media(max-width:600px) {
         table.roi-market-table tr > [data-roi-market-col="price"] { width:135px !important; }
         table.roi-market-table tr > [data-roi-market-col="stock"] { width:45px !important; }
@@ -117,27 +141,27 @@
         table.roi-market-table tr > [data-roi-market-col^="input"] input[type="number"] { width:52px !important; }
       }
       li[data-roi-wh-locked] { background:linear-gradient(90deg,rgba(245,158,11,0.22),transparent 85%)!important; border-left:3px solid #f59e0b!important; padding-left:4px!important; }
-      button[data-roi-wh-badge="lock"] { background:linear-gradient(135deg,#78350f,#92400e)!important; color:#fde047!important; border:1px solid #f59e0b!important; border-radius:4px!important; padding:0 5px!important; margin:0 4px!important; font-size:11px!important; font-weight:bold!important; cursor:pointer!important; }
-      button[data-roi-wh-badge="unlock"] { background:transparent!important; color:#64748b!important; border:1px dashed #475569!important; border-radius:4px!important; padding:0 4px!important; margin:0 4px!important; font-size:11px!important; opacity:0.6; cursor:pointer!important; }
-      [data-ro-ref-tier="4"]  { color: #60a5fa !important; font-weight: 600 !important; }
-      [data-ro-ref-tier="5"]  { color: #34d399 !important; font-weight: 600 !important; }
-      [data-ro-ref-tier="6"]  { color: #a3e635 !important; font-weight: 700 !important; }
-      [data-ro-ref-tier="7"]  { color: #facc15 !important; font-weight: 700 !important; text-shadow: 0 0 5px rgba(250,204,21,0.45) !important; }
-      [data-ro-ref-tier="8"]  { color: #fb923c !important; font-weight: 800 !important; text-shadow: 0 0 7px rgba(251,146,60,0.55) !important; }
-      [data-ro-ref-tier="9"]  { color: #f87171 !important; font-weight: 800 !important; text-shadow: 0 0 9px rgba(248,113,113,0.7) !important; }
-      [data-ro-ref-tier="10"] { color: #ff2d55 !important; font-weight: 900 !important; text-shadow: 0 0 8px #ff2d55, 0 0 3px #ffd700 !important; background: linear-gradient(90deg, rgba(255,45,85,0.22), rgba(250,204,21,0.18)) !important; border-radius: 4px !important; padding: 0 5px !important; border: 1px solid rgba(255,215,0,0.65) !important; }
+      button[data-roi-wh-badge="lock"] { background:var(--roi-panel)!important; color:var(--roi-warning)!important; border:1px solid #f59e0b!important; border-radius:4px!important; padding:0 5px!important; margin:0 4px!important; font-size:11px!important; font-weight:bold!important; cursor:pointer!important; }
+      button[data-roi-wh-badge="unlock"] { background:transparent!important; color:var(--roi-muted)!important; border:1px dashed #475569!important; border-radius:4px!important; padding:0 4px!important; margin:0 4px!important; font-size:11px!important; opacity:0.6; cursor:pointer!important; }
+      [data-ro-ref-tier="4"]  { color: var(--roi-ref-4) !important; font-weight: 600 !important; }
+      [data-ro-ref-tier="5"]  { color: var(--roi-ref-5) !important; font-weight: 600 !important; }
+      [data-ro-ref-tier="6"]  { color: var(--roi-ref-6) !important; font-weight: 700 !important; }
+      [data-ro-ref-tier="7"]  { color: var(--roi-ref-7) !important; font-weight: 700 !important; text-shadow: var(--roi-ref-glow) !important; }
+      [data-ro-ref-tier="8"]  { color: var(--roi-ref-8) !important; font-weight: 800 !important; text-shadow: var(--roi-ref-glow) !important; }
+      [data-ro-ref-tier="9"]  { color: var(--roi-ref-9) !important; font-weight: 800 !important; text-shadow: var(--roi-ref-glow) !important; }
+      [data-ro-ref-tier="10"] { color: var(--roi-ref-10) !important; font-weight: 900 !important; text-shadow: var(--roi-ref-glow) !important; background: linear-gradient(90deg, rgba(255,45,85,0.22), rgba(250,204,21,0.18)) !important; border-radius: 4px !important; padding: 0 5px !important; border: 1px solid rgba(255,215,0,0.65) !important; }
       #ro-helper-hud { position:fixed; top:48px; right:14px; z-index:2147483646; font-family:system-ui,-apple-system,"Microsoft JhengHei",sans-serif; user-select:none; touch-action:none; }
       #ro-helper-hud[data-roi-hud-yield] { pointer-events:none; }
       #ro-helper-hud[data-roi-hud-yield] > #ro-hud-card { visibility:hidden; pointer-events:none; }
       #ro-helper-hud[data-roi-hud-yield] > #ro-fab { display:flex !important; position:fixed; left:var(--roi-hud-yield-x); top:var(--roi-hud-yield-y); pointer-events:auto; cursor:pointer !important; }
-      #ro-hud-card { background:linear-gradient(165deg,rgba(15,23,42,0.96),rgba(9,13,22,0.98)); backdrop-filter:blur(12px); color:#f8fafc; border:1.5px solid rgba(56,189,248,0.75); border-radius:12px; box-sizing:border-box; width:min(365px,calc(100vw - 8px)); max-height:calc(100vh - 8px); max-height:calc(100dvh - 8px); box-shadow:0 16px 40px rgba(0,0,0,0.88), 0 0 15px rgba(56,189,248,0.15); font-size:12px; overflow:auto; }
+      #ro-hud-card { background:var(--roi-surface); backdrop-filter:blur(12px); color:var(--roi-text); border:1.5px solid var(--roi-frame); border-radius:12px; box-sizing:border-box; width:min(365px,calc(100vw - 8px)); max-height:calc(100vh - 8px); max-height:calc(100dvh - 8px); box-shadow:0 16px 40px var(--roi-shadow); font-size:12px; overflow:auto; }
       #ro-drag { position:sticky; top:0; z-index:1; }
-      .ro-tab { flex:1; text-align:center; padding:8px 2px; cursor:pointer; color:#94a3b8; font-weight:bold; font-size:11px; border-bottom:2px solid transparent; transition:all 0.15s; }
-      .ro-tab:hover { color:#e2e8f0; background:rgba(30,41,59,0.5); }
-      .ro-tab.active { color:#fbbf24; border-bottom-color:#fbbf24; background:rgba(30,41,59,0.9); }
+      .ro-tab { flex:1; text-align:center; padding:8px 2px; cursor:pointer; color:var(--roi-muted); font-weight:bold; font-size:11px; border-bottom:2px solid transparent; transition:all 0.15s; }
+      .ro-tab:hover { color:var(--roi-text); background:var(--roi-panel); }
+      .ro-tab.active { color:var(--roi-warning); border-bottom-color:var(--roi-warning); background:var(--roi-selected); }
       .ro-pane { display:none; padding:10px 12px; max-height:410px; overflow-y:auto; touch-action:pan-y; }
       .ro-pane.active { display:block; }
-      .ro-box { background:rgba(30,41,59,0.75); border:1px solid rgba(71,85,105,0.65); border-radius:8px; padding:7px 9px; box-shadow:inset 0 1px 0 rgba(255,255,255,0.04); }
+      .ro-box { background:var(--roi-panel); border:1px solid var(--roi-edge); border-radius:8px; padding:7px 9px; box-shadow:inset 0 1px 0 rgba(255,255,255,0.04); }
       #roi-hud-metrics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; margin-bottom:7px; }
       #roi-hud-metrics[data-columns="one"] { grid-template-columns:minmax(0,1fr); }
       @media (max-width:420px) {
@@ -150,10 +174,10 @@
       [data-ro-metric-setting] label { flex:1; min-width:0; }
       #roi-char-filters { flex-wrap:wrap; margin-bottom:7px; }
       #pane-cfg fieldset { min-inline-size:0; margin:0 0 8px; display:grid; gap:6px; }
-      #pane-cfg legend { color:#fbbf24; font-weight:bold; }
+      #pane-cfg legend { color:var(--roi-warning); font-weight:bold; }
       #pane-cfg label { display:flex; align-items:center; flex-wrap:wrap; gap:4px; }
       #pane-cfg label > input { margin:0 4px 0 0; }
-      #pane-cfg input[type="number"] { width:7em; color:#f8fafc; background:#0f172a; border:1px solid #475569; border-radius:4px; }
+      #pane-cfg input[type="number"] { width:7em; color:var(--roi-text); background:var(--roi-inset); border:1px solid var(--roi-edge); border-radius:4px; }
     `;
     if (!st.isConnected) document.head.appendChild(st);
     document.documentElement.toggleAttribute('data-roi-money-off', !state.moneyColor);
@@ -162,13 +186,13 @@
     const initialMetrics = state[hudMetricPrefKey()];
     const metricKeys = [...new Set([...initialMetrics, ...Object.keys(hudMetricLabels)])];
     hud.innerHTML = `
-      <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
+      <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:var(--roi-title);border:2px solid var(--roi-frame);color:var(--roi-info);align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px var(--roi-shadow);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
-        <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.6.3 測試版</span>
-          <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
+        <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:var(--roi-title);border-bottom:1px solid var(--roi-edge);font-weight:bold;color:var(--roi-title-text);cursor:move;" title="按住可拖曳移動視窗">
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.7.1 測試版</span>
+          <button id="ro-min-btn" style="background:var(--roi-selected);color:var(--roi-text);border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
-        <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
+        <div style="display:flex;background:var(--roi-inset);border-bottom:1px solid var(--roi-edge);">
           <div class="ro-tab active" data-t="tel">📊 效率</div>
           <span data-roi-mvp-slot></span>
           <div class="ro-tab" data-t="chr">👥 分身</div>
@@ -177,23 +201,23 @@
         </div>
         <div class="ro-pane active" id="pane-tel">
           <div style="display:flex;justify-content:space-between;margin-bottom:7px;font-size:11.5px;">
-            <span>角色：<b id="u-name" style="color:#38bdf8;">讀取中</b></span>
-            <span id="u-time" style="color:#4ade80;font-weight:bold;font-variant-numeric:tabular-nums;">⏱️ 00:00</span>
+            <span>角色：<b id="u-name" style="color:var(--roi-info);">讀取中</b></span>
+            <span id="u-time" style="color:var(--roi-success);font-weight:bold;font-variant-numeric:tabular-nums;">⏱️ 00:00</span>
           </div>
           <div id="roi-hud-metrics" data-view="${hudLayout.view}" data-columns="${hudLayout.columns}">
             ${metricKeys.map((key) => `<div class="ro-box" data-roi-metric="${key}" ${initialMetrics.includes(key) ? '' : 'hidden'}>
-              <small style="color:#94a3b8;" ${key === 'dmg' ? 'title="本角色在監測期間的輸出 ÷ 未暫停秒數，包含待機時間"' : key === 'hitRate' ? 'title="只計已記錄起訖的交戰，從發現怪物到擊倒。搜尋與待機不計。"' : ''}>${hudMetricLabels[key]}</small>
-              <div id="u-${key}" style="font-size:13.5px;font-weight:bold;color:${key === 'dmg' ? '#f472b6' : '#93c5fd'};margin-top:2px;">0</div>
+              <small style="color:var(--roi-muted);" ${key === 'dmg' ? 'title="本角色在監測期間的輸出 ÷ 未暫停秒數，包含待機時間"' : key === 'hitRate' ? 'title="只計已記錄起訖的交戰，從發現怪物到擊倒。搜尋與待機不計。"' : ''}>${hudMetricLabels[key]}</small>
+              <div id="u-${key}" style="font-size:13.5px;font-weight:bold;color:${key === 'dmg' ? 'var(--roi-damage)' : 'var(--roi-info)'};margin-top:2px;">0</div>
             </div>`).join('')}
           </div>
           <div style="display:flex;gap:6px;">
-            <button id="b-pause" style="flex:1;background:linear-gradient(135deg,#d97706,#b45309);color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">⏸️ 暫停監測</button>
-            <button id="b-reset" style="flex:1;background:#334155;color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">🔄 歸零</button>
+            <button id="b-pause" style="flex:1;background:linear-gradient(135deg,#a34f05,#854009);color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">⏸️ 暫停監測</button>
+            <button id="b-reset" style="flex:1;background:var(--roi-selected);color:var(--roi-text);border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">🔄 歸零</button>
           </div>
         </div>
         <div class="ro-pane" id="pane-chr">
-          <div style="display:flex;justify-content:space-between;margin-bottom:7px;background:#090d16;padding:7px 10px;border-radius:6px;border:1px solid #1e293b;">
-            <span>💰 帳號總 Zeny：</span><b id="u-tzeny" style="color:#facc15;">待同步</b>
+          <div style="display:flex;justify-content:space-between;margin-bottom:7px;background:var(--roi-inset);padding:7px 10px;border-radius:6px;border:1px solid var(--roi-edge);">
+            <span>💰 帳號總 Zeny：</span><b id="u-tzeny" style="color:var(--roi-warning);">待同步</b>
           </div>
           <div id="roi-char-filters">
             <label><input type="checkbox" data-ro-char-filter="charAttentionOnly"> 只看停止或異常</label>
@@ -209,8 +233,8 @@
             <details open><summary>MVP 戰鬥結果</summary><div id="u-mvp-battles" style="max-height:135px;overflow:auto;"></div></details>
             <details open><summary>MVP 掉落與獎勵</summary><div id="u-mvp-loot" style="max-height:135px;overflow:auto;"></div></details>
           </fieldset>
-          <div id="u-rlist" style="background:#090d16;padding:7px;border-radius:6px;border:1px solid #1e293b;margin-bottom:7px;max-height:75px;overflow:auto;color:#fde047;font-size:11px;">尚無稀有掉落...</div>
-          <div id="u-llist" style="background:#090d16;padding:7px;border-radius:6px;border:1px solid #1e293b;max-height:190px;overflow:auto;font-size:11px;">尚無撿取紀錄...</div>
+          <div id="u-rlist" style="background:var(--roi-inset);padding:7px;border-radius:6px;border:1px solid var(--roi-edge);margin-bottom:7px;max-height:75px;overflow:auto;color:var(--roi-warning);font-size:11px;">尚無稀有掉落...</div>
+          <div id="u-llist" style="background:var(--roi-inset);padding:7px;border-radius:6px;border:1px solid var(--roi-edge);max-height:190px;overflow:auto;font-size:11px;">尚無撿取紀錄...</div>
         </div>
         <div class="ro-pane" id="pane-cfg">
           <div data-roi-browser-menu hidden style="margin-bottom:8px;"></div>
@@ -255,13 +279,13 @@
             <label><input type="checkbox" id="c-rare-sync"> 隨地圖同步必撿稀有掉落</label>
             <label title="請先開啟該角色的道具與補給"><input type="checkbox" id="c-loot-sync"> 本角隨地圖自動設定戰利品（道具與補給開啟時）</label>
           </fieldset>
-          <div id="c-settings-status" role="status" style="color:#fde047;"></div>
-          <div style="font-weight:bold;color:#fbbf24;margin-bottom:4px;">🔒 自訂倉庫貴重保護詞 (由你決定)</div>
-          <textarea id="i-words" rows="2" placeholder="例：布里刊, 亡者遺物, 神之金屬, 鋁" style="width:100%;box-sizing:border-box;background:#090d16;color:#fde047;border:1px solid #475569;border-radius:6px;padding:6px;font-size:11.5px;user-select:text;"></textarea>
-          <button id="b-save-words" style="width:100%;margin:6px 0 8px;background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">💾 儲存自訂貴重詞並套用至倉庫</button>
+          <div id="c-settings-status" role="status" style="color:var(--roi-warning);"></div>
+          <div style="font-weight:bold;color:var(--roi-warning);margin-bottom:4px;">🔒 自訂倉庫貴重保護詞 (由你決定)</div>
+          <textarea id="i-words" rows="2" placeholder="例：布里刊, 亡者遺物, 神之金屬, 鋁" style="width:100%;box-sizing:border-box;background:var(--roi-inset);color:var(--roi-warning);border:1px solid var(--roi-edge);border-radius:6px;padding:6px;font-size:11.5px;user-select:text;"></textarea>
+          <button id="b-save-words" style="width:100%;margin:6px 0 8px;background:linear-gradient(135deg,#16763a,#136039);color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">💾 儲存自訂貴重詞並套用至倉庫</button>
           <div style="display:flex;gap:6px;">
-            <button id="b-exp-json" style="flex:1;background:linear-gradient(135deg,#0284c7,#0369a1);color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">📤 匯出備份</button>
-            <button id="b-imp-json" style="flex:1;background:#334155;color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">📥 匯入還原</button>
+            <button id="b-exp-json" style="flex:1;background:linear-gradient(135deg,#0369a1,#075581);color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">📤 匯出備份</button>
+            <button id="b-imp-json" style="flex:1;background:var(--roi-selected);color:var(--roi-text);border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">📥 匯入還原</button>
             <input type="file" id="i-imp-file" accept=".json" style="display:none;">
           </div>
         </div>
@@ -278,7 +302,7 @@
       const menu = document.getElementById('mgm-userscript-menu');
       const slot = hud.querySelector('[data-roi-browser-menu]');
       if (!menu || menu.parentElement === slot) return Boolean(menu);
-      menu.style.cssText = 'position:relative;top:auto;right:auto;z-index:2;font:12px system-ui;color:#eee;';
+      menu.style.cssText = 'position:relative;top:auto;right:auto;z-index:2;font:12px system-ui;color:var(--roi-text);';
       slot.append(menu);
       slot.hidden = false;
       return true;
@@ -558,8 +582,8 @@
 
     const bPause = document.getElementById('b-pause');
     bPause.onclick = () => {
-      if (!state.paused) { state.accMs += Date.now() - state.lastResumed; state.paused = true; bPause.textContent = '▶️ 繼續監測'; bPause.style.background = 'linear-gradient(135deg,#16a34a,#15803d)'; }
-      else { state.lastResumed = Date.now(); state.paused = false; bPause.textContent = '⏸️ 暫停監測'; bPause.style.background = 'linear-gradient(135deg,#d97706,#b45309)'; }
+      if (!state.paused) { state.accMs += Date.now() - state.lastResumed; state.paused = true; bPause.textContent = '▶️ 繼續監測'; bPause.style.background = 'linear-gradient(135deg,#16763a,#136039)'; }
+      else { state.lastResumed = Date.now(); state.paused = false; bPause.textContent = '⏸️ 暫停監測'; bPause.style.background = 'linear-gradient(135deg,#a34f05,#854009)'; }
       combatHitMeter.interrupt(Date.now());
       updateHUD();
     };
@@ -654,7 +678,7 @@
       const lEntries = Object.entries(state.loot).sort((a, b) => b[1] - a[1]);
       if (lEntries.length) refs.llist.replaceChildren(...lEntries.map(([name, qty]) => {
         const row = element('div', null, 'display:flex;justify-content:space-between;border-bottom:1px dashed #334155;padding:3px 0;');
-        row.append(element('span', name), element('b', `×${qty}`, 'color:#4ade80'));
+        row.append(element('span', name), element('b', `×${qty}`, 'color:var(--roi-success)'));
         return row;
       }));
     }
@@ -752,19 +776,19 @@
       return;
     }
     box.replaceChildren(...shown.map((c) => {
-      const row = element('div', null, `display:flex;justify-content:space-between;align-items:center;background:rgba(30,41,59,0.8);padding:6px 10px;border-radius:6px;margin-bottom:5px;border-left:3px solid ${c.running ? '#22c55e' : '#ef4444'}`);
+      const row = element('div', null, `display:flex;justify-content:space-between;align-items:center;background:var(--roi-panel);padding:6px 10px;border-radius:6px;margin-bottom:5px;border-left:3px solid ${c.running ? '#22c55e' : '#ef4444'}`);
       const detail = element('div');
       const map = charMaps?.get(c.mapId)?.name || (Object.hasOwn(TOWN_NAMES, c.mapId) && TOWN_NAMES[c.mapId]) || c.mapId || '—';
       const zeny = balance(c.id);
-      const summary = element('div', `📍 ${map} ｜ 💰 ${zeny === null ? '待同步' : zeny.toLocaleString('zh-TW') + ' Z'}`, 'font-size:11px;color:#93c5fd;margin-top:2px');
+      const summary = element('div', `📍 ${map} ｜ 💰 ${zeny === null ? '待同步' : zeny.toLocaleString('zh-TW') + ' Z'}`, 'font-size:11px;color:var(--roi-info);margin-top:2px');
       if (c.mapId && c.mapId !== map) summary.title = c.mapId;
-      detail.append(element('b', c.name), element('small', ` (Lv.${c.baseLv}/${c.jobLv})`, 'color:#94a3b8'), summary);
+      detail.append(element('b', c.name), element('small', ` (Lv.${c.baseLv}/${c.jobLv})`, 'color:var(--roi-muted)'), summary);
       const alert = state.charAlerts[c.id];
       if (alert) {
-        detail.append(element('small', '⚠ ' + alert.reason, 'color:#f87171'));
+        detail.append(element('small', '⚠ ' + alert.reason, 'color:var(--roi-danger)'));
         if (alert.reason !== '已停止掛機') row.onclick = () => clearTransientCharAlerts(c.id);
       }
-      row.append(detail, element('b', c.running ? '🟢掛機' : '🔴停止', `color:${c.running ? '#4ade80' : '#f87171'}`));
+      row.append(detail, element('b', c.running ? '🟢掛機' : '🔴停止', `color:${c.running ? 'var(--roi-success)' : 'var(--roi-danger)'}`));
       return row;
     }));
   }
