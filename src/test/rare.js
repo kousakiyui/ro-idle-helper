@@ -164,9 +164,9 @@
       if (!panel?.isConnected || !root.contains(panel)) {
         panel = document.createElement('div');
         panel.dataset.roRareHelper = '';
-        panel.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:6px 0;padding:6px 10px;background:linear-gradient(90deg,rgba(30,41,59,0.9),rgba(15,23,42,0.75));border-left:3px solid #38bdf8;border-radius:6px;font-size:11.5px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+        panel.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:6px 0;padding:6px 10px;background:var(--roi-panel);border-left:3px solid #38bdf8;border-radius:6px;font-size:11.5px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
         const statusSpan = document.createElement('span');
-        statusSpan.dataset.roRareStatus = ''; statusSpan.style.color = '#4ade80';
+        statusSpan.dataset.roRareStatus = ''; statusSpan.style.color = 'var(--roi-success)';
         statusSpan.textContent = rareAutoMap ? '稀有掉落自動同步已開啟' : '稀有掉落自動同步已關閉';
         panel.append(statusSpan);
         const h = [...root.querySelectorAll('legend,h2,h3,h4,strong,b,div,p,span')].find((e) => e.childElementCount <= 3 && isRareHeading(e.textContent));
