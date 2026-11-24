@@ -36,7 +36,7 @@
     renderChars();
   }
   function flushLogBatch(size) {
-    for (const { text, historical } of logSnapshots.splice(0, size)) parseLog(text, historical);
+    for (const { text, historical, combatEvent } of logSnapshots.splice(0, size)) parseLog(text, historical, combatEvent);
   }
   function scheduleLogBatch() {
     if (logTimer !== null || !logSnapshots.length) return;
@@ -51,10 +51,14 @@
     const text = clean(line.textContent);
     if (!text || state.processedLines.get(line) === text) return;
     state.processedLines.set(line, text);
+    let combatEvent = null;
     if (!historical) {
       const gameLog = getReactFiber(line)?.return?.memoizedProps?.l;
-      const eventId = Number.isSafeInteger(gameLog?.id) && Number.isFinite(gameLog?.wall) && text.endsWith(clean(gameLog.text))
-        ? `${gameLog.wall}/${gameLog.id}` : null;
+      if (Number.isSafeInteger(gameLog?.id) && Number.isFinite(gameLog.wall) &&
+          typeof gameLog.text === 'string' && gameLog.text.trim() && text.endsWith(clean(gameLog.text))) {
+        combatEvent = { id: gameLog.id, wall: gameLog.wall };
+      }
+      const eventId = combatEvent ? `${combatEvent.wall}/${combatEvent.id}` : null;
       recordMvpLog(text, state.activeCharId, eventId);
     }
     if (rxRareDrop.test(text)) {
@@ -70,7 +74,7 @@
     }
     if (state.paused) return;
     if (logSnapshots.length >= 2000) flushLogBatch(document.hidden ? 800 : 200);
-    logSnapshots.push({ text, historical });
+    logSnapshots.push({ text, historical, combatEvent });
     scheduleLogBatch();
   }
   function clearQueuedCharacterLogs() {

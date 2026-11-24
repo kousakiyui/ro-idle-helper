@@ -120,7 +120,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.6.1 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.6.2 測試版</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -137,7 +137,7 @@
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:7px;">
             ${Object.entries(hudMetricLabels).map(([key, label]) => `<div class="ro-box" data-roi-metric="${key}" ${state.hudMetrics.includes(key) ? '' : 'hidden'}>
-              <small style="color:#94a3b8;" ${key === 'dmg' ? 'title="本角色在監測期間的輸出 ÷ 未暫停秒數，包含待機時間"' : ''}>${label}</small>
+              <small style="color:#94a3b8;" ${key === 'dmg' ? 'title="本角色在監測期間的輸出 ÷ 未暫停秒數，包含待機時間"' : key === 'hitRate' ? 'title="只計已記錄起訖的交戰，從發現怪物到擊倒。搜尋與待機不計。"' : ''}>${label}</small>
               <div id="u-${key}" style="font-size:13.5px;font-weight:bold;color:${key === 'dmg' ? '#f472b6' : '#93c5fd'};margin-top:2px;">0</div>
             </div>`).join('')}
           </div>
@@ -462,9 +462,11 @@
     bPause.onclick = () => {
       if (!state.paused) { state.accMs += Date.now() - state.lastResumed; state.paused = true; bPause.textContent = '▶️ 繼續監測'; bPause.style.background = 'linear-gradient(135deg,#16a34a,#15803d)'; }
       else { state.lastResumed = Date.now(); state.paused = false; bPause.textContent = '⏸️ 暫停監測'; bPause.style.background = 'linear-gradient(135deg,#d97706,#b45309)'; }
+      combatHitMeter.interrupt(Date.now());
       updateHUD();
     };
     document.getElementById('b-reset').onclick = () => {
+      combatHitMeter.reset();
       state.accMs = 0; state.lastResumed = Date.now(); state.kills = 0; state.bexp = 0; state.jexp = 0; state.dmgSum = 0; state.hits = 0; state.maxDmg = 0; state.damageTaken = 0; state.damageStartMs = 0; state.pickupQty = 0; state.missed = 0;
       state.loot = Object.create(null); state.lootRev++; state.renderedLootRev = -1;
       if (state.activeCharId) state.initZenyMap[state.activeCharId] = state.curZeny;
@@ -523,7 +525,8 @@
     refs.total.textContent = fmt(state.dmgSum);
     refs.peak.textContent = fmt(state.maxDmg);
     refs.hits.textContent = fmt(state.hits);
-    refs.hitRate.textContent = (state.hits / damageSeconds).toLocaleString('zh-TW', { maximumFractionDigits: 2 }) + ' 次/秒';
+    const combatRate = combatHitMeter.rate;
+    refs.hitRate.textContent = combatRate === null ? '—' : combatRate.toLocaleString('zh-TW', { maximumFractionDigits: 2 }) + ' 次/秒';
     refs.taken.textContent = fmt(state.damageTaken);
     refs.pickups.textContent = fmt(state.pickupQty);
     renderMvpHistory();

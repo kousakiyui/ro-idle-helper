@@ -17,6 +17,46 @@
     return damage ? { target, damage } : null;
   }
 
+  function createCombatHitMeter(startedAt = Date.now()) {
+    const encounterStart = /^(?:發現\s+.+\s+Lv\.\d+|.+\s+Lv\.\d+\s+主動朝你衝過來)/;
+    const encounterEnd = /^成功擊敗\s+/;
+    const interrupted = /^(?:正在搜尋附近的怪物|已搜尋\s+\d+\s*秒仍找不到怪物|引怪中|略過\s+.+繼續尋找目標|瞬間移動|返回存檔點|前往|抵達|移動到|掛機開始|掛機停止)|已經死亡|戰鬥不能/;
+    let active = null, lastId = -1, elapsed = 0, hits = 0;
+    function interrupt(at) {
+      active = null;
+      startedAt = at;
+    }
+    return {
+      record(body, event, dealtDamage) {
+        if (!Number.isSafeInteger(event?.id) || event.id <= lastId ||
+            !Number.isFinite(event.wall) || event.wall < startedAt) return;
+        if (encounterStart.test(body)) {
+          if (!active || body.startsWith('發現')) active = { at: event.wall, hits: 0 };
+        } else if (interrupted.test(body)) {
+          active = null;
+        } else if (active && encounterEnd.test(body)) {
+          const duration = event.wall - active.at;
+          if (active.hits > 0 && duration > 0) {
+            elapsed += duration;
+            hits += active.hits;
+          }
+          active = null;
+        } else if (active && dealtDamage && event.wall >= active.at) {
+          active.hits++;
+        } else return;
+        lastId = event.id;
+      },
+      interrupt,
+      reset(at = Date.now()) {
+        interrupt(at);
+        lastId = -1;
+        elapsed = hits = 0;
+      },
+      get rate() { return elapsed ? hits * 1000 / elapsed : null; }
+    };
+  }
+  const combatHitMeter = createCombatHitMeter();
+
   const mvpBattleHistory = new Map();
   const mvpHistoryLimit = 150;
 
@@ -77,11 +117,12 @@
   }
   const rxExpLog = /獲得\s*Base EXP\s*([\d,]+)(?:\s*\(\s*\d+(?:\.\d+)?\s*%\s*\))?\s*\/\s*Job EXP\s*([\d,]+)/;
   const rxLootLog = /撿取物品\s*[:：]\s*(.+?)\s*[×xX*]\s*(\d+)/;
-  function parseLog(t, historical = false) {
+  function parseLog(t, historical = false, combatEvent = null) {
     if (state.paused) return;
     if (!historical) {
       const body = logBody(t);
       const damage = readOutgoingDamage(body)?.damage ?? 0;
+      combatHitMeter.record(body, combatEvent, damage > 0);
       if (damage) {
         state.dmgSum += damage;
         state.hits++;

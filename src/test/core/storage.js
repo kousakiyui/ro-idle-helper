@@ -23,7 +23,7 @@
   const hudMetricLabels = {
     bexp: 'Base EXP/h', jexp: 'Job EXP/h', kph: '擊殺 (累計)', dmg: 'DPS',
     zeny: '隨身 Zeny (本角淨變動)', miss: '漏撿', total: '總輸出', peak: '最高單次傷害',
-    hits: '傷害次數（累計）', hitRate: '每秒傷害次數', taken: '承受傷害', pickups: '一般撿取量'
+    hits: '傷害次數（累計）', hitRate: '每秒傷害次數（交戰）', taken: '承受傷害', pickups: '一般撿取量'
   };
   const defaultHudMetrics = ['bexp', 'jexp', 'kph', 'dmg', 'zeny', 'miss'];
 

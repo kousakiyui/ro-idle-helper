@@ -67,6 +67,7 @@
         const ch = d.snapshot.character;
         if (foreground) {
           if (state.activeCharId !== cid) {
+            combatHitMeter.reset();
             if (state.activeCharId != null) {
               clearQueuedCharacterLogs();
               state.dmgSum = state.hits = state.maxDmg = state.damageTaken = 0;
