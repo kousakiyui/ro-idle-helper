@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.5.8
+// @version      3.5.8.1
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -2721,9 +2721,61 @@
   const bagFastMiss = new WeakMap();
   let visitingWarehouse = false;
 
+  function findModernBackpack(input) {
+    const panel = input.closest('[role="tabpanel"][aria-label="道具"]');
+    if (!panel || panel.querySelector('[role="region"][aria-label="多選販售"]')) return null;
+    const list = uniqueVisible(panel, '[role="listbox"][aria-label="道具"], [role="group"][aria-label="道具"]');
+    const detail = uniqueVisible(panel, '[role="region"][aria-label="道具詳情"]');
+    const anchor = list?.parentElement?.parentElement;
+    const host = anchor?.parentElement;
+    return list && detail && host && list.parentElement === detail.parentElement ? { list, detail, anchor, host } : null;
+  }
+
+  function readModernBackpack(view) {
+    const { list, detail, anchor, host } = view;
+    const tree = currentFiberRoot(list);
+    const props = tree && getCommittedProps(list, (p) => p.label === '道具' && Array.isArray(p.items));
+    if (!props || !props.items.every((item) => Number.isSafeInteger(item?.st?.uid))) return null;
+    let fiber = getReactFiber(list);
+    let top = fiber;
+    while (top?.return) top = top.return;
+    if (top !== tree) fiber = fiber?.alternate;
+
+    // 道具列來自同一份原生背包快照。只讀取清單祖先的已提交 Hook，
+    // 避免從其他浮動面板或未提交的 React 更新取得另一個角色。
+    let s;
+    for (let depth = 0; !s && fiber && depth < 40; depth++, fiber = fiber.return) {
+      if (typeof fiber.type !== 'function') continue;
+      for (let hook = fiber.memoizedState, count = 0; hook && count < 100; hook = hook.next, count++) {
+        const snap = hook.memoizedState;
+        if (!snap?.character || !Array.isArray(snap.inventory) || typeof snap.mapId !== 'string') continue;
+        const inventory = new Set(snap.inventory);
+        if (props.items.every(({ st }) => inventory.has(st))) { s = snap; break; }
+      }
+    }
+    if (!s) return null;
+    const entries = new Map(props.items.map(({ st, def }) => [st.uid, { st, def }]));
+    const rows = [];
+    for (const row of list.querySelectorAll(':scope > [role="option"], :scope > button[aria-selected]')) {
+      const rowFiber = getReactFiber(row);
+      if (!/^\d+$/.test(rowFiber?.key || '')) continue;
+      const uid = Number(rowFiber.key);
+      const entry = entries.get(uid);
+      if (!entry || !visible(row)) continue;
+      const name = clean(entry.def?.name || row.textContent).replace(/^\+\d+\s*/, '');
+      rows.push({ uid, row, button: row, st: entry.st, name, ...classifyItem(entry.st.itemId, name) });
+    }
+    const val = { host, anchor, table: list, detail, modern: true, s, rows };
+    bagMemo = { tree, table: list, val };
+    return val;
+  }
+
   function readBackpackContext(force = false) {
     const inputs = [...document.querySelectorAll('input[aria-label="搜尋物品"]')].filter(visible);
     if (inputs.length !== 1) return null;
+    const modern = findModernBackpack(inputs[0]);
+    if (modern) return readModernBackpack(modern);
+    if (inputs[0].closest('[role="tabpanel"][aria-label="道具"]')) return null;
     let host = inputs[0].parentElement;
     while (host && host !== document.body && !host.querySelector('table.xp-table')) host = host.parentElement;
     const table = host?.querySelector('table.xp-table');
@@ -2914,6 +2966,15 @@
     isEligibleEquip(row) && (refCategory === 'all' || refineCategory(refinePack.items.get(row.st.itemId)) === refCategory));
 
   function findNativeDetailBtn(table, uid, matcher) {
+    if (table.matches('[aria-label="道具"]')) {
+      const detail = table.parentElement?.querySelector(':scope > [role="region"][aria-label="道具詳情"]');
+      const close = detail && uniqueVisible(detail, 'button[aria-label="關閉物品資訊"]');
+      const props = close && getCommittedProps(close, (p) => p.uid === uid && typeof p.onClose === 'function');
+      if (!props) return null;
+      if (!matcher) return close;
+      const buttons = [...detail.querySelectorAll('button')].filter((el) => visible(el) && matcher(clean(el.textContent)));
+      return buttons.length === 1 ? buttons[0] : null;
+    }
     const tree = currentFiberRoot(table);
     if (!tree) return null;
     const budget = createFiberScanBudget(table, detailScanRetries);
@@ -2926,7 +2987,7 @@
         const inDetail = matching || (props?.uid === uid &&
           (props.s?.inventory || typeof props.onClose === 'function'));
         const el = fiber.stateNode;
-        if (inDetail && el?.tagName === 'BUTTON' && visible(el) && matcher(clean(el.textContent))) return el;
+        if (inDetail && el?.tagName === 'BUTTON' && visible(el) && (!matcher || matcher(clean(el.textContent)))) return el;
         if (fiber.child) stack.push({ fiber: fiber.child, matching: inDetail });
         if (fiber !== root && fiber.sibling) stack.push({ fiber: fiber.sibling, matching });
       }
@@ -3028,7 +3089,11 @@
     if (!session || session.epoch !== refineIdentityEpoch || document.hidden || (!allowStopped && refStop)) {
       throw Error('角色已變更或流程已停止');
     }
-    const actor = refineActor(readBackpackContext(true));
+    const context = readBackpackContext(true);
+    if ((session.modern && !context) || (context && session.modern !== undefined && Boolean(context.modern) !== session.modern)) {
+      throw Error('背包介面已切換，已停止');
+    }
+    const actor = refineActor(context);
     if (actor !== session.characterId || (state.activeCharId != null && Number(state.activeCharId) !== actor)) {
       throw Error('無法確認仍是起始角色，已停止');
     }
@@ -3095,12 +3160,12 @@
     assertRefineTarget(session, uid);
     const b = readBackpackContext(true);
     const row = b?.rows.find((r) => r.uid === uid);
-    const btn = row && [...row.row.querySelectorAll('td button')].find((x) => !x.disabled && !x.closest('[data-roi-refine-helper]'));
+    const btn = row?.button || (row && [...row.row.querySelectorAll('td button')].find((x) => !x.disabled && !x.closest('[data-roi-refine-helper]')));
     if (!btn) throw Error('找不到該裝備列');
-    if (!findNativeDetailBtn(b.table, uid, () => true)) clickRefineControl(session, btn, uid);
+    if (!findNativeDetailBtn(b.table, uid)) clickRefineControl(session, btn, uid);
     const detail = await waitForRefineUi(session, () => {
       const live = assertRefineTarget(session, uid);
-      return live && findNativeDetailBtn(live.table, uid, () => true) && live;
+      return live && findNativeDetailBtn(live.table, uid) && live;
     }, { timeout: 2400 });
     if (!detail) throw Error('找不到該裝備明細');
     return detail;
@@ -3363,7 +3428,7 @@
     }
     if (!characterId) return setStatus('⚠️ 無法確認目前角色 ID，已停止');
     const session = {
-      characterId, epoch: refineIdentityEpoch, targetUid: null,
+      characterId, epoch: refineIdentityEpoch, targetUid: null, modern: Boolean(b.modern),
       items: new Map(b.s.inventory.map((item) => [item.uid, refineItemSignature(item)]))
     };
     try { assertRefineSession(session); }
@@ -3379,6 +3444,7 @@
     if (b === undefined) return setStatus('⚠️ 介面讀取逾時，請稍後再試');
     if (!b) return setStatus('⚠️ 背包已關閉');
 
+    const autoWarehouse = refAutoWh && !b.modern;
     const skillOnly = modeType === 'skill_only';
     const limitPlus = modeType === 'safe_only' ? 10
       : skillOnly ? Math.min(refTargetPlus, weaponRefineLevel(b.s)) : refTargetPlus;
@@ -3407,7 +3473,7 @@
         let pool = b.rows.filter((r) => isEligibleEquip(r) && runUids.has(r.uid) && refSelected.has(r.uid));
         pool = pool.filter((r) => !skipped.has(r.uid) && (r.st.refine || 0) < limitPlus);
 
-        if (!pool.length && refAutoWh) {
+        if (!pool.length && autoWarehouse) {
           session.targetUid = null;
           const before = new Set(b.s.inventory.map((x) => x.uid));
           const picked = await tryWithdrawFromWarehouse(trackedItemIds, limitPlus, setStatus, modeType === 'safe_only' ? safeLimits : null, 15, session);
@@ -3450,7 +3516,7 @@
         const nativeLimit = Number(clean(safeBtn?.textContent).match(/\+(\d+)/)?.[1]);
         if (modeType === 'safe_only' && nativeLimit > 0) safeLimits.set(target.st.itemId, nativeLimit);
         let unavailableMaterial = null;
-        if (refAutoWh && safeBtn?.disabled && curPlus < nativeLimit && (modeType === 'safe_only' || nativeLimit <= limitPlus)) {
+        if (autoWarehouse && safeBtn?.disabled && curPlus < nativeLimit && (modeType === 'safe_only' || nativeLimit <= limitPlus)) {
           const cost = safeRefineCost(steps, curPlus, nativeLimit);
           if (cost && b.s.character.zeny >= cost.zeny &&
               [...cost.materials].some(([id, count]) => materialCount(b.s.inventory, id) < count)) {
@@ -3512,7 +3578,7 @@
         }
 
         let activeBtn = skillBtn && !skillBtn.disabled ? skillBtn : npcBtn;
-        if ((!activeBtn || activeBtn.disabled) && refAutoWh && material && material !== unavailableMaterial &&
+        if ((!activeBtn || activeBtn.disabled) && autoWarehouse && material && material !== unavailableMaterial &&
             materialCount(b.s.inventory, material) === 0 &&
             ((skillBtn && b.s.character.sp >= 5) || (npcBtn && b.s.character.zeny >= step.price))) {
           unavailableMaterial = await replenishRefineMaterials(session, uid, curPlus, new Map([[material, 1]]), setStatus);
@@ -3568,7 +3634,7 @@
           successCnt++;
           if (result.nowSt.refine >= limitPlus) {
             refSelected.delete(uid);
-            if (refAutoWh && result.nowSt.refine >= refTargetPlus && !refStop && !document.hidden) {
+            if (autoWarehouse && result.nowSt.refine >= refTargetPlus && !refStop && !document.hidden) {
               const stBtn = await readRefineDetail(b.table, uid, (t) => /^存入倉庫|^存倉$/.test(t), session);
               if (stBtn && !stBtn.disabled) {
                 await waitForRefineCommandSlot(session);
@@ -3630,9 +3696,13 @@
     const warehouse = container.querySelector('[data-roi-ref-warehouse]');
     const batch = container.querySelector('[data-roi-ref-batch]');
     confirm.checked = refSkipConfirm;
-    warehouse.checked = refAutoWh;
+    const manualWarehouse = Boolean(refPanel?.hasAttribute('data-roi-ref-modern'));
+    warehouse.checked = refAutoWh && !manualWarehouse;
+    const warehouseHint = manualWarehouse ? '遊戲測試版介面請手動領料與存倉' : '';
+    warehouse.title = batch.title = warehouseHint;
     if (batch !== document.activeElement) batch.value = refMaterialBatch;
-    for (const control of [confirm, warehouse, batch]) control.disabled = refBusy;
+    confirm.disabled = refBusy;
+    warehouse.disabled = batch.disabled = refBusy || manualWarehouse;
   }
 
   function bindRefineSettings(container, status) {
@@ -3675,9 +3745,11 @@
       if (refBusy && !visitingWarehouse) stopRefine();
       refPanel?.remove(); refPanel = null; return;
     }
+    if (refPanel?.isConnected && refPanel.parentElement !== b.host) refPanel.remove();
     if (!refPanel?.isConnected) {
       refPanel = document.createElement('div');
       refPanel.dataset.roiRefineHelper = '';
+      refPanel.toggleAttribute('data-roi-ref-modern', Boolean(b.modern));
       refPanel.className = 'xp-sunken p-2';
       refPanel.style.cssText = 'display:grid;gap:6px;margin-bottom:8px;border-left:3px solid #f59e0b;background:var(--roi-panel);border-radius:6px;font-size:12px;box-shadow:0 4px 12px rgba(0,0,0,0.35);';
       refPanel.innerHTML = `
@@ -3705,12 +3777,14 @@
         <div data-ref-list style="display:none;max-height:210px;overflow:auto;gap:4px;padding:6px;background:var(--roi-inset);border-radius:6px;border:1px solid var(--roi-edge);"></div>
         <div data-ref-status style="font-size:11.5px;color:var(--roi-success);">💡 支援 Ctrl / ⌘ 點擊勾選全部同名裝備；安全值後神工匠用技能，一般職業自動穿戴找忽克連並在結束後穿回原裝。</div>
       `;
-      b.host.insertBefore(refPanel, b.table.closest('.xp-sunken') || b.table);
+      b.host.insertBefore(refPanel, b.anchor ?? b.table.closest('.xp-sunken') ?? b.table);
+      if (b.modern) refPanel.insertBefore(element('small', '遊戲測試版介面請先手動領料，完成後也可手動存倉。', 'color:var(--roi-muted)'), refPanel.querySelector('[data-ref-list]'));
       bindRefineSettings(refPanel, refPanel.querySelector('[data-roi-ref-settings-status]'));
 
+      const panel = refPanel;
       const loadRefineData = async () => {
         if (refinePack) return;
-        const status = refPanel.querySelector('[data-ref-status]');
+        const status = panel.querySelector('[data-ref-status]');
         status.textContent = '正在讀取遊戲精煉資料…';
         try {
           const pack = await loadLootPack();
@@ -4804,7 +4878,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:var(--roi-title);border:2px solid var(--roi-frame);color:var(--roi-info);align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px var(--roi-shadow);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:var(--roi-title);border-bottom:1px solid var(--roi-edge);font-weight:bold;color:var(--roi-title-text);cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.1</span>
           <button id="ro-min-btn" style="background:var(--roi-selected);color:var(--roi-text);border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:var(--roi-inset);border-bottom:1px solid var(--roi-edge);">
@@ -5962,7 +6036,8 @@
       const el = r.target.nodeType === 1 ? r.target : r.target.parentElement;
       if (!el || !el.isConnected || el.closest('#ro-helper-hud,#roi-helper-mvp-panel,#roi-item-hover-tooltip,[data-roi-market-browser],[data-ro-wh-bar],[data-ro-rare-helper],[data-roi-settings-tools],[data-roi-refine-helper],[data-roi-price-search],[data-roi-upper-fold],[data-roi-party-move-bar],[data-roi-party-move-dialog]')) continue;
       if (r.type === 'attributes' && !el.matches('fieldset') && !el.querySelector('fieldset') &&
-          !el.matches(hudSkillControls) && !el.querySelector(hudSkillControls)) continue;
+          !el.matches(hudSkillControls) && !el.querySelector(hudSkillControls) &&
+          !el.matches('[role="tabpanel"][aria-label="道具"]') && !el.querySelector('[role="tabpanel"][aria-label="道具"]')) continue;
       if (el.closest('.log-window')) {
         sawLog = true;
         if (r.type === 'characterData' || r.type === 'childList') queueLogLine(el.closest('.log-line'));
