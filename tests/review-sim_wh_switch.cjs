@@ -11,7 +11,7 @@ function slice(name) {
   return src.slice(m.index, j + 1);
 }
 const names = ['tryWithdrawFromWarehouse','assertRefineSession','assertRefineTarget','refineAwait','clickRefineControl','refineActor',
-  'readBackpackContext','getCommittedProps','currentFiberRoot','getReactFiber','nativeStoreActor','findRefineNativeStore',
+  'readBackpackContext','findModernBackpack','getCommittedProps','currentFiberRoot','getReactFiber','nativeStoreActor','findRefineNativeStore',
   'warehouseItemId','materialWithdrawalAmount','validMaterialBatch','waitForUi','waitForRefineUi','waitForRefineCommandSlot','clickRefineCommand'];
 if (!stale) names.push('createFiberScanBudget');
 const parts = names.map(slice).filter(Boolean);
