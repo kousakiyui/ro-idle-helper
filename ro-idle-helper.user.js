@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.5.6
+// @version      3.5.7
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -35,13 +35,35 @@
       checkDataTree(value[key], depth + 1, budget);
     }
   }
+  const hudMetricLabels = {
+    bexp: 'Base EXP/h', jexp: 'Job EXP/h', kph: '擊殺 (累計)', dmg: 'DPS',
+    zeny: '隨身 Zeny (本角淨變動)', miss: '漏撿', total: '總輸出', peak: '最高單次傷害',
+    hits: '傷害次數（累計）', hitRate: '每秒傷害次數（交戰）', taken: '承受傷害', pickups: '一般撿取量'
+  };
+  const defaultHudMetrics = ['bexp', 'jexp', 'kph', 'dmg', 'zeny', 'miss'];
+  const defaultCompactHudMetrics = ['dmg', 'kph', 'zeny'];
+  const hudNumberFormats = { auto: '自動（萬／億）', wan: '以萬顯示', yi: '以億顯示', full: '完整數字' };
+
   function validatePrefs(value) {
     if (!isPlainRecord(value)) throw Error('偏好設定格式不符');
     const result = {};
-    for (const key of ['sound', 'notify', 'moneyColor', 'itemHover', 'marketHover', 'whProtectPins', 'mvpMergeRoster', 'whProtect', 'whSaleReview', 'whAutoEquipCard', 'hudMin', 'mktUpperFold']) {
+    for (const key of ['sound', 'notify', 'moneyColor', 'itemHover', 'marketHover', 'whProtectPins', 'mvpMergeRoster', 'whProtect', 'whSaleReview', 'whAutoEquipCard', 'hudMin', 'mktUpperFold', 'charAttentionOnly', 'charAttentionFirst']) {
       if (!Object.hasOwn(value, key)) continue;
       if (typeof value[key] !== 'boolean') throw Error('偏好設定的 ' + key + ' 必須是開關');
       result[key] = value[key];
+    }
+    for (const key of ['hudMetrics', 'hudCompactMetrics']) {
+      if (!Object.hasOwn(value, key)) continue;
+      const metrics = value[key];
+      if (!Array.isArray(metrics) || metrics.length > Object.keys(hudMetricLabels).length ||
+          metrics.some(key => typeof key !== 'string' || !Object.hasOwn(hudMetricLabels, key))) throw Error('儀表盤欄位不符');
+      result[key] = [...new Set(metrics)];
+    }
+    if (Object.hasOwn(value, 'hudNumberFormat')) {
+      if (typeof value.hudNumberFormat !== 'string' || !Object.hasOwn(hudNumberFormats, value.hudNumberFormat)) {
+        throw Error('儀表盤數字格式不符');
+      }
+      result.hudNumberFormat = value.hudNumberFormat;
     }
     if (Object.hasOwn(value, 'hudPos')) {
       if (value.hudPos === null) result.hudPos = null;
@@ -719,14 +741,16 @@
     paused: false, accMs: 0, lastResumed: Date.now(),
     activeCharId: null, activeCharName: '讀取中...',
     initZenyMap: {}, curZeny: 0, chars: [], charZenyMap: {}, myCharIds: new Set(),
-    kills: 0, bexp: 0, jexp: 0, dmgSum: 0, hits: 0, maxDmg: 0,
-    loot: {}, lootRev: 0, renderedLootRev: -1,
+    kills: 0, bexp: 0, jexp: 0, dmgSum: 0, hits: 0, maxDmg: 0, damageTaken: 0, damageStartMs: 0, pickupQty: 0, hudMetrics: [...defaultHudMetrics],
+    loot: Object.create(null), lootRev: 0, renderedLootRev: -1,
     rares: [], rareRev: 0,
     missed: 0,
     sound: false, notify: false, moneyColor: true, itemHover: true, marketHover: true,
     whProtectPins: true, mvpMergeRoster: false, charAlerts: {}, whProtect: true, whSaleReview: true, whAutoEquipCard: true,
     whMarks: {}, whAutoLocks: {}, customProtectWords: [],
     hudMin: false, hudPos: null, mktUpperFold: false,
+    hudCompactMetrics: [...defaultCompactHudMetrics], hudNumberFormat: 'auto',
+    charAttentionOnly: false, charAttentionFirst: false,
     processedLines: new WeakMap(), lastNotifyAt: 0
   };
 
@@ -775,6 +799,7 @@
       syncMktMount();
       mvpRadar?.refreshPreferences();
       syncHudSettings();
+      if (Object.hasOwn(prefs, 'charAttentionOnly') || Object.hasOwn(prefs, 'charAttentionFirst')) renderChars();
     }, validatePrefs);
     listen(priceOptionKey, (options) => {
       priceOptions = options;
@@ -795,7 +820,8 @@
   }
 
   const prefKeys = ['sound', 'notify', 'moneyColor', 'itemHover', 'marketHover', 'whProtectPins', 'mvpMergeRoster', 'whProtect',
-    'whSaleReview', 'whAutoEquipCard', 'hudMin', 'hudPos', 'mktUpperFold'];
+    'whSaleReview', 'whAutoEquipCard', 'hudMin', 'hudPos', 'mktUpperFold', 'hudMetrics', 'hudCompactMetrics',
+    'hudNumberFormat', 'charAttentionOnly', 'charAttentionFirst'];
   const prefValueSig = (value) => JSON.stringify(value ?? null);
   // 本頁最後一次與已存值同步時的各欄位；儲存時只寫入與此不同（本頁改過）的欄位。
   const prefsSynced = new Map(prefKeys.map((key) => [key, prefValueSig(state[key])]));
@@ -1067,7 +1093,12 @@
         const ch = d.snapshot.character;
         if (foreground) {
           if (state.activeCharId !== cid) {
-            if (state.activeCharId != null) clearQueuedCharacterLogs();
+            combatHitMeter.reset();
+            if (state.activeCharId != null) {
+              clearQueuedCharacterLogs();
+              state.dmgSum = state.hits = state.maxDmg = state.damageTaken = 0;
+              state.damageStartMs = state.accMs + (state.paused ? 0 : Date.now() - state.lastResumed);
+            }
             refineIdentityEpoch++;
             pageNet.events.dispatchEvent(new Event('ui-abort'));
             refSelected.clear();
@@ -1260,19 +1291,142 @@
 
   const rxRareDrop = /(?:卡片|稀有)!/;
   const rxDangerLog = /戰鬥不能|已經死亡|超過負重.*停止/;
-  const rxDmgLog = /造成\s*([\d,]+)\s*點傷害/;
+  const rxDmgLog = /對\s+(.+?)\s+造成(?:\s+\d+\s*段)?\s+([\d,]+)\s*點傷害/;
+  const rxTakenLog = /對你造成\s*([\d,]+)\s*點傷害/;
+  const logBody = (text) => text.replace(/^\[\d{1,2}:\d{2}(?::\d{2})?\]\s*/, '');
+  const logNumber = (value) => {
+    const number = Number(value?.replace(/,/g, ''));
+    return Number.isSafeInteger(number) && number > 0 ? number : 0;
+  };
+
+  function readOutgoingDamage(body) {
+    const hit = body.match(rxDmgLog);
+    const target = hit?.[1].trim().replace(/^(?:\[反擊\]|\[範圍\])+/, '');
+    if (!target || /^(?:生命體|寵物)/.test(body) || /^(?:你|生命體)$/.test(target)) return null;
+    const damage = logNumber(hit[2]);
+    return damage ? { target, damage } : null;
+  }
+
+  function createCombatHitMeter(startedAt = Date.now()) {
+    const encounterStart = /^(?:發現\s+.+\s+Lv\.\d+|.+\s+Lv\.\d+\s+主動朝你衝過來)/;
+    const encounterEnd = /^成功擊敗\s+/;
+    const interrupted = /^(?:正在搜尋附近的怪物|已搜尋\s+\d+\s*秒仍找不到怪物|引怪中|略過\s+.+繼續尋找目標|瞬間移動|返回存檔點|前往|抵達|移動到|掛機開始|掛機停止)|已經死亡|戰鬥不能/;
+    let active = null, lastId = -1, elapsed = 0, hits = 0;
+    function interrupt(at) {
+      active = null;
+      startedAt = at;
+    }
+    return {
+      record(body, event, dealtDamage) {
+        if (!Number.isSafeInteger(event?.id) || event.id <= lastId ||
+            !Number.isFinite(event.wall) || event.wall < startedAt) return;
+        if (encounterStart.test(body)) {
+          if (!active || body.startsWith('發現')) active = { at: event.wall, hits: 0 };
+        } else if (interrupted.test(body)) {
+          active = null;
+        } else if (active && encounterEnd.test(body)) {
+          const duration = event.wall - active.at;
+          if (active.hits > 0 && duration > 0) {
+            elapsed += duration;
+            hits += active.hits;
+          }
+          active = null;
+        } else if (active && dealtDamage && event.wall >= active.at) {
+          active.hits++;
+        } else return;
+        lastId = event.id;
+      },
+      interrupt,
+      reset(at = Date.now()) {
+        interrupt(at);
+        lastId = -1;
+        elapsed = hits = 0;
+      },
+      get rate() { return elapsed ? hits * 1000 / elapsed : null; }
+    };
+  }
+  const combatHitMeter = createCombatHitMeter();
+
+  const mvpBattleHistory = new Map();
+  const mvpHistoryLimit = 150;
+
+  function classifyMvpLog(text, isKnownBoss) {
+    const body = logBody(text);
+    let match;
+    if ((match = body.match(/^★\s*MVP!打倒了\s+(.+?):\s*MVP 經驗/))) {
+      return { boss: clean(match[1]), kind: 'battle', hasLoot: body.includes('MVP 獎勵') };
+    }
+    if ((match = body.match(/^★?\s*(?:【MVP】|\[MVP\])你的隊伍在 .+? 搶到了 (.+?)!/))) {
+      return { boss: clean(match[1]), kind: 'battle', hasLoot: /[,，]\s*獲得 /.test(body) };
+    }
+    if ((match = body.match(/^(?:【MVP】|\[MVP\]).+? 的 (.+?) 被別的隊伍搶走了/))) {
+      return { boss: clean(match[1]), kind: 'battle', hasLoot: /[,，]\s*獲得 /.test(body) };
+    }
+    match = body.match(/^成功擊敗 (.+?)!$/);
+    if (match && isKnownBoss(clean(match[1]))) return { boss: clean(match[1]), kind: 'battle', hasLoot: false };
+    match = body.match(/^(?:\[隊伍分配\]\s*(?:.+? 擊敗的 )?)?(.+?) 掉落了(?:卡片[:：]|\s)/)
+      || body.match(/^(?:◆◆ 撿到卡片:|◆ 稀有掉落!撿到).+?\(([^()]+)\)(?:\(必撿.*?\))?[。.!]*$/);
+    if (match && isKnownBoss(clean(match[1]))) return { boss: clean(match[1]), kind: 'loot', hasLoot: true };
+    return null;
+  }
+
+  function recordMvpLog(text, characterId, eventId) {
+    if (!Number.isSafeInteger(characterId) || characterId <= 0) return;
+    const known = name => mvpRadar?.isKnownBoss(name) ?? false;
+    const body = logBody(text);
+    const entry = classifyMvpLog(text, known);
+    const hit = entry ? null : readOutgoingDamage(body);
+    const taken = entry || hit ? null : body.match(/^(.+?)(?: 使用[^,，]+[,，])?\s*對你造成\s*([\d,]+)\s*點傷害/);
+    const boss = entry?.boss ?? hit?.target ?? taken?.[1];
+    if (!boss || boss.length > 80 || (!entry && !known(boss))) return;
+    let history = mvpBattleHistory.get(characterId);
+    if (!history) {
+      if (mvpBattleHistory.size >= 12) mvpBattleHistory.delete(mvpBattleHistory.keys().next().value);
+      history = { entries: [], seen: new Set(), combat: new Map(), rev: 0 };
+      mvpBattleHistory.set(characterId, history);
+    }
+    if (eventId && history.seen.has(eventId)) return;
+    if (eventId) {
+      history.seen.add(eventId);
+      if (history.seen.size > 600) history.seen.delete(history.seen.values().next().value);
+    }
+    if (entry) {
+      history.entries.unshift({ ...entry, text: text.slice(0, 600) });
+      if (history.entries.length > mvpHistoryLimit) history.entries.pop();
+    } else {
+      const summary = history.combat.get(boss) ?? { damage: 0, hits: 0, taken: 0 };
+      if (hit) {
+        summary.damage += hit.damage;
+        summary.hits++;
+      } else {
+        summary.taken += logNumber(taken[2]);
+      }
+      history.combat.set(boss, summary);
+    }
+    history.rev++;
+  }
   const rxExpLog = /獲得\s*Base EXP\s*([\d,]+)(?:\s*\(\s*\d+(?:\.\d+)?\s*%\s*\))?\s*\/\s*Job EXP\s*([\d,]+)/;
   const rxLootLog = /撿取物品\s*[:：]\s*(.+?)\s*[×xX*]\s*(\d+)/;
-  function parseLog(t) {
+  function parseLog(t, historical = false, combatEvent = null) {
     if (state.paused) return;
-    const dm = t.match(rxDmgLog);
-    if (dm) { const v = parseInt(dm[1].replace(/,/g, ''), 10); if (v) { state.dmgSum += v; state.hits++; if (v > state.maxDmg) state.maxDmg = v; } }
+    if (!historical) {
+      const body = logBody(t);
+      const damage = readOutgoingDamage(body)?.damage ?? 0;
+      combatHitMeter.record(body, combatEvent, damage > 0);
+      if (damage) {
+        state.dmgSum += damage;
+        state.hits++;
+        state.maxDmg = Math.max(state.maxDmg, damage);
+      }
+      state.damageTaken += logNumber(body.match(rxTakenLog)?.[1]);
+    }
     if (t.includes('成功擊敗')) state.kills++;
     const em = t.match(rxExpLog);
     if (em) { state.bexp += parseInt(em[1].replace(/,/g, ''), 10) || 0; state.jexp += parseInt(em[2].replace(/,/g, ''), 10) || 0; }
     const lm = t.match(rxLootLog);
     if (lm) {
       const name = lm[1].trim(), q = parseInt(lm[2], 10) || 1;
+      state.pickupQty += q;
       state.loot[name] = (state.loot[name] || 0) + q;
       state.lootRev++;
     }
@@ -4465,10 +4619,43 @@
     return controls.length === 1 && !controls[0].disabled ? controls[0] : null;
   }
 
+  const hudViewOptions = { full: '完整', compact: '精簡' };
+  const hudColumnOptions = { auto: '自動', one: '單欄', two: '雙欄' };
+  const hudViewKey = 'roi-hud-layout-v1';
+  const hudLayout = { view: 'full', columns: 'auto' };
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(hudViewKey) || 'null');
+    if (Object.hasOwn(hudViewOptions, saved?.view)) hudLayout.view = saved.view;
+    if (Object.hasOwn(hudColumnOptions, saved?.columns)) hudLayout.columns = saved.columns;
+  } catch { log('hud', '無法讀取浮窗版型'); }
+
+  const hudMetricPrefKey = () => hudLayout.view === 'compact' ? 'hudCompactMetrics' : 'hudMetrics';
+  const hudOptions = (items) => Object.entries(items).map(([key, label]) => `<option value="${key}">${label}</option>`).join('');
+  function orderHudRows(parent, rows) {
+    rows.forEach((row, index) => {
+      if (row !== parent.children[index]) parent.insertBefore(row, parent.children[index] ?? null);
+    });
+  }
+
   function syncHudSettings() {
     const pane = document.querySelector('#pane-cfg.active');
     if (!pane) return;
     for (const input of pane.querySelectorAll('[data-ro-pref]')) input.checked = state[input.dataset.roPref];
+    pane.querySelector('#c-hud-view').value = hudLayout.view;
+    pane.querySelector('#c-hud-columns').value = hudLayout.columns;
+    pane.querySelector('#c-hud-number').value = state.hudNumberFormat;
+    const metricSettings = pane.querySelector('#roi-hud-metric-settings');
+    const metrics = state[hudMetricPrefKey()];
+    const positions = new Map(metrics.map((key, index) => [key, index]));
+    const rows = [...metricSettings.children];
+    for (const row of rows) {
+      const index = positions.get(row.dataset.roMetricSetting);
+      row.querySelector('input').checked = index !== undefined;
+      row.querySelector('[data-ro-metric-move="-1"]').disabled = index === undefined || index === 0;
+      row.querySelector('[data-ro-metric-move="1"]').disabled = index === undefined || index === metrics.length - 1;
+    }
+    orderHudRows(metricSettings, rows.sort((a, b) =>
+      (positions.get(a.dataset.roMetricSetting) ?? Infinity) - (positions.get(b.dataset.roMetricSetting) ?? Infinity)));
     pane.querySelector('#c-price-lock').checked = priceOptions.enabled;
     const priceThreshold = pane.querySelector('#c-price-threshold');
     if (priceThreshold && priceThreshold !== document.activeElement && priceThreshold.value !== String(priceOptions.threshold)) {
@@ -4566,6 +4753,17 @@
       .ro-pane { display:none; padding:10px 12px; max-height:410px; overflow-y:auto; touch-action:pan-y; }
       .ro-pane.active { display:block; }
       .ro-box { background:rgba(30,41,59,0.75); border:1px solid rgba(71,85,105,0.65); border-radius:8px; padding:7px 9px; box-shadow:inset 0 1px 0 rgba(255,255,255,0.04); }
+      #roi-hud-metrics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; margin-bottom:7px; }
+      #roi-hud-metrics[data-columns="one"] { grid-template-columns:minmax(0,1fr); }
+      @media (max-width:420px) {
+        #roi-hud-metrics[data-columns="auto"] { grid-template-columns:minmax(0,1fr); }
+      }
+      #roi-hud-metrics[data-view="compact"] { gap:4px; }
+      #roi-hud-metrics[data-view="compact"] .ro-box { padding:4px 7px; }
+      #roi-hud-metrics [data-roi-metric] { min-width:0; overflow-wrap:anywhere; }
+      [data-ro-metric-setting], #roi-char-filters { display:flex; align-items:center; gap:5px; }
+      [data-ro-metric-setting] label { flex:1; min-width:0; }
+      #roi-char-filters { flex-wrap:wrap; margin-bottom:7px; }
       #pane-cfg fieldset { min-inline-size:0; margin:0 0 8px; display:grid; gap:6px; }
       #pane-cfg legend { color:#fbbf24; font-weight:bold; }
       #pane-cfg label { display:flex; align-items:center; flex-wrap:wrap; gap:4px; }
@@ -4576,11 +4774,13 @@
     document.documentElement.toggleAttribute('data-roi-money-off', !state.moneyColor);
 
     const hud = document.createElement('div'); hud.id = 'ro-helper-hud';
+    const initialMetrics = state[hudMetricPrefKey()];
+    const metricKeys = [...new Set([...initialMetrics, ...Object.keys(hudMetricLabels)])];
     hud.innerHTML = `
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.6</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.7</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -4595,15 +4795,11 @@
             <span>角色：<b id="u-name" style="color:#38bdf8;">讀取中</b></span>
             <span id="u-time" style="color:#4ade80;font-weight:bold;font-variant-numeric:tabular-nums;">⏱️ 00:00</span>
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:7px;">
-            <div class="ro-box"><small style="color:#94a3b8;">Base EXP/h</small><div id="u-bexp" style="font-size:13.5px;font-weight:bold;color:#facc15;margin-top:2px;">0</div></div>
-            <div class="ro-box"><small style="color:#94a3b8;">Job EXP/h</small><div id="u-jexp" style="font-size:13.5px;font-weight:bold;color:#38bdf8;margin-top:2px;">0</div></div>
-            <div class="ro-box"><small style="color:#94a3b8;">擊殺 (累計)</small><div id="u-kph" style="font-size:13.5px;font-weight:bold;color:#4ade80;margin-top:2px;">0/h (0)</div></div>
-            <div class="ro-box"><small style="color:#94a3b8;">均傷 / 最高</small><div id="u-dmg" style="font-size:13.5px;font-weight:bold;color:#f472b6;margin-top:2px;">0 / 0</div></div>
-          </div>
-          <div class="ro-box" style="margin-bottom:7px;display:flex;justify-content:space-between;align-items:center;">
-            <div><small style="color:#94a3b8;">隨身 Zeny (本角淨變動)</small><div id="u-zeny" style="font-weight:bold;color:#facc15;font-size:13px;margin-top:2px;">0 Z (+0)</div></div>
-            <div style="text-align:right;"><small style="color:#94a3b8;">漏撿</small><div id="u-miss" style="font-weight:bold;color:#f87171;font-size:13px;margin-top:2px;">0</div></div>
+          <div id="roi-hud-metrics" data-view="${hudLayout.view}" data-columns="${hudLayout.columns}">
+            ${metricKeys.map((key) => `<div class="ro-box" data-roi-metric="${key}" ${initialMetrics.includes(key) ? '' : 'hidden'}>
+              <small style="color:#94a3b8;" ${key === 'dmg' ? 'title="本角色在監測期間的輸出 ÷ 未暫停秒數，包含待機時間"' : key === 'hitRate' ? 'title="只計已記錄起訖的交戰，從發現怪物到擊倒。搜尋與待機不計。"' : ''}>${hudMetricLabels[key]}</small>
+              <div id="u-${key}" style="font-size:13.5px;font-weight:bold;color:${key === 'dmg' ? '#f472b6' : '#93c5fd'};margin-top:2px;">0</div>
+            </div>`).join('')}
           </div>
           <div style="display:flex;gap:6px;">
             <button id="b-pause" style="flex:1;background:linear-gradient(135deg,#d97706,#b45309);color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">⏸️ 暫停監測</button>
@@ -4612,11 +4808,22 @@
         </div>
         <div class="ro-pane" id="pane-chr">
           <div style="display:flex;justify-content:space-between;margin-bottom:7px;background:#090d16;padding:7px 10px;border-radius:6px;border:1px solid #1e293b;">
-            <span>💰 帳號總 Zeny：</span><b id="u-tzeny" style="color:#facc15;">計算中...</b>
+            <span>💰 帳號總 Zeny：</span><b id="u-tzeny" style="color:#facc15;">待同步</b>
+          </div>
+          <div id="roi-char-filters">
+            <label><input type="checkbox" data-ro-char-filter="charAttentionOnly"> 只看停止或異常</label>
+            <label><input type="checkbox" data-ro-char-filter="charAttentionFirst"> 停止或異常置頂</label>
           </div>
           <div id="u-clist">同步中...</div>
         </div>
         <div class="ro-pane" id="pane-lot">
+          <fieldset class="ro-box">
+            <legend>MVP 紀錄（本次開頁）</legend>
+            <label>查看首領 <select id="u-mvp-boss" class="xp-input"><option value="">全部 MVP</option></select></label>
+            <div id="u-mvp-combat"></div>
+            <details open><summary>MVP 戰鬥結果</summary><div id="u-mvp-battles" style="max-height:135px;overflow:auto;"></div></details>
+            <details open><summary>MVP 掉落與獎勵</summary><div id="u-mvp-loot" style="max-height:135px;overflow:auto;"></div></details>
+          </fieldset>
           <div id="u-rlist" style="background:#090d16;padding:7px;border-radius:6px;border:1px solid #1e293b;margin-bottom:7px;max-height:75px;overflow:auto;color:#fde047;font-size:11px;">尚無稀有掉落...</div>
           <div id="u-llist" style="background:#090d16;padding:7px;border-radius:6px;border:1px solid #1e293b;max-height:190px;overflow:auto;font-size:11px;">尚無撿取紀錄...</div>
         </div>
@@ -4628,6 +4835,19 @@
             <label><input type="checkbox" data-ro-pref="moneyColor"> 金額分色</label>
             <label><input type="checkbox" data-ro-pref="sound"> 音效</label>
             <label><input type="checkbox" data-ro-pref="notify"> 桌面通知</label>
+          </fieldset>
+          <fieldset class="ro-box"><legend>效率儀表盤欄位</legend>
+            <label>此分頁版型 <select id="c-hud-view" class="xp-input">${hudOptions(hudViewOptions)}</select></label>
+            <label>此分頁欄數 <select id="c-hud-columns" class="xp-input">${hudOptions(hudColumnOptions)}</select></label>
+            <label>數字格式 <select id="c-hud-number" class="xp-input">${hudOptions(hudNumberFormats)}</select></label>
+            <div id="roi-hud-metric-settings">
+              ${Object.entries(hudMetricLabels).map(([key, label]) =>
+                `<div data-ro-metric-setting="${key}">
+                  <label><input type="checkbox" data-ro-metric-pref="${key}"> ${label}</label>
+                  <button type="button" class="xp-btn small" aria-label="${label}上移" data-ro-metric-move="-1">↑</button>
+                  <button type="button" class="xp-btn small" aria-label="${label}下移" data-ro-metric-move="1">↓</button>
+                </div>`).join('')}
+            </div>
           </fieldset>
           <fieldset class="ro-box"><legend>倉庫</legend>
             <label><input type="checkbox" data-ro-pref="whProtectPins"> 清倉排除自選（★）</label>
@@ -4802,10 +5022,61 @@
       hud.querySelectorAll('.ro-tab,.ro-pane').forEach((x) => x.classList.remove('active'));
       t.classList.add('active'); document.getElementById('pane-' + t.dataset.t).classList.add('active');
       if (t.dataset.t === 'cfg') syncHudSettings();
+      if (t.dataset.t === 'lot') renderMvpHistory();
+      if (t.dataset.t === 'chr') renderChars();
     });
 
     const settings = hud.querySelector('#pane-cfg');
     const settingsStatus = settings.querySelector('#c-settings-status');
+    const bossFilter = hud.querySelector('#u-mvp-boss');
+    bossFilter.onchange = () => renderMvpHistory(true);
+    for (const input of settings.querySelectorAll('[data-ro-metric-pref]')) {
+      input.onchange = () => {
+        const key = input.dataset.roMetricPref;
+        const pref = hudMetricPrefKey();
+        state[pref] = input.checked ? [...new Set([...state[pref], key])] : state[pref].filter(value => value !== key);
+        savePrefs();
+        updateHUD();
+      };
+    }
+    for (const button of settings.querySelectorAll('[data-ro-metric-move]')) {
+      button.onclick = () => {
+        const pref = hudMetricPrefKey();
+        const metrics = [...state[pref]];
+        const row = button.closest('[data-ro-metric-setting]');
+        const from = metrics.indexOf(row.dataset.roMetricSetting);
+        const to = from + Number(button.dataset.roMetricMove);
+        if (from < 0 || to < 0 || to >= metrics.length) return;
+        [metrics[from], metrics[to]] = [metrics[to], metrics[from]];
+        const hadFocus = document.activeElement === button;
+        state[pref] = metrics;
+        savePrefs();
+        updateHUD();
+        if (hadFocus) (button.disabled ? row.querySelector('button:not(:disabled)') : button)?.focus();
+      };
+    }
+    for (const [key, options] of [['view', hudViewOptions], ['columns', hudColumnOptions]]) {
+      settings.querySelector('#c-hud-' + key).onchange = ({ target }) => {
+        if (!Object.hasOwn(options, target.value)) return;
+        hudLayout[key] = target.value;
+        try { sessionStorage.setItem(hudViewKey, JSON.stringify(hudLayout)); }
+        catch { log('hud', '無法儲存浮窗版型'); }
+        updateHUD();
+      };
+    }
+    settings.querySelector('#c-hud-number').onchange = ({ target }) => {
+      if (!Object.hasOwn(hudNumberFormats, target.value)) return;
+      state.hudNumberFormat = target.value;
+      savePrefs();
+      updateHUD();
+    };
+    for (const input of hud.querySelectorAll('[data-ro-char-filter]')) {
+      input.onchange = () => {
+        state[input.dataset.roCharFilter] = input.checked;
+        savePrefs();
+        renderChars();
+      };
+    }
     for (const input of settings.querySelectorAll('[data-ro-pref]')) {
       input.onchange = () => {
         const key = input.dataset.roPref;
@@ -4904,11 +5175,13 @@
     bPause.onclick = () => {
       if (!state.paused) { state.accMs += Date.now() - state.lastResumed; state.paused = true; bPause.textContent = '▶️ 繼續監測'; bPause.style.background = 'linear-gradient(135deg,#16a34a,#15803d)'; }
       else { state.lastResumed = Date.now(); state.paused = false; bPause.textContent = '⏸️ 暫停監測'; bPause.style.background = 'linear-gradient(135deg,#d97706,#b45309)'; }
+      combatHitMeter.interrupt(Date.now());
       updateHUD();
     };
     document.getElementById('b-reset').onclick = () => {
-      state.accMs = 0; state.lastResumed = Date.now(); state.kills = 0; state.bexp = 0; state.jexp = 0; state.dmgSum = 0; state.hits = 0; state.maxDmg = 0; state.missed = 0;
-      state.loot = {}; state.lootRev++; state.renderedLootRev = -1;
+      combatHitMeter.reset();
+      state.accMs = 0; state.lastResumed = Date.now(); state.kills = 0; state.bexp = 0; state.jexp = 0; state.dmgSum = 0; state.hits = 0; state.maxDmg = 0; state.damageTaken = 0; state.damageStartMs = 0; state.pickupQty = 0; state.missed = 0;
+      state.loot = Object.create(null); state.lootRev++; state.renderedLootRev = -1;
       if (state.activeCharId) state.initZenyMap[state.activeCharId] = state.curZeny;
       document.getElementById('u-llist').innerHTML = '尚無撿取紀錄...';
       updateHUD();
@@ -4927,6 +5200,12 @@
       jexp: document.getElementById('u-jexp'),
       kph: document.getElementById('u-kph'),
       dmg: document.getElementById('u-dmg'),
+      total: document.getElementById('u-total'),
+      peak: document.getElementById('u-peak'),
+      hits: document.getElementById('u-hits'),
+      hitRate: document.getElementById('u-hitRate'),
+      taken: document.getElementById('u-taken'),
+      pickups: document.getElementById('u-pickups'),
       zeny: document.getElementById('u-zeny'),
       miss: document.getElementById('u-miss'),
       llist: document.getElementById('u-llist'),
@@ -4936,21 +5215,54 @@
   }
 
   const fmt = (n) => n >= 1e8 ? (n / 1e8).toFixed(2) + '億' : n >= 1e4 ? (n / 1e4).toFixed(1) + '萬' : Math.round(n).toLocaleString();
+  function formatHudNumber(value, format) {
+    const absolute = Math.abs(value);
+    const unit = format === 'auto' ? absolute >= 1e8 ? 'yi' : 'wan' : format;
+    if (unit === 'yi' && absolute >= 1e8) return (value / 1e8).toFixed(2) + '億';
+    if (unit === 'wan' && absolute >= 1e4) return (value / 1e4).toFixed(1) + '萬';
+    return Math.round(value).toLocaleString('zh-TW');
+  }
+
   function updateHUD() {
     if (document.hidden || state.hudMin) return;
     syncHudSettings();
     const refs = getHudRefs();
     if (!refs) return;
-    const sec = Math.max(1, Math.floor((state.accMs + (state.paused ? 0 : Date.now() - state.lastResumed)) / 1000)), hrs = sec / 3600;
+    const monitoredMs = state.accMs + (state.paused ? 0 : Date.now() - state.lastResumed);
+    const sec = Math.max(1, Math.floor(monitoredMs / 1000)), hrs = sec / 3600;
+    const grid = document.getElementById('roi-hud-metrics');
+    const metrics = state[hudMetricPrefKey()];
+    if (grid.dataset.view !== hudLayout.view) grid.dataset.view = hudLayout.view;
+    if (grid.dataset.columns !== hudLayout.columns) grid.dataset.columns = hudLayout.columns;
+    if (refs.metrics !== metrics) {
+      const cards = new Map([...grid.children].map((box) => [box.dataset.roiMetric, box]));
+      const shown = new Set(metrics);
+      for (const [key, box] of cards) {
+        box.hidden = !shown.has(key);
+      }
+      orderHudRows(grid, metrics.map((key) => cards.get(key)).filter(Boolean));
+      refs.metrics = metrics;
+    }
+    const number = (value) => formatHudNumber(value, state.hudNumberFormat);
     refs.name.textContent = state.activeCharName;
     refs.time.textContent = `${state.paused ? '⏸️ ' : '⏱️ '}${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
-    refs.bexp.textContent = fmt(state.bexp / hrs);
-    refs.jexp.textContent = fmt(state.jexp / hrs);
-    refs.kph.textContent = `${Math.round(state.kills / hrs)}/h (${state.kills})`;
-    refs.dmg.textContent = `${fmt(state.hits ? state.dmgSum / state.hits : 0)} / ${fmt(state.maxDmg)}`;
+    refs.bexp.textContent = number(state.bexp / hrs);
+    refs.jexp.textContent = number(state.jexp / hrs);
+    refs.kph.textContent = `${number(state.kills / hrs)}/h (${number(state.kills)})`;
+    const damageSeconds = Math.max(1, (monitoredMs - state.damageStartMs) / 1000);
+    refs.dmg.textContent = number(state.dmgSum / damageSeconds);
+    refs.total.textContent = number(state.dmgSum);
+    refs.peak.textContent = number(state.maxDmg);
+    refs.hits.textContent = number(state.hits);
+    const combatRate = combatHitMeter.rate;
+    refs.hitRate.textContent = combatRate === null ? '—' : combatRate.toLocaleString('zh-TW', { maximumFractionDigits: 2 }) + ' 次/秒';
+    refs.taken.textContent = number(state.damageTaken);
+    refs.pickups.textContent = number(state.pickupQty);
+    renderMvpHistory();
     const initZ = state.initZenyMap[state.activeCharId] ?? state.curZeny, diff = state.curZeny - initZ;
-    refs.zeny.textContent = `${state.curZeny.toLocaleString()} Z (${diff >= 0 ? '+' : ''}${diff.toLocaleString()})`;
-    refs.miss.textContent = `${state.missed} 次`;
+    const money = state.hudNumberFormat === 'auto' ? (value) => value.toLocaleString('zh-TW') : number;
+    refs.zeny.textContent = `${money(state.curZeny)} Z (${diff >= 0 ? '+' : ''}${money(diff)})`;
+    refs.miss.textContent = `${number(state.missed)} 次`;
 
     if (state.lootRev !== state.renderedLootRev) {
       state.renderedLootRev = state.lootRev;
@@ -4972,6 +5284,41 @@
     }
   }
 
+  function renderMvpHistory(force = false) {
+    const pane = document.querySelector('#pane-lot.active');
+    if (!pane) return;
+    const filter = pane.querySelector('#u-mvp-boss');
+    const actor = state.activeCharId;
+    const history = mvpBattleHistory.get(actor);
+    const key = `${actor}/${history?.rev ?? 0}`;
+    if (!force && filter.dataset.roiHistoryKey === key) return;
+    const entries = history?.entries ?? [];
+    const combat = history?.combat ?? new Map();
+    const selected = filter.dataset.roiActor === String(actor) ? filter.value : '';
+    if (filter.dataset.roiHistoryKey !== key) {
+      const bosses = [...new Set([...entries.map(entry => entry.boss), ...combat.keys()])].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+      const names = ['', ...bosses];
+      if (filter.options.length !== names.length || names.some((name, i) => filter.options[i]?.value !== name)) {
+        filter.replaceChildren(new Option('全部 MVP', ''), ...bosses.map(boss => new Option(boss, boss)));
+      }
+      filter.value = bosses.includes(selected) ? selected : '';
+      filter.dataset.roiActor = String(actor);
+      filter.dataset.roiHistoryKey = key;
+    }
+    const summaries = [...combat].filter(([boss]) => !filter.value || boss === filter.value);
+    const summary = pane.querySelector('#u-mvp-combat');
+    summary.replaceChildren(...summaries.map(([boss, stats]) => element('div',
+      `${boss} · 輸出 ${fmt(stats.damage)} · 傷害 ${fmt(stats.hits)} 次 · 承傷 ${fmt(stats.taken)}`)));
+    const shown = entries.filter(entry => !filter.value || entry.boss === filter.value);
+    const render = (id, rows, empty) => {
+      const target = pane.querySelector(id);
+      if (!rows.length) { target.textContent = empty; return; }
+      target.replaceChildren(...rows.map(entry => element('div', entry.text)));
+    };
+    render('#u-mvp-battles', shown.filter(entry => entry.kind === 'battle'), '尚無 MVP 戰鬥結果');
+    render('#u-mvp-loot', shown.filter(entry => entry.hasLoot), '尚無可辨識來源的 MVP 掉落');
+  }
+
   function recordCharAlert(id, reason) {
     if (!id) return;
     if (state.charAlerts[id]?.reason !== '已停止掛機') state.charAlerts[id] = { reason, at: Date.now() };
@@ -4989,15 +5336,44 @@
       renderChars();
     }
   }
+  let charMaps = null, charMapsRequested = false;
   function renderChars() {
     const box = document.getElementById('u-clist'); if (!box) return;
-    const sum = [...state.myCharIds].reduce((total, id) => total + (state.charZenyMap[id] || 0), 0);
-    document.getElementById('u-tzeny').textContent = sum.toLocaleString() + ' Z';
-    box.replaceChildren(...state.chars.map((c) => {
+    if (!charMapsRequested && box.closest('.ro-pane.active') && state.chars.some((c) => c.mapId && !Object.hasOwn(TOWN_NAMES, c.mapId))) {
+      charMapsRequested = true;
+      Promise.resolve().then(loadLootPack).then((pack) => {
+        charMaps = pack.maps;
+        renderChars();
+      }).catch(() => log('hud', '無法載入地圖名稱'));
+    }
+    for (const input of document.querySelectorAll('#roi-char-filters [data-ro-char-filter]')) {
+      input.checked = state[input.dataset.roCharFilter];
+    }
+    const balance = (id) => Object.hasOwn(state.charZenyMap, id) && Number.isFinite(state.charZenyMap[id]) ? state.charZenyMap[id] : null;
+    let sum = 0, pending = 0;
+    for (const { id } of state.chars) {
+      const value = balance(id);
+      if (value === null) pending++;
+      else sum += value;
+    }
+    document.getElementById('u-tzeny').textContent = !state.charRosterLoaded || (pending && pending === state.chars.length)
+      ? '待同步' : sum.toLocaleString('zh-TW') + ' Z' + (pending ? `（${pending} 角待同步）` : '');
+    const needsAttention = (c) => !c.running || Boolean(state.charAlerts[c.id]);
+    const shown = state.charAttentionOnly ? state.chars.filter(needsAttention) : [...state.chars];
+    if (state.charAttentionFirst) shown.sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)));
+    if (!shown.length) {
+      box.textContent = state.charAttentionOnly && state.chars.length ? '目前沒有停止或異常的分身'
+        : state.charRosterLoaded ? '沒有分身資料' : '同步中…';
+      return;
+    }
+    box.replaceChildren(...shown.map((c) => {
       const row = element('div', null, `display:flex;justify-content:space-between;align-items:center;background:rgba(30,41,59,0.8);padding:6px 10px;border-radius:6px;margin-bottom:5px;border-left:3px solid ${c.running ? '#22c55e' : '#ef4444'}`);
       const detail = element('div');
-      detail.append(element('b', c.name), element('small', ` (Lv.${c.baseLv}/${c.jobLv})`, 'color:#94a3b8'),
-        element('div', `📍 ${c.mapId} ｜ 💰 ${(state.charZenyMap[c.id] || 0).toLocaleString()} Z`, 'font-size:11px;color:#93c5fd;margin-top:2px'));
+      const map = charMaps?.get(c.mapId)?.name || (Object.hasOwn(TOWN_NAMES, c.mapId) && TOWN_NAMES[c.mapId]) || c.mapId || '—';
+      const zeny = balance(c.id);
+      const summary = element('div', `📍 ${map} ｜ 💰 ${zeny === null ? '待同步' : zeny.toLocaleString('zh-TW') + ' Z'}`, 'font-size:11px;color:#93c5fd;margin-top:2px');
+      if (c.mapId && c.mapId !== map) summary.title = c.mapId;
+      detail.append(element('b', c.name), element('small', ` (Lv.${c.baseLv}/${c.jobLv})`, 'color:#94a3b8'), summary);
       const alert = state.charAlerts[c.id];
       if (alert) {
         detail.append(element('small', '⚠ ' + alert.reason, 'color:#f87171'));
@@ -5475,7 +5851,7 @@
     renderChars();
   }
   function flushLogBatch(size) {
-    for (const text of logSnapshots.splice(0, size)) parseLog(text);
+    for (const { text, historical, combatEvent } of logSnapshots.splice(0, size)) parseLog(text, historical, combatEvent);
   }
   function scheduleLogBatch() {
     if (logTimer !== null || !logSnapshots.length) return;
@@ -5485,11 +5861,21 @@
       scheduleLogBatch();
     }, isActiveWindow() ? TIMING.activeLogFlush : TIMING.idleLogFlush);
   }
-  function queueLogLine(line) {
+  function queueLogLine(line, historical = false) {
     if (!line) return;
     const text = clean(line.textContent);
     if (!text || state.processedLines.get(line) === text) return;
     state.processedLines.set(line, text);
+    let combatEvent = null;
+    if (!historical) {
+      const gameLog = getReactFiber(line)?.return?.memoizedProps?.l;
+      if (Number.isSafeInteger(gameLog?.id) && Number.isFinite(gameLog.wall) &&
+          typeof gameLog.text === 'string' && gameLog.text.trim() && text.endsWith(clean(gameLog.text))) {
+        combatEvent = { id: gameLog.id, wall: gameLog.wall };
+      }
+      const eventId = combatEvent ? `${combatEvent.wall}/${combatEvent.id}` : null;
+      recordMvpLog(text, state.activeCharId, eventId);
+    }
     if (rxRareDrop.test(text)) {
       state.rares.unshift(`[${new Date().toLocaleTimeString()}] ✨ ${text}`);
       if (state.rares.length > rareLimit) state.rares.pop();
@@ -5503,7 +5889,7 @@
     }
     if (state.paused) return;
     if (logSnapshots.length >= 2000) flushLogBatch(document.hidden ? 800 : 200);
-    logSnapshots.push(text);
+    logSnapshots.push({ text, historical, combatEvent });
     scheduleLogBatch();
   }
   function clearQueuedCharacterLogs() {
@@ -5559,13 +5945,13 @@
         r.addedNodes.forEach((n) => {
           if (n.nodeType !== 1) return;
           if (n.matches?.('.log-line')) queueLogLine(n);
-          n.querySelectorAll?.('.log-line').forEach(queueLogLine);
+          n.querySelectorAll?.('.log-line').forEach(line => queueLogLine(line));
         });
         continue;
       }
       if (r.type === 'childList') r.addedNodes.forEach((n) => {
         if (n.nodeType !== 1) return;
-        n.querySelectorAll?.('.log-window .log-line').forEach(queueLogLine);
+        n.querySelectorAll?.('.log-window .log-line').forEach(line => queueLogLine(line));
       });
       // 純文字變動且不在需處理的容器內：改走慢速通道，避免倒數計時、HP 等文字每 160ms 觸發整頁路由。
       if (!el.closest(ROUTER_TEXT_SCOPE) && (r.type === 'characterData' ||
@@ -6906,7 +7292,8 @@
       const control = event.target.closest?.('button, [role="tab"], a');
       if (control && !control.closest('#ro-helper-hud') && !panel.contains(control) && /掛機設定|尋找怪物|切換角色|回城|地圖/.test(control.textContent)) captureBackground();
     }, true);
-    return { button: open, syncFromStats, refreshPreferences };
+    const knownBosses = new Set(Object.keys(schedules).map(clean));
+    return { button: open, syncFromStats, refreshPreferences, isKnownBoss: name => knownBosses.has(name) };
   }
 
   let mvpRadar;
@@ -6918,7 +7305,7 @@
     }
   }
 
-  document.querySelectorAll('.log-window .log-line').forEach(queueLogLine);
+  document.querySelectorAll('.log-window .log-line').forEach(line => queueLogLine(line, true));
   listenSharedSettings();
   if (canShareCharPoll()) listenRemote(charPollKey, validateCharPoll, applySharedCharPoll);
   window.addEventListener('focus', runPageRouter);
