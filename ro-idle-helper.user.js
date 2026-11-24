@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.5.7
+// @version      3.5.8
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -1682,20 +1682,20 @@
 
   function showWarehouseSaleReview(f, saleBtn, items, sig) {
     const dlg = document.createElement('dialog');
-    dlg.style.cssText = 'width:min(540px,calc(100vw - 24px));max-height:80vh;padding:16px 18px;background:rgba(15,23,42,0.98);color:#f8fafc;border:1.5px solid #f59e0b;border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,0.92);font-size:13px;backdrop-filter:blur(10px);';
+    dlg.style.cssText = 'width:min(540px,calc(100vw - 24px));max-height:80vh;padding:16px 18px;background:var(--roi-surface);color:var(--roi-text);border:1.5px solid #f59e0b;border-radius:12px;box-shadow:0 16px 48px var(--roi-shadow);font-size:13px;backdrop-filter:blur(10px);';
     dlg.innerHTML = `
-      <div style="font-weight:bold;font-size:15px;color:#fbbf24;border-bottom:1px solid #334155;padding-bottom:8px;margin-bottom:8px;">🛡️ 倉庫待售清單核對（共 ${items.length} 項）</div>
-      <div style="max-height:48vh;overflow:auto;margin-bottom:10px;border:1px solid #334155;border-radius:6px;padding:6px 10px;background:#090d16;"></div>
-      <div style="font-size:12px;color:#cbd5e1;margin-bottom:10px;"><span data-sale-caption></span>｜核對無誤後按「確認出售」，遊戲仍會顯示原生販售確認。</div>
+      <div style="font-weight:bold;font-size:15px;color:var(--roi-warning);border-bottom:1px solid var(--roi-edge);padding-bottom:8px;margin-bottom:8px;">🛡️ 倉庫待售清單核對（共 ${items.length} 項）</div>
+      <div style="max-height:48vh;overflow:auto;margin-bottom:10px;border:1px solid var(--roi-edge);border-radius:6px;padding:6px 10px;background:var(--roi-inset);"></div>
+      <div style="font-size:12px;color:var(--roi-text);margin-bottom:10px;"><span data-sale-caption></span>｜核對無誤後按「確認出售」，遊戲仍會顯示原生販售確認。</div>
       <div style="display:flex;justify-content:flex-end;gap:8px;">
         <button type="button" class="xp-btn small" id="wh-rev-cancel">取消</button>
-        <button type="button" class="xp-btn small" id="wh-rev-ok" style="background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;font-weight:bold;border:none;">確認出售</button>
+        <button type="button" class="xp-btn small" id="wh-rev-ok" style="background:linear-gradient(135deg,#16763a,#136039);color:#fff;font-weight:bold;border:none;">確認出售</button>
       </div>
     `;
     const itemsBox = dlg.children[1];
     for (const item of items) {
-      const row = element('div', null, 'display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px dashed #1e293b');
-      row.append(element('span', item.name), element('b', '×' + item.qty.toLocaleString(), 'color:#4ade80'));
+      const row = element('div', null, 'display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px dashed var(--roi-edge)');
+      row.append(element('span', item.name), element('b', '×' + item.qty.toLocaleString(), 'color:var(--roi-success)'));
       itemsBox.append(row);
     }
     dlg.querySelector('[data-sale-caption]').textContent = clean(saleBtn.textContent);
@@ -1726,7 +1726,7 @@
       if (!bar) {
         bar = document.createElement('div');
         bar.dataset.roWhBar = '';
-        bar.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0 6px;padding:6px 10px;background:linear-gradient(90deg,rgba(30,41,59,0.9),rgba(15,23,42,0.75));border-left:3px solid #f59e0b;border-radius:6px;font-size:11.5px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+        bar.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0 6px;padding:6px 10px;background:var(--roi-panel);border-left:3px solid #f59e0b;border-radius:6px;font-size:11.5px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
         const mkBtn = (txt, fn, bg = '') => {
           const b = document.createElement('button');
           b.type = 'button'; b.className = 'xp-btn small'; b.textContent = txt;
@@ -1735,7 +1735,7 @@
           return b;
         };
         const stSpan = document.createElement('span');
-        stSpan.dataset.roWhStatus = ''; stSpan.style.color = '#fde047';
+        stSpan.dataset.roWhStatus = ''; stSpan.style.color = 'var(--roi-warning)';
         const review = document.createElement('input');
         review.type = 'checkbox';
         review.dataset.roiWhSaleReview = '';
@@ -1766,7 +1766,7 @@
               if (li.dataset.roiWhLocked !== undefined) { if (cb.checked) { cb.click(); cnt--; } continue; }
               if (!cb.checked && cnt < 100) { cb.click(); if (++cnt % 15 === 0) await sleep(10); }
             }
-          }, 'linear-gradient(135deg,#d97706,#b45309)'),
+          }, 'linear-gradient(135deg,#a34f05,#854009)'),
           mkBtn('🔒 本頁全鎖', () => bulkWhLock(f, true)),
           mkBtn('🔓 本頁全解', () => bulkWhLock(f, false)),
           pinsLabel, reviewLabel,
@@ -2196,9 +2196,9 @@
       if (!panel?.isConnected || !root.contains(panel)) {
         panel = document.createElement('div');
         panel.dataset.roRareHelper = '';
-        panel.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:6px 0;padding:6px 10px;background:linear-gradient(90deg,rgba(30,41,59,0.9),rgba(15,23,42,0.75));border-left:3px solid #38bdf8;border-radius:6px;font-size:11.5px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+        panel.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:6px 0;padding:6px 10px;background:var(--roi-panel);border-left:3px solid #38bdf8;border-radius:6px;font-size:11.5px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
         const statusSpan = document.createElement('span');
-        statusSpan.dataset.roRareStatus = ''; statusSpan.style.color = '#4ade80';
+        statusSpan.dataset.roRareStatus = ''; statusSpan.style.color = 'var(--roi-success)';
         statusSpan.textContent = rareAutoMap ? '稀有掉落自動同步已開啟' : '稀有掉落自動同步已關閉';
         panel.append(statusSpan);
         const h = [...root.querySelectorAll('legend,h2,h3,h4,strong,b,div,p,span')].find((e) => e.childElementCount <= 3 && isRareHeading(e.textContent));
@@ -2489,8 +2489,8 @@
     if (lootAnchor && !lootSyncPanels.has(lootAnchor)) {
       const box = document.createElement('div');
       box.dataset.roiSettingsTools = '';
-      box.style.cssText = 'flex-basis:100%;display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px;padding:6px 10px;background:linear-gradient(90deg,rgba(30,41,59,0.9),rgba(15,23,42,0.75));border-left:3px solid #38bdf8;border-radius:6px;font-size:11.5px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
-      const status = document.createElement('span'); status.style.color = '#4ade80';
+      box.style.cssText = 'flex-basis:100%;display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px;padding:6px 10px;background:var(--roi-panel);border-left:3px solid #38bdf8;border-radius:6px;font-size:11.5px;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+      const status = document.createElement('span'); status.style.color = 'var(--roi-success)';
       box.style.display = 'grid';
       box.style.gridTemplateColumns = 'minmax(56px,auto) minmax(0,1fr) auto';
       box.style.width = '100%';
@@ -3679,19 +3679,19 @@
       refPanel = document.createElement('div');
       refPanel.dataset.roiRefineHelper = '';
       refPanel.className = 'xp-sunken p-2';
-      refPanel.style.cssText = 'display:grid;gap:6px;margin-bottom:8px;border-left:3px solid #f59e0b;background:linear-gradient(90deg,rgba(15,23,42,0.94),rgba(30,41,59,0.85));border-radius:6px;font-size:12px;box-shadow:0 4px 12px rgba(0,0,0,0.35);';
+      refPanel.style.cssText = 'display:grid;gap:6px;margin-bottom:8px;border-left:3px solid #f59e0b;background:var(--roi-panel);border-radius:6px;font-size:12px;box-shadow:0 4px 12px rgba(0,0,0,0.35);';
       refPanel.innerHTML = `
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-          <button type="button" class="xp-btn small" id="ref-toggle" style="font-weight:bold;color:#fbbf24;">🔨 展開精煉清單</button>
+          <button type="button" class="xp-btn small" id="ref-toggle" style="font-weight:bold;color:var(--roi-warning);">🔨 展開精煉清單</button>
           <button type="button" class="xp-btn small" id="ref-sel-all">全選本頁裝備</button>
           <button type="button" class="xp-btn small" id="ref-sel-clr">取消全選</button>
-          <label style="color:#93c5fd;">模式：<select id="ref-mode" class="xp-input">
+          <label style="color:var(--roi-info);">模式：<select id="ref-mode" class="xp-input">
             <option value="round_robin">🔄 輪流齊頭衝 (+1輪流)</option>
             <option value="single_focus">🎯 單件直衝到底</option>
           </select></label>
-          <label style="color:#fbbf24;font-weight:bold;">目標 +<input type="number" id="ref-target" class="xp-input" value="${refTargetPlus}" min="1" max="10" style="width:48px;"></label>
-          <button type="button" class="xp-btn small" id="ref-run-safe" style="background:linear-gradient(135deg,#0284c7,#0369a1);color:#fff;border:none;">🛡️ 所選衝到安全值</button>
-          <button type="button" class="xp-btn small" id="ref-run-target" style="background:linear-gradient(135deg,#d97706,#b45309);color:#fff;font-weight:bold;border:none;">🚀 啟動衝到目標 +N</button>
+          <label style="color:var(--roi-warning);font-weight:bold;">目標 +<input type="number" id="ref-target" class="xp-input" value="${refTargetPlus}" min="1" max="10" style="width:48px;"></label>
+          <button type="button" class="xp-btn small" id="ref-run-safe" style="background:linear-gradient(135deg,#0369a1,#075581);color:#fff;border:none;">🛡️ 所選衝到安全值</button>
+          <button type="button" class="xp-btn small" id="ref-run-target" style="background:linear-gradient(135deg,#a34f05,#854009);color:#fff;font-weight:bold;border:none;">🚀 啟動衝到目標 +N</button>
           <button type="button" class="xp-btn small" id="ref-run-skill" hidden>神工匠武器精練</button>
           <button type="button" class="xp-btn small" id="ref-stop" style="background:#dc2626;color:#fff;display:none;border:none;">⏹ 停止</button>
         </div>
@@ -3700,10 +3700,10 @@
           <label><input type="checkbox" data-roi-ref-warehouse> 自動領料及存倉</label>
           <label>每次領料 <input type="number" data-roi-ref-batch class="xp-input" min="1" max="1000" step="1" style="width:64px;"> 個</label>
         </div>
-        <span data-roi-ref-settings-status role="status" style="color:#fde047;"></span>
+        <span data-roi-ref-settings-status role="status" style="color:var(--roi-warning);"></span>
         <div data-ref-categories role="group" aria-label="精煉裝備分類" style="display:none;gap:6px;flex-wrap:wrap;"></div>
-        <div data-ref-list style="display:none;max-height:210px;overflow:auto;gap:4px;padding:6px;background:#090d16;border-radius:6px;border:1px solid #1e293b;"></div>
-        <div data-ref-status style="font-size:11.5px;color:#4ade80;">💡 支援 Ctrl / ⌘ 點擊勾選全部同名裝備；安全值後神工匠用技能，一般職業自動穿戴找忽克連並在結束後穿回原裝。</div>
+        <div data-ref-list style="display:none;max-height:210px;overflow:auto;gap:4px;padding:6px;background:var(--roi-inset);border-radius:6px;border:1px solid var(--roi-edge);"></div>
+        <div data-ref-status style="font-size:11.5px;color:var(--roi-success);">💡 支援 Ctrl / ⌘ 點擊勾選全部同名裝備；安全值後神工匠用技能，一般職業自動穿戴找忽克連並在結束後穿回原裝。</div>
       `;
       b.host.insertBefore(refPanel, b.table.closest('.xp-sunken') || b.table);
       bindRefineSettings(refPanel, refPanel.querySelector('[data-roi-ref-settings-status]'));
@@ -3780,18 +3780,18 @@
       button.hidden = button.dataset.refCategory !== 'all' && !available.has(button.dataset.refCategory);
       const active = button.dataset.refCategory === refCategory;
       button.setAttribute('aria-pressed', String(active));
-      button.style.color = active ? '#fbbf24' : '';
-      button.style.borderColor = active ? '#fbbf24' : '';
+      button.style.color = active ? 'var(--roi-warning)' : '';
+      button.style.borderColor = active ? 'var(--roi-warning)' : '';
     }
     const eqRows = refineRowsForPage(b.rows);
     const sig = JSON.stringify([!!refinePack, refCategory, refBusy, [...refSelected], eqRows.map((r) => [r.uid, r.st.refine])]);
     if (listEl.dataset.sig === sig) return;
     listEl.dataset.sig = sig;
     listEl.replaceChildren();
-    if (refinePack && !eqRows.length) listEl.append(element('span', '沒有可精煉的裝備', 'color:#94a3b8'));
+    if (refinePack && !eqRows.length) listEl.append(element('span', '沒有可精煉的裝備', 'color:var(--roi-muted)'));
     eqRows.forEach((r) => {
       const lbl = document.createElement('label');
-      lbl.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 6px;cursor:pointer;border-bottom:1px dashed #1e293b;';
+      lbl.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 6px;cursor:pointer;border-bottom:1px dashed var(--roi-edge);';
       const cb = document.createElement('input');
       cb.type = 'checkbox'; cb.disabled = refBusy; cb.checked = refSelected.has(r.uid);
       cb.onclick = (e) => {
@@ -3803,9 +3803,9 @@
       const slots = SLOTS_MAP.get(r.st.itemId) || 0;
       const img = element('img');
       img.src = `/client/item/${r.st.itemId}.png`; img.width = img.height = 20;
-      const name = element('span', `+${r.st.refine || 0} ${r.name}${slots ? ` [${slots}]` : ''} `, `color:${r.st.refine ? '#38bdf8' : '#e2e8f0'}`);
+      const name = element('span', `+${r.st.refine || 0} ${r.name}${slots ? ` [${slots}]` : ''} `, `color:${r.st.refine ? 'var(--roi-info)' : 'var(--roi-text)'}`);
       applyRefineLevelColor(name, r.st.refine || 0);
-      name.append(element('small', `(${SUB_LABELS[r.sub] || r.cat})`, 'color:#64748b'));
+      name.append(element('small', `(${SUB_LABELS[r.sub] || r.cat})`, 'color:var(--roi-muted)'));
       lbl.append(img, name);
       lbl.prepend(cb);
       listEl.appendChild(lbl);
@@ -3824,7 +3824,7 @@
 
   const tooltip = document.createElement('div');
   tooltip.id = 'roi-item-hover-tooltip';
-  tooltip.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;display:none;width:320px;box-sizing:border-box;max-width:calc(100vw - 12px);max-height:calc(100vh - 12px);overflow:auto;overscroll-behavior:contain;overflow-wrap:anywhere;background:linear-gradient(160deg,#0f172a,#172554);color:#f8fafc;border:1.5px solid #38bdf8;border-radius:10px;padding:11px 13px;box-shadow:0 12px 28px rgba(0,0,0,0.88);font-size:12px;line-height:1.45;contain:layout style;will-change:transform;';
+  tooltip.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;display:none;width:320px;box-sizing:border-box;max-width:calc(100vw - 12px);max-height:calc(100vh - 12px);overflow:auto;overscroll-behavior:contain;overflow-wrap:anywhere;background:var(--roi-surface);color:var(--roi-text);border:1.5px solid #38bdf8;border-radius:10px;padding:11px 13px;box-shadow:0 12px 28px var(--roi-shadow);font-size:12px;line-height:1.45;contain:layout style;will-change:transform;';
   document.body.appendChild(tooltip);
   let hoverPoint = null;
   let tooltipVisible = false;
@@ -3932,13 +3932,13 @@
     return lines;
   }
 
-  function renderDescBlock(container, rawDesc, currentRefine = 0, baseColor = '#cbd5e1', fontSize = '11px') {
+  function renderDescBlock(container, rawDesc, currentRefine = 0, baseColor = 'var(--roi-text)', fontSize = '11px') {
     const items = formatItemDescLines(rawDesc, currentRefine);
     if (!items.length) return;
     const list = element('div', null, `display:flex;flex-direction:column;gap:3px;font-size:${fontSize};line-height:1.45;`);
     for (const item of items) {
       if (item.type === 'meta') {
-        const metaEl = element('div', `📋 ${item.text}`, 'color:#93c5fd;font-size:10.5px;padding-bottom:3px;margin-bottom:1px;border-bottom:1px dashed rgba(148,163,184,0.2);');
+        const metaEl = element('div', `📋 ${item.text}`, 'color:var(--roi-info);font-size:10.5px;padding-bottom:3px;margin-bottom:1px;border-bottom:1px dashed rgba(148,163,184,0.2);');
         list.append(metaEl);
       } else if (item.type === 'refine') {
         const isCur = currentRefine > 0 && currentRefine === item.refineLv;
@@ -3946,10 +3946,10 @@
           'div',
           `${isCur ? '▶ ' : '• '}${item.text}`,
           isCur
-            ? 'color:#fde047;font-weight:bold;background:rgba(250,204,21,0.14);padding:2px 6px;border-radius:4px;border-left:2px solid #facc15;'
+            ? 'color:var(--roi-warning);font-weight:bold;background:rgba(250,204,21,0.14);padding:2px 6px;border-radius:4px;border-left:2px solid #facc15;'
             : item.active
-              ? 'color:#86efac;padding-left:4px;'
-              : 'color:#94a3b8;padding-left:4px;'
+              ? 'color:var(--roi-success);padding-left:4px;'
+              : 'color:var(--roi-muted);padding-left:4px;'
         );
         list.append(row);
       } else {
@@ -3993,50 +3993,50 @@
 
     const hasCards = cards.length > 0;
     const isRefined = (data.refine || 0) > 0;
-    tooltip.style.borderColor = hasCards ? '#facc15' : isRefined ? '#38bdf8' : 'rgba(56,189,248,0.75)';
+    tooltip.style.borderColor = hasCards ? 'var(--roi-warning)' : isRefined ? 'var(--roi-info)' : 'rgba(56,189,248,0.75)';
     const header = element('div', null, 'display:flex;align-items:center;gap:9px;border-bottom:1px solid rgba(148,163,184,0.28);padding-bottom:8px;margin-bottom:8px;');
-    const iconWrap = element('div', null, `position:relative;width:34px;height:34px;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 30% 30%,rgba(56,189,248,0.2),rgba(15,23,42,0.95));border-radius:8px;border:1px solid ${hasCards ? '#facc15' : isRefined ? '#38bdf8' : '#334155'};flex-shrink:0;`);
+    const iconWrap = element('div', null, `position:relative;width:34px;height:34px;display:flex;align-items:center;justify-content:center;background:var(--roi-panel);border-radius:8px;border:1px solid ${hasCards ? 'var(--roi-warning)' : isRefined ? 'var(--roi-info)' : '#334155'};flex-shrink:0;`);
     const icon = element('img', null, 'width:26px;height:26px;object-fit:contain;');
     icon.src = `/client/item/${numId}.png`;
     iconWrap.append(icon);
     const titleBox = element('div', null, 'min-width:0;flex:1;');
-    const titleLine = element('div', data.name || data.base || dbInfo.name || `道具 #${numId}`, `font-weight:bold;font-size:13.5px;color:${hasCards ? '#fde047' : isRefined ? '#38bdf8' : '#f8fafc'};line-height:1.3;`);
-    titleLine.append(element('small', ` #${numId}`, 'color:#64748b;font-weight:normal;'));
-    const subLine = element('div', null, 'display:flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:11px;color:#94a3b8;margin-top:2px;');
-    const typePill = element('span', SUB_LABELS[sub] || CAT_TABS[cat] || cat, 'background:rgba(245,158,11,0.16);color:#fbbf24;border:1px solid rgba(245,158,11,0.35);padding:0 5px;border-radius:4px;font-weight:bold;');
+    const titleLine = element('div', data.name || data.base || dbInfo.name || `道具 #${numId}`, `font-weight:bold;font-size:13.5px;color:${hasCards ? 'var(--roi-warning)' : isRefined ? 'var(--roi-info)' : 'var(--roi-text)'};line-height:1.3;`);
+    titleLine.append(element('small', ` #${numId}`, 'color:var(--roi-muted);font-weight:normal;'));
+    const subLine = element('div', null, 'display:flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:11px;color:var(--roi-muted);margin-top:2px;');
+    const typePill = element('span', SUB_LABELS[sub] || CAT_TABS[cat] || cat, 'background:rgba(245,158,11,0.16);color:var(--roi-warning);border:1px solid rgba(245,158,11,0.35);padding:0 5px;border-radius:4px;font-weight:bold;');
     subLine.append(typePill);
     const wLv = dbInfo.wLv || (cat === 'weapon' ? WLV_MAP.get(numId) : null);
-    if (wLv) subLine.append(element('span', `Lv.${wLv}武器`, 'color:#cbd5e1;'));
-    if (dbInfo.reqLv) subLine.append(element('span', `需求Lv.${dbInfo.reqLv}`, 'color:#94a3b8;'));
-    if (dbInfo.weight != null) subLine.append(element('span', `重量 ${dbInfo.weight}`, 'color:#94a3b8;'));
+    if (wLv) subLine.append(element('span', `Lv.${wLv}武器`, 'color:var(--roi-text);'));
+    if (dbInfo.reqLv) subLine.append(element('span', `需求Lv.${dbInfo.reqLv}`, 'color:var(--roi-muted);'));
+    if (dbInfo.weight != null) subLine.append(element('span', `重量 ${dbInfo.weight}`, 'color:var(--roi-muted);'));
     titleBox.append(titleLine, subLine);
     header.append(iconWrap, titleBox);
     nodes.push(header);
 
     if (dbInfo.atk || dbInfo.matk || dbInfo.def || dbInfo.mdef || dbInfo.desc || data.rawSpecText) {
-      const statBox = element('div', null, 'background:rgba(9,13,22,0.78);padding:7px 9px;border-radius:7px;margin-bottom:7px;border:1px solid #1e293b;font-size:11.5px;');
+      const statBox = element('div', null, 'background:var(--roi-panel);padding:7px 9px;border-radius:7px;margin-bottom:7px;border:1px solid var(--roi-edge);font-size:11.5px;');
       const statParts = [
         dbInfo.atk ? `⚔️ ATK ${dbInfo.atk}` : '',
         dbInfo.matk ? `🔮 MATK ${dbInfo.matk}` : '',
         dbInfo.def ? `🛡️ DEF ${dbInfo.def}` : '',
         dbInfo.mdef ? `✨ MDEF ${dbInfo.mdef}` : ''
       ].filter(Boolean);
-      if (statParts.length) statBox.append(element('div', statParts.join(' ｜ '), 'color:#e2e8f0;font-weight:bold;margin-bottom:5px;'));
-      if (dbInfo.desc) renderDescBlock(statBox, dbInfo.desc, Number(data.refine) || 0, '#e2e8f0', '11px');
-      if (data.rawSpecText) statBox.append(element('div', `✨ ${data.rawSpecText}`, 'color:#a7f3d0;font-size:11px;margin-top:4px;padding-top:3px;border-top:1px dashed rgba(148,163,184,0.2);'));
+      if (statParts.length) statBox.append(element('div', statParts.join(' ｜ '), 'color:var(--roi-text);font-weight:bold;margin-bottom:5px;'));
+      if (dbInfo.desc) renderDescBlock(statBox, dbInfo.desc, Number(data.refine) || 0, 'var(--roi-text)', '11px');
+      if (data.rawSpecText) statBox.append(element('div', `✨ ${data.rawSpecText}`, 'color:var(--roi-success);font-size:11px;margin-top:4px;padding-top:3px;border-top:1px dashed rgba(148,163,184,0.2);'));
       nodes.push(statBox);
     }
 
     const maxSlots = Math.max(slots, cards.length);
     if (maxSlots > 0 && data.cardsKnown === false) {
-      nodes.push(element('div', `💎 插槽 ${maxSlots} 洞（目前清單未提供插卡明細）`, 'font-size:11px;color:#93c5fd;margin-bottom:6px;'));
+      nodes.push(element('div', `💎 插槽 ${maxSlots} 洞（目前清單未提供插卡明細）`, 'font-size:11px;color:var(--roi-info);margin-bottom:6px;'));
     }
     if (maxSlots > 0 && data.cardsKnown !== false) {
-      const cardBox = element('div', null, 'background:linear-gradient(180deg,rgba(15,23,42,0.92),rgba(9,13,22,0.92));padding:7px 9px;border-radius:7px;border:1px solid rgba(250,204,21,0.35);margin-bottom:7px;');
-      const cardHeader = element('div', null, 'display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#fde047;margin-bottom:5px;font-weight:bold;');
+      const cardBox = element('div', null, 'background:var(--roi-panel);padding:7px 9px;border-radius:7px;border:1px solid rgba(250,204,21,0.35);margin-bottom:7px;');
+      const cardHeader = element('div', null, 'display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--roi-warning);margin-bottom:5px;font-weight:bold;');
       cardHeader.append(
         element('span', `💎 卡片插槽 (${cards.length} / ${maxSlots})`),
-        element('span', cards.length ? '已插卡強化' : '尚未插卡', `font-size:10px;padding:1px 5px;border-radius:4px;background:${cards.length ? 'rgba(250,204,21,0.18)' : 'rgba(100,116,139,0.2)'};color:${cards.length ? '#fde047' : '#94a3b8'};`)
+        element('span', cards.length ? '已插卡強化' : '尚未插卡', `font-size:10px;padding:1px 5px;border-radius:4px;background:${cards.length ? 'rgba(250,204,21,0.18)' : 'rgba(100,116,139,0.2)'};color:${cards.length ? 'var(--roi-warning)' : 'var(--roi-muted)'};`)
       );
       cardBox.append(cardHeader);
       for (let idx = 0; idx < maxSlots; idx++) {
@@ -4048,20 +4048,20 @@
           const cIcon = element('img', null, 'width:18px;height:18px;object-fit:contain;margin-top:1px;flex-shrink:0;');
           cIcon.src = `/client/item/${cid}.png`;
           const cDetail = element('div', null, 'flex:1;min-width:0;');
-          const cTitle = element('div', cName, 'font-weight:bold;color:#fde047;font-size:11.5px;');
+          const cTitle = element('div', cName, 'font-weight:bold;color:var(--roi-warning);font-size:11.5px;');
           cDetail.append(cTitle);
           if (cInfo.desc) {
             const cDescWrap = element('div', null, 'margin-top:2px;');
-            renderDescBlock(cDescWrap, cInfo.desc, 0, '#a7f3d0', '10.5px');
+            renderDescBlock(cDescWrap, cInfo.desc, 0, 'var(--roi-success)', '10.5px');
             cDetail.append(cDescWrap);
           } else {
-            cDetail.append(element('div', '（卡片效果說明尚未載入）', 'color:#64748b;font-size:10px;margin-top:1px;'));
+            cDetail.append(element('div', '（卡片效果說明尚未載入）', 'color:var(--roi-muted);font-size:10px;margin-top:1px;'));
           }
           cRow.append(cIcon, cDetail);
           cardBox.append(cRow);
         } else {
-          const emptyRow = element('div', null, `display:flex;align-items:center;gap:6px;padding:3px 0;color:#64748b;font-size:11px;${idx ? 'border-top:1px dashed #1e293b;' : ''}`);
-          emptyRow.append(element('span', '◇', 'color:#475569;'), element('span', `空插槽 [${idx + 1}]（未插卡）`));
+          const emptyRow = element('div', null, `display:flex;align-items:center;gap:6px;padding:3px 0;color:var(--roi-muted);font-size:11px;${idx ? 'border-top:1px dashed var(--roi-edge);' : ''}`);
+          emptyRow.append(element('span', '◇', 'color:var(--roi-muted);'), element('span', `空插槽 [${idx + 1}]（未插卡）`));
           cardBox.append(emptyRow);
         }
       }
@@ -4069,14 +4069,14 @@
     }
 
     if (data.price) {
-      const foot = element('div', null, 'display:flex;justify-content:space-between;align-items:center;gap:8px;padding-top:6px;border-top:1px solid rgba(148,163,184,0.22);font-size:11px;color:#94a3b8;');
+      const foot = element('div', null, 'display:flex;justify-content:space-between;align-items:center;gap:8px;padding-top:6px;border-top:1px solid rgba(148,163,184,0.22);font-size:11px;color:var(--roi-muted);');
       const sellerText = `🏪 ${data.seller || '露天攤位'}${data.city ? ` (${TOWN_NAMES[data.city] || data.city})` : ''}`;
       const priceText = data.qty && data.qty > 1
         ? `單價 ${data.price.toLocaleString()} Z × ${data.qty} = ${(data.price * data.qty).toLocaleString()} Z`
         : `售價 ${data.price.toLocaleString()} Z`;
       foot.append(
         element('span', sellerText, 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'),
-        element('b', priceText, 'color:#4ade80;white-space:nowrap;')
+        element('b', priceText, 'color:var(--roi-success);white-space:nowrap;')
       );
       nodes.push(foot);
     }
@@ -4087,18 +4087,18 @@
   mktPanel.innerHTML = `
     <legend class="legend" id="roi-mkt-leg">🏪 攤位分類檢視 </legend>
     <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px;">
-      <button type="button" id="roi-mkt-auto" class="xp-btn small" style="background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;font-weight:bold;border:none;">▶️ 啟動 15s 自動整理</button>
+      <button type="button" id="roi-mkt-auto" class="xp-btn small" style="background:linear-gradient(135deg,#16763a,#136039);color:#fff;font-weight:bold;border:none;">▶️ 啟動 15s 自動整理</button>
       <input type="text" id="roi-mkt-q" class="xp-input" placeholder="篩選商品/插卡 (或跨城補查字)..." style="min-width:175px;">
       <select id="roi-mkt-sort" class="xp-input"><option value="asc">價低➔高</option><option value="desc">價高➔低</option><option value="name">名稱</option></select>
       <label><input type="checkbox" id="roi-mkt-min" checked> 同規格最低</label>
-      <button type="button" id="roi-mkt-cross" class="xp-btn small" style="background:linear-gradient(135deg,#0284c7,#0369a1);color:#fff;font-weight:bold;border:none;">🛰️ 立即跨城補查</button>
+      <button type="button" id="roi-mkt-cross" class="xp-btn small" style="background:linear-gradient(135deg,#0369a1,#075581);color:#fff;font-weight:bold;border:none;">🛰️ 立即跨城補查</button>
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-bottom:6px;">
       <div id="roi-mkt-tabs" style="display:flex;flex-wrap:wrap;gap:4px;"></div>
-      <label id="roi-mkt-sub-wrap" style="display:none;color:#fbbf24;font-weight:bold;">細分類：<select id="roi-mkt-sub" class="xp-input"></select></label>
+      <label id="roi-mkt-sub-wrap" style="display:none;color:var(--roi-warning);font-weight:bold;">細分類：<select id="roi-mkt-sub" class="xp-input"></select></label>
     </div>
-    <div id="roi-mkt-status" style="font-size:11px;color:#38bdf8;margin-bottom:5px;">目前城鎮攤位快照｜指到裝備可看精煉加成與插卡詳情，點 🔍 可切回原生購買</div>
-    <div id="roi-mkt-rows" style="max-height:60vh;overflow:auto;border:1px solid #334155;border-radius:6px;background:rgba(9,13,22,0.5);"></div>
+    <div id="roi-mkt-status" style="font-size:11px;color:var(--roi-info);margin-bottom:5px;">目前城鎮攤位快照｜指到裝備可看精煉加成與插卡詳情，點 🔍 可切回原生購買</div>
+    <div id="roi-mkt-rows" style="max-height:60vh;overflow:auto;border:1px solid var(--roi-edge);border-radius:6px;background:var(--roi-surface);color:var(--roi-text);"></div>
   `;
 
   const mktTabsBox = mktPanel.querySelector('#roi-mkt-tabs'), mktSubWrap = mktPanel.querySelector('#roi-mkt-sub-wrap'), mktSubSel = mktPanel.querySelector('#roi-mkt-sub'), mktRowsBox = mktPanel.querySelector('#roi-mkt-rows'), mktAutoBtn = mktPanel.querySelector('#roi-mkt-auto');
@@ -4267,7 +4267,7 @@
     crossBusy = false;
     ++crossRequest;
     mktAutoBtn.textContent = '▶️ 啟動 15s 自動整理';
-    mktAutoBtn.style.background = 'linear-gradient(135deg,#16a34a,#15803d)';
+    mktAutoBtn.style.background = 'linear-gradient(135deg,#16763a,#136039)';
     if (reason && mktPanel.querySelector('#roi-mkt-status')) mktPanel.querySelector('#roi-mkt-status').textContent = `🔴 ${reason}`;
   }
   mktAutoBtn.onclick = () => (mktAuto15s ? stopMktAuto('已手動停止 15s 自動整理') : startMktAuto());
@@ -4372,18 +4372,18 @@
     const rows = shown.slice(0, 120).map((r) => {
       const age = Math.floor((Date.now() - r.seen) / 60000);
       const src = r.source === 'cross' ? `·補查${age < 1 ? '剛剛' : age + '分前'}` : '';
-      const row = element('div', null, 'display:grid;grid-template-columns:minmax(240px,1fr) 165px 55px 140px;gap:6px;padding:6px 10px;border-bottom:1px solid #33415555;align-items:center;font-size:12px');
+      const row = element('div', null, 'display:grid;grid-template-columns:minmax(240px,1fr) 165px 55px 140px;gap:6px;padding:6px 10px;border-bottom:1px solid var(--roi-edge)55;align-items:center;font-size:12px');
       row.className = 'roi-mkt-row';
       row.dataset.rkey = r.key;
       const item = element('span', null, 'display:flex;align-items:center;gap:5px;min-width:0;flex-wrap:wrap');
-      const fav = element('button', mktFavs.has(r.id) ? '★' : '☆', mktFavs.has(r.id) ? 'color:#facc15' : '');
+      const fav = element('button', mktFavs.has(r.id) ? '★' : '☆', mktFavs.has(r.id) ? 'color:var(--roi-warning)' : '');
       fav.type = 'button'; fav.className = 'xp-btn small'; fav.dataset.act = 'fav';
       const img = element('img', null, 'width:21px;height:21px;object-fit:contain');
       img.src = `/client/item/${r.id}.png`; img.loading = 'lazy';
       const clip = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-      const name = element('span', r.name, `${clip};font-weight:${r.refine || r.cards.length ? 'bold' : 'normal'};color:${r.cards.length ? '#fde047' : r.refine ? '#38bdf8' : 'inherit'}`);
+      const name = element('span', r.name, `${clip};font-weight:${r.refine || r.cards.length ? 'bold' : 'normal'};color:${r.cards.length ? 'var(--roi-warning)' : r.refine ? 'var(--roi-info)' : 'inherit'}`);
       item.append(fav, img, name);
-      if (r.changeTag) item.append(element('small', r.changeTag, 'color:#fb923c'));
+      if (r.changeTag) item.append(element('small', r.changeTag, 'color:var(--roi-warning)'));
       const price = element('span', null, 'text-align:right;white-space:nowrap');
       const money = element('span', r.price.toLocaleString() + ' Z', getMoneyColorVars(r.price));
       money.className = 'roi-mc-text';
@@ -4391,11 +4391,11 @@
       find.type = 'button'; find.className = 'xp-btn small'; find.dataset.act = 'find'; find.title = '切回原生攤位定位購買 / 跨城搜尋';
       price.append(money, find);
       const seller = element('span', r.seller, clip);
-      seller.append(element('small', ` (${TOWN_NAMES[r.city] || r.city}${src})`, 'color:#93c5fd'));
+      seller.append(element('small', ` (${TOWN_NAMES[r.city] || r.city}${src})`, 'color:var(--roi-info)'));
       row.append(item, price, element('span', '剩 ' + r.qty, 'text-align:right'), seller);
       return row;
     });
-    mktRowsBox.replaceChildren(...(rows.length ? rows : [element('div', '無符合商品', 'padding:16px;text-align:center;color:#94a3b8')]));
+    mktRowsBox.replaceChildren(...(rows.length ? rows : [element('div', '無符合商品', 'padding:16px;text-align:center;color:var(--roi-muted)')]));
   }
 
   let lastHoveredTarget = null;
@@ -4694,6 +4694,32 @@
     const st = document.querySelector('style[data-roi-style]') || document.createElement('style');
     st.dataset.roiStyle = '';
     st.textContent = `
+      /* 直接繼承遊戲的主題色，切換介面或夜間模式時由 CSS 更新。 */
+      :root {
+        --roi-surface:var(--face,#fff); --roi-panel:var(--face-2,#f4f6fb);
+        --roi-inset:var(--face,#fff); --roi-selected:var(--select-soft,#d3e0fb);
+        --roi-edge:var(--edge-mid,#b4c0da); --roi-frame:var(--win-border,#7d8fbc);
+        --roi-title:var(--title-2,#dbe4f5); --roi-title-text:var(--title-text,#1d2d5a);
+        --roi-text:var(--text,#1b1b1b); --roi-muted:#4b5563;
+        --roi-info:#165587; --roi-warning:#854009; --roi-success:#136039;
+        --roi-danger:#a5222d; --roi-damage:#9d2664; --roi-shadow:rgba(0,0,0,.28);
+        --roi-scheme:light; --roi-ref-glow:none;
+        --roi-ref-4:#1e568f; --roi-ref-5:#136039; --roi-ref-6:#4d6318;
+        --roi-ref-7:#7a5200; --roi-ref-8:#934307; --roi-ref-9:#a5222d; --roi-ref-10:#9b1740;
+      }
+      html.night {
+        --roi-surface:var(--face,#1e222b); --roi-panel:var(--face-2,#252a35);
+        --roi-inset:var(--face,#151923); --roi-selected:var(--select-soft,#2f3d63);
+        --roi-edge:var(--edge-mid,#444d63); --roi-frame:var(--win-border,#4a5570);
+        --roi-title:var(--title-2,#2b3244); --roi-title-text:var(--title-text,#d6def2);
+        --roi-text:var(--text,#dde2ec); --roi-muted:#b0bccf;
+        --roi-info:#93c5fd; --roi-warning:#fde047; --roi-success:#86efac;
+        --roi-danger:#fda4af; --roi-damage:#f9a8d4; --roi-shadow:rgba(0,0,0,.65);
+        --roi-scheme:dark; --roi-ref-glow:0 0 5px color-mix(in srgb,currentColor 45%,transparent);
+        --roi-ref-4:#93c5fd; --roi-ref-5:#6ee7b7; --roi-ref-6:#bef264;
+        --roi-ref-7:#fde047; --roi-ref-8:#fdba74; --roi-ref-9:#fda4af; --roi-ref-10:#ff91ad;
+      }
+      #ro-helper-hud, #roi-helper-mvp-panel, [data-roi-party-move-dialog] { color-scheme:var(--roi-scheme); }
       [data-roi-browse-hidden], [data-roi-native-fold] { display: none !important; }
       table[data-roi-town-results] { display: block; overflow: auto; }
       table[data-roi-town-results] > :is(thead, tbody) > tr > :first-child:not([colspan]) { width: 100%; }
@@ -4709,11 +4735,9 @@
       #ro-fab.roi-stop-alert { outline:3px solid #ef4444; animation:roi-stop-pulse 1.2s ease-out infinite; }
       @media (prefers-reduced-motion:reduce) { #ro-fab.roi-stop-alert { animation:none; } }
       [data-roi-wh-pin], [data-roi-wh-pin-search] { flex:none; inline-size:16px; padding:0; border:0; background:transparent; color:inherit; line-height:1; cursor:pointer; }
-      [data-roi-wh-pin][aria-pressed="true"] { color:#b45309; }
-      html.night [data-roi-wh-pin][aria-pressed="true"] { color:#fbbf24; }
+      [data-roi-wh-pin][aria-pressed="true"] { color:var(--roi-warning); }
       html:not([data-roi-money-off]) .roi-mc-text { color: var(--roi-mc) !important; font-weight: bold !important; font-variant-numeric: tabular-nums; }
-      html:not([data-roi-money-off]):is(.night,[data-info-night]) .roi-mc-text,
-      html:not([data-roi-money-off]) #roi-mkt-rows .roi-mc-text { color: var(--roi-mn) !important; -webkit-text-fill-color: currentColor !important; }
+      html:not([data-roi-money-off]):is(.night,[data-info-night]) .roi-mc-text { color: var(--roi-mn) !important; -webkit-text-fill-color: currentColor !important; }
       .roi-mkt-row:hover { background:rgba(56,189,248,0.12) !important; }
       table.roi-market-table { width:100% !important; table-layout:fixed !important; }
       table.roi-market-table tr > [data-roi-market-col] { box-sizing:border-box !important; }
@@ -4723,7 +4747,7 @@
       table.roi-market-table tr > [data-roi-market-col="input"] { width:85px !important; text-align:right !important; white-space:nowrap !important; }
       table.roi-market-table tr > [data-roi-market-col="input-stock"] { width:150px !important; text-align:right !important; white-space:nowrap !important; }
       table.roi-market-table tr > [data-roi-market-col^="input"] input[type="number"] { width:64px !important; max-width:100% !important; box-sizing:border-box !important; }
-      table.roi-market-table td[data-roi-market-col="price"] > button[data-roi-price-search] { position:absolute; right:22px; top:50%; transform:translateY(-50%); width:21px; height:21px; padding:0; border:0; background:transparent; color:#38bdf8 !important; font:14px sans-serif; cursor:pointer; }
+      table.roi-market-table td[data-roi-market-col="price"] > button[data-roi-price-search] { position:absolute; right:22px; top:50%; transform:translateY(-50%); width:21px; height:21px; padding:0; border:0; background:transparent; color:var(--roi-info) !important; font:14px sans-serif; cursor:pointer; }
       @media(max-width:600px) {
         table.roi-market-table tr > [data-roi-market-col="price"] { width:135px !important; }
         table.roi-market-table tr > [data-roi-market-col="stock"] { width:45px !important; }
@@ -4732,27 +4756,27 @@
         table.roi-market-table tr > [data-roi-market-col^="input"] input[type="number"] { width:52px !important; }
       }
       li[data-roi-wh-locked] { background:linear-gradient(90deg,rgba(245,158,11,0.22),transparent 85%)!important; border-left:3px solid #f59e0b!important; padding-left:4px!important; }
-      button[data-roi-wh-badge="lock"] { background:linear-gradient(135deg,#78350f,#92400e)!important; color:#fde047!important; border:1px solid #f59e0b!important; border-radius:4px!important; padding:0 5px!important; margin:0 4px!important; font-size:11px!important; font-weight:bold!important; cursor:pointer!important; }
-      button[data-roi-wh-badge="unlock"] { background:transparent!important; color:#64748b!important; border:1px dashed #475569!important; border-radius:4px!important; padding:0 4px!important; margin:0 4px!important; font-size:11px!important; opacity:0.6; cursor:pointer!important; }
-      [data-ro-ref-tier="4"]  { color: #60a5fa !important; font-weight: 600 !important; }
-      [data-ro-ref-tier="5"]  { color: #34d399 !important; font-weight: 600 !important; }
-      [data-ro-ref-tier="6"]  { color: #a3e635 !important; font-weight: 700 !important; }
-      [data-ro-ref-tier="7"]  { color: #facc15 !important; font-weight: 700 !important; text-shadow: 0 0 5px rgba(250,204,21,0.45) !important; }
-      [data-ro-ref-tier="8"]  { color: #fb923c !important; font-weight: 800 !important; text-shadow: 0 0 7px rgba(251,146,60,0.55) !important; }
-      [data-ro-ref-tier="9"]  { color: #f87171 !important; font-weight: 800 !important; text-shadow: 0 0 9px rgba(248,113,113,0.7) !important; }
-      [data-ro-ref-tier="10"] { color: #ff2d55 !important; font-weight: 900 !important; text-shadow: 0 0 8px #ff2d55, 0 0 3px #ffd700 !important; background: linear-gradient(90deg, rgba(255,45,85,0.22), rgba(250,204,21,0.18)) !important; border-radius: 4px !important; padding: 0 5px !important; border: 1px solid rgba(255,215,0,0.65) !important; }
+      button[data-roi-wh-badge="lock"] { background:var(--roi-panel)!important; color:var(--roi-warning)!important; border:1px solid #f59e0b!important; border-radius:4px!important; padding:0 5px!important; margin:0 4px!important; font-size:11px!important; font-weight:bold!important; cursor:pointer!important; }
+      button[data-roi-wh-badge="unlock"] { background:transparent!important; color:var(--roi-muted)!important; border:1px dashed #475569!important; border-radius:4px!important; padding:0 4px!important; margin:0 4px!important; font-size:11px!important; opacity:0.6; cursor:pointer!important; }
+      [data-ro-ref-tier="4"]  { color: var(--roi-ref-4) !important; font-weight: 600 !important; }
+      [data-ro-ref-tier="5"]  { color: var(--roi-ref-5) !important; font-weight: 600 !important; }
+      [data-ro-ref-tier="6"]  { color: var(--roi-ref-6) !important; font-weight: 700 !important; }
+      [data-ro-ref-tier="7"]  { color: var(--roi-ref-7) !important; font-weight: 700 !important; text-shadow: var(--roi-ref-glow) !important; }
+      [data-ro-ref-tier="8"]  { color: var(--roi-ref-8) !important; font-weight: 800 !important; text-shadow: var(--roi-ref-glow) !important; }
+      [data-ro-ref-tier="9"]  { color: var(--roi-ref-9) !important; font-weight: 800 !important; text-shadow: var(--roi-ref-glow) !important; }
+      [data-ro-ref-tier="10"] { color: var(--roi-ref-10) !important; font-weight: 900 !important; text-shadow: var(--roi-ref-glow) !important; background: linear-gradient(90deg, rgba(255,45,85,0.22), rgba(250,204,21,0.18)) !important; border-radius: 4px !important; padding: 0 5px !important; border: 1px solid rgba(255,215,0,0.65) !important; }
       #ro-helper-hud { position:fixed; top:48px; right:14px; z-index:2147483646; font-family:system-ui,-apple-system,"Microsoft JhengHei",sans-serif; user-select:none; touch-action:none; }
       #ro-helper-hud[data-roi-hud-yield] { pointer-events:none; }
       #ro-helper-hud[data-roi-hud-yield] > #ro-hud-card { visibility:hidden; pointer-events:none; }
       #ro-helper-hud[data-roi-hud-yield] > #ro-fab { display:flex !important; position:fixed; left:var(--roi-hud-yield-x); top:var(--roi-hud-yield-y); pointer-events:auto; cursor:pointer !important; }
-      #ro-hud-card { background:linear-gradient(165deg,rgba(15,23,42,0.96),rgba(9,13,22,0.98)); backdrop-filter:blur(12px); color:#f8fafc; border:1.5px solid rgba(56,189,248,0.75); border-radius:12px; box-sizing:border-box; width:min(365px,calc(100vw - 8px)); max-height:calc(100vh - 8px); max-height:calc(100dvh - 8px); box-shadow:0 16px 40px rgba(0,0,0,0.88), 0 0 15px rgba(56,189,248,0.15); font-size:12px; overflow:auto; }
+      #ro-hud-card { background:var(--roi-surface); backdrop-filter:blur(12px); color:var(--roi-text); border:1.5px solid var(--roi-frame); border-radius:12px; box-sizing:border-box; width:min(365px,calc(100vw - 8px)); max-height:calc(100vh - 8px); max-height:calc(100dvh - 8px); box-shadow:0 16px 40px var(--roi-shadow); font-size:12px; overflow:auto; }
       #ro-drag { position:sticky; top:0; z-index:1; }
-      .ro-tab { flex:1; text-align:center; padding:8px 2px; cursor:pointer; color:#94a3b8; font-weight:bold; font-size:11px; border-bottom:2px solid transparent; transition:all 0.15s; }
-      .ro-tab:hover { color:#e2e8f0; background:rgba(30,41,59,0.5); }
-      .ro-tab.active { color:#fbbf24; border-bottom-color:#fbbf24; background:rgba(30,41,59,0.9); }
+      .ro-tab { flex:1; text-align:center; padding:8px 2px; cursor:pointer; color:var(--roi-muted); font-weight:bold; font-size:11px; border-bottom:2px solid transparent; transition:all 0.15s; }
+      .ro-tab:hover { color:var(--roi-text); background:var(--roi-panel); }
+      .ro-tab.active { color:var(--roi-warning); border-bottom-color:var(--roi-warning); background:var(--roi-selected); }
       .ro-pane { display:none; padding:10px 12px; max-height:410px; overflow-y:auto; touch-action:pan-y; }
       .ro-pane.active { display:block; }
-      .ro-box { background:rgba(30,41,59,0.75); border:1px solid rgba(71,85,105,0.65); border-radius:8px; padding:7px 9px; box-shadow:inset 0 1px 0 rgba(255,255,255,0.04); }
+      .ro-box { background:var(--roi-panel); border:1px solid var(--roi-edge); border-radius:8px; padding:7px 9px; box-shadow:inset 0 1px 0 rgba(255,255,255,0.04); }
       #roi-hud-metrics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; margin-bottom:7px; }
       #roi-hud-metrics[data-columns="one"] { grid-template-columns:minmax(0,1fr); }
       @media (max-width:420px) {
@@ -4765,10 +4789,10 @@
       [data-ro-metric-setting] label { flex:1; min-width:0; }
       #roi-char-filters { flex-wrap:wrap; margin-bottom:7px; }
       #pane-cfg fieldset { min-inline-size:0; margin:0 0 8px; display:grid; gap:6px; }
-      #pane-cfg legend { color:#fbbf24; font-weight:bold; }
+      #pane-cfg legend { color:var(--roi-warning); font-weight:bold; }
       #pane-cfg label { display:flex; align-items:center; flex-wrap:wrap; gap:4px; }
       #pane-cfg label > input { margin:0 4px 0 0; }
-      #pane-cfg input[type="number"] { width:7em; color:#f8fafc; background:#0f172a; border:1px solid #475569; border-radius:4px; }
+      #pane-cfg input[type="number"] { width:7em; color:var(--roi-text); background:var(--roi-inset); border:1px solid var(--roi-edge); border-radius:4px; }
     `;
     if (!st.isConnected) document.head.appendChild(st);
     document.documentElement.toggleAttribute('data-roi-money-off', !state.moneyColor);
@@ -4777,13 +4801,13 @@
     const initialMetrics = state[hudMetricPrefKey()];
     const metricKeys = [...new Set([...initialMetrics, ...Object.keys(hudMetricLabels)])];
     hud.innerHTML = `
-      <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
+      <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:var(--roi-title);border:2px solid var(--roi-frame);color:var(--roi-info);align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px var(--roi-shadow);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
-        <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.7</span>
-          <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
+        <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:var(--roi-title);border-bottom:1px solid var(--roi-edge);font-weight:bold;color:var(--roi-title-text);cursor:move;" title="按住可拖曳移動視窗">
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8</span>
+          <button id="ro-min-btn" style="background:var(--roi-selected);color:var(--roi-text);border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
-        <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
+        <div style="display:flex;background:var(--roi-inset);border-bottom:1px solid var(--roi-edge);">
           <div class="ro-tab active" data-t="tel">📊 效率</div>
           <span data-roi-mvp-slot></span>
           <div class="ro-tab" data-t="chr">👥 分身</div>
@@ -4792,23 +4816,23 @@
         </div>
         <div class="ro-pane active" id="pane-tel">
           <div style="display:flex;justify-content:space-between;margin-bottom:7px;font-size:11.5px;">
-            <span>角色：<b id="u-name" style="color:#38bdf8;">讀取中</b></span>
-            <span id="u-time" style="color:#4ade80;font-weight:bold;font-variant-numeric:tabular-nums;">⏱️ 00:00</span>
+            <span>角色：<b id="u-name" style="color:var(--roi-info);">讀取中</b></span>
+            <span id="u-time" style="color:var(--roi-success);font-weight:bold;font-variant-numeric:tabular-nums;">⏱️ 00:00</span>
           </div>
           <div id="roi-hud-metrics" data-view="${hudLayout.view}" data-columns="${hudLayout.columns}">
             ${metricKeys.map((key) => `<div class="ro-box" data-roi-metric="${key}" ${initialMetrics.includes(key) ? '' : 'hidden'}>
-              <small style="color:#94a3b8;" ${key === 'dmg' ? 'title="本角色在監測期間的輸出 ÷ 未暫停秒數，包含待機時間"' : key === 'hitRate' ? 'title="只計已記錄起訖的交戰，從發現怪物到擊倒。搜尋與待機不計。"' : ''}>${hudMetricLabels[key]}</small>
-              <div id="u-${key}" style="font-size:13.5px;font-weight:bold;color:${key === 'dmg' ? '#f472b6' : '#93c5fd'};margin-top:2px;">0</div>
+              <small style="color:var(--roi-muted);" ${key === 'dmg' ? 'title="本角色在監測期間的輸出 ÷ 未暫停秒數，包含待機時間"' : key === 'hitRate' ? 'title="只計已記錄起訖的交戰，從發現怪物到擊倒。搜尋與待機不計。"' : ''}>${hudMetricLabels[key]}</small>
+              <div id="u-${key}" style="font-size:13.5px;font-weight:bold;color:${key === 'dmg' ? 'var(--roi-damage)' : 'var(--roi-info)'};margin-top:2px;">0</div>
             </div>`).join('')}
           </div>
           <div style="display:flex;gap:6px;">
-            <button id="b-pause" style="flex:1;background:linear-gradient(135deg,#d97706,#b45309);color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">⏸️ 暫停監測</button>
-            <button id="b-reset" style="flex:1;background:#334155;color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">🔄 歸零</button>
+            <button id="b-pause" style="flex:1;background:linear-gradient(135deg,#a34f05,#854009);color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">⏸️ 暫停監測</button>
+            <button id="b-reset" style="flex:1;background:var(--roi-selected);color:var(--roi-text);border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">🔄 歸零</button>
           </div>
         </div>
         <div class="ro-pane" id="pane-chr">
-          <div style="display:flex;justify-content:space-between;margin-bottom:7px;background:#090d16;padding:7px 10px;border-radius:6px;border:1px solid #1e293b;">
-            <span>💰 帳號總 Zeny：</span><b id="u-tzeny" style="color:#facc15;">待同步</b>
+          <div style="display:flex;justify-content:space-between;margin-bottom:7px;background:var(--roi-inset);padding:7px 10px;border-radius:6px;border:1px solid var(--roi-edge);">
+            <span>💰 帳號總 Zeny：</span><b id="u-tzeny" style="color:var(--roi-warning);">待同步</b>
           </div>
           <div id="roi-char-filters">
             <label><input type="checkbox" data-ro-char-filter="charAttentionOnly"> 只看停止或異常</label>
@@ -4824,8 +4848,8 @@
             <details open><summary>MVP 戰鬥結果</summary><div id="u-mvp-battles" style="max-height:135px;overflow:auto;"></div></details>
             <details open><summary>MVP 掉落與獎勵</summary><div id="u-mvp-loot" style="max-height:135px;overflow:auto;"></div></details>
           </fieldset>
-          <div id="u-rlist" style="background:#090d16;padding:7px;border-radius:6px;border:1px solid #1e293b;margin-bottom:7px;max-height:75px;overflow:auto;color:#fde047;font-size:11px;">尚無稀有掉落...</div>
-          <div id="u-llist" style="background:#090d16;padding:7px;border-radius:6px;border:1px solid #1e293b;max-height:190px;overflow:auto;font-size:11px;">尚無撿取紀錄...</div>
+          <div id="u-rlist" style="background:var(--roi-inset);padding:7px;border-radius:6px;border:1px solid var(--roi-edge);margin-bottom:7px;max-height:75px;overflow:auto;color:var(--roi-warning);font-size:11px;">尚無稀有掉落...</div>
+          <div id="u-llist" style="background:var(--roi-inset);padding:7px;border-radius:6px;border:1px solid var(--roi-edge);max-height:190px;overflow:auto;font-size:11px;">尚無撿取紀錄...</div>
         </div>
         <div class="ro-pane" id="pane-cfg">
           <div data-roi-browser-menu hidden style="margin-bottom:8px;"></div>
@@ -4870,13 +4894,13 @@
             <label><input type="checkbox" id="c-rare-sync"> 隨地圖同步必撿稀有掉落</label>
             <label title="請先開啟該角色的道具與補給"><input type="checkbox" id="c-loot-sync"> 本角隨地圖自動設定戰利品（道具與補給開啟時）</label>
           </fieldset>
-          <div id="c-settings-status" role="status" style="color:#fde047;"></div>
-          <div style="font-weight:bold;color:#fbbf24;margin-bottom:4px;">🔒 自訂倉庫貴重保護詞 (由你決定)</div>
-          <textarea id="i-words" rows="2" placeholder="例：布里刊, 亡者遺物, 神之金屬, 鋁" style="width:100%;box-sizing:border-box;background:#090d16;color:#fde047;border:1px solid #475569;border-radius:6px;padding:6px;font-size:11.5px;user-select:text;"></textarea>
-          <button id="b-save-words" style="width:100%;margin:6px 0 8px;background:linear-gradient(135deg,#16a34a,#15803d);color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">💾 儲存自訂貴重詞並套用至倉庫</button>
+          <div id="c-settings-status" role="status" style="color:var(--roi-warning);"></div>
+          <div style="font-weight:bold;color:var(--roi-warning);margin-bottom:4px;">🔒 自訂倉庫貴重保護詞 (由你決定)</div>
+          <textarea id="i-words" rows="2" placeholder="例：布里刊, 亡者遺物, 神之金屬, 鋁" style="width:100%;box-sizing:border-box;background:var(--roi-inset);color:var(--roi-warning);border:1px solid var(--roi-edge);border-radius:6px;padding:6px;font-size:11.5px;user-select:text;"></textarea>
+          <button id="b-save-words" style="width:100%;margin:6px 0 8px;background:linear-gradient(135deg,#16763a,#136039);color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">💾 儲存自訂貴重詞並套用至倉庫</button>
           <div style="display:flex;gap:6px;">
-            <button id="b-exp-json" style="flex:1;background:linear-gradient(135deg,#0284c7,#0369a1);color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">📤 匯出備份</button>
-            <button id="b-imp-json" style="flex:1;background:#334155;color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">📥 匯入還原</button>
+            <button id="b-exp-json" style="flex:1;background:linear-gradient(135deg,#0369a1,#075581);color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">📤 匯出備份</button>
+            <button id="b-imp-json" style="flex:1;background:var(--roi-selected);color:var(--roi-text);border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">📥 匯入還原</button>
             <input type="file" id="i-imp-file" accept=".json" style="display:none;">
           </div>
         </div>
@@ -4893,7 +4917,7 @@
       const menu = document.getElementById('mgm-userscript-menu');
       const slot = hud.querySelector('[data-roi-browser-menu]');
       if (!menu || menu.parentElement === slot) return Boolean(menu);
-      menu.style.cssText = 'position:relative;top:auto;right:auto;z-index:2;font:12px system-ui;color:#eee;';
+      menu.style.cssText = 'position:relative;top:auto;right:auto;z-index:2;font:12px system-ui;color:var(--roi-text);';
       slot.append(menu);
       slot.hidden = false;
       return true;
@@ -5173,8 +5197,8 @@
 
     const bPause = document.getElementById('b-pause');
     bPause.onclick = () => {
-      if (!state.paused) { state.accMs += Date.now() - state.lastResumed; state.paused = true; bPause.textContent = '▶️ 繼續監測'; bPause.style.background = 'linear-gradient(135deg,#16a34a,#15803d)'; }
-      else { state.lastResumed = Date.now(); state.paused = false; bPause.textContent = '⏸️ 暫停監測'; bPause.style.background = 'linear-gradient(135deg,#d97706,#b45309)'; }
+      if (!state.paused) { state.accMs += Date.now() - state.lastResumed; state.paused = true; bPause.textContent = '▶️ 繼續監測'; bPause.style.background = 'linear-gradient(135deg,#16763a,#136039)'; }
+      else { state.lastResumed = Date.now(); state.paused = false; bPause.textContent = '⏸️ 暫停監測'; bPause.style.background = 'linear-gradient(135deg,#a34f05,#854009)'; }
       combatHitMeter.interrupt(Date.now());
       updateHUD();
     };
@@ -5269,7 +5293,7 @@
       const lEntries = Object.entries(state.loot).sort((a, b) => b[1] - a[1]);
       if (lEntries.length) refs.llist.replaceChildren(...lEntries.map(([name, qty]) => {
         const row = element('div', null, 'display:flex;justify-content:space-between;border-bottom:1px dashed #334155;padding:3px 0;');
-        row.append(element('span', name), element('b', `×${qty}`, 'color:#4ade80'));
+        row.append(element('span', name), element('b', `×${qty}`, 'color:var(--roi-success)'));
         return row;
       }));
     }
@@ -5367,19 +5391,19 @@
       return;
     }
     box.replaceChildren(...shown.map((c) => {
-      const row = element('div', null, `display:flex;justify-content:space-between;align-items:center;background:rgba(30,41,59,0.8);padding:6px 10px;border-radius:6px;margin-bottom:5px;border-left:3px solid ${c.running ? '#22c55e' : '#ef4444'}`);
+      const row = element('div', null, `display:flex;justify-content:space-between;align-items:center;background:var(--roi-panel);padding:6px 10px;border-radius:6px;margin-bottom:5px;border-left:3px solid ${c.running ? '#22c55e' : '#ef4444'}`);
       const detail = element('div');
       const map = charMaps?.get(c.mapId)?.name || (Object.hasOwn(TOWN_NAMES, c.mapId) && TOWN_NAMES[c.mapId]) || c.mapId || '—';
       const zeny = balance(c.id);
-      const summary = element('div', `📍 ${map} ｜ 💰 ${zeny === null ? '待同步' : zeny.toLocaleString('zh-TW') + ' Z'}`, 'font-size:11px;color:#93c5fd;margin-top:2px');
+      const summary = element('div', `📍 ${map} ｜ 💰 ${zeny === null ? '待同步' : zeny.toLocaleString('zh-TW') + ' Z'}`, 'font-size:11px;color:var(--roi-info);margin-top:2px');
       if (c.mapId && c.mapId !== map) summary.title = c.mapId;
-      detail.append(element('b', c.name), element('small', ` (Lv.${c.baseLv}/${c.jobLv})`, 'color:#94a3b8'), summary);
+      detail.append(element('b', c.name), element('small', ` (Lv.${c.baseLv}/${c.jobLv})`, 'color:var(--roi-muted)'), summary);
       const alert = state.charAlerts[c.id];
       if (alert) {
-        detail.append(element('small', '⚠ ' + alert.reason, 'color:#f87171'));
+        detail.append(element('small', '⚠ ' + alert.reason, 'color:var(--roi-danger)'));
         if (alert.reason !== '已停止掛機') row.onclick = () => clearTransientCharAlerts(c.id);
       }
-      row.append(detail, element('b', c.running ? '🟢掛機' : '🔴停止', `color:${c.running ? '#4ade80' : '#f87171'}`));
+      row.append(detail, element('b', c.running ? '🟢掛機' : '🔴停止', `color:${c.running ? 'var(--roi-success)' : 'var(--roi-danger)'}`));
       return row;
     }));
   }
@@ -5705,14 +5729,14 @@
     return new Promise((resolve) => {
       const dlg = document.createElement('dialog');
       dlg.dataset.roiPartyMoveDialog = '';
-      dlg.style.cssText = 'width:min(560px,calc(100vw - 24px));max-height:80vh;padding:16px 18px;background:rgba(15,23,42,0.98);color:#f8fafc;border:1.5px solid #38bdf8;border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,0.92);font-size:13px;';
-      dlg.append(element('div', `🚩 全隊移到 ${mapLabel(plan.target)}`, 'font-weight:bold;font-size:15px;color:#7dd3fc;border-bottom:1px solid #334155;padding-bottom:8px;margin-bottom:8px;'));
-      const list = element('div', null, 'max-height:46vh;overflow:auto;margin-bottom:10px;border:1px solid #334155;border-radius:6px;padding:6px 10px;background:#090d16;');
+      dlg.style.cssText = 'width:min(560px,calc(100vw - 24px));max-height:80vh;padding:16px 18px;background:var(--roi-surface);color:var(--roi-text);border:1.5px solid #38bdf8;border-radius:12px;box-shadow:0 16px 48px var(--roi-shadow);font-size:13px;';
+      dlg.append(element('div', `🚩 全隊移到 ${mapLabel(plan.target)}`, 'font-weight:bold;font-size:15px;color:var(--roi-info);border-bottom:1px solid var(--roi-edge);padding-bottom:8px;margin-bottom:8px;'));
+      const list = element('div', null, 'max-height:46vh;overflow:auto;margin-bottom:10px;border:1px solid var(--roi-edge);border-radius:6px;padding:6px 10px;background:var(--roi-inset);');
       for (const r of plan.rows) {
-        const row = element('div', null, 'display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px dashed #1e293b');
+        const row = element('div', null, 'display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px dashed var(--roi-edge)');
         const who = `${r.name}${r.self ? '（你）' : ''}${r.baseLv ? ` Lv${r.baseLv}` : ''}`;
         const st = !r.ours ? '非本帳號，不動' : r.vending ? '擺攤中，不動' : r.running ? '掛機中 → 停止後移動' : '停止 → 移動';
-        row.append(element('span', who), element('span', `${mapLabel(r.mapId)} → ${r.move ? mapLabel(plan.target) : '—'}`, 'color:#cbd5e1'), element('b', st, `color:${r.move ? '#4ade80' : '#94a3b8'};white-space:nowrap`));
+        row.append(element('span', who), element('span', `${mapLabel(r.mapId)} → ${r.move ? mapLabel(plan.target) : '—'}`, 'color:var(--roi-text)'), element('b', st, `color:${r.move ? 'var(--roi-success)' : 'var(--roi-muted)'};white-space:nowrap`));
         list.append(row);
       }
       dlg.append(list);
@@ -5721,7 +5745,7 @@
         needApply && rare && (rare.added || rare.removed) ? `必撿稀有掉落已隨地圖同步更新（新增 ${rare.added}、取消 ${rare.removed} 項），會和地圖一起套用。` : '',
         plan.stopIds.length ? '「停止」要等那一場打完才生效，可能要等幾十秒到幾分鐘，過程中可以取消。' : '',
       ].filter(Boolean).join(' ');
-      if (notes) dlg.append(element('div', notes, 'font-size:12px;color:#cbd5e1;margin-bottom:8px;'));
+      if (notes) dlg.append(element('div', notes, 'font-size:12px;color:var(--roi-text);margin-bottom:8px;'));
       const startLabel = element('label', ' 完成後全部開始掛機', 'display:flex;gap:4px;align-items:center;font-size:12px;margin-bottom:10px;');
       const startBox = element('input'); startBox.type = 'checkbox'; startBox.checked = true; startLabel.prepend(startBox);
       dlg.append(startLabel);
@@ -5805,7 +5829,7 @@
       const btn = element('button', '🚩 全隊移到此地圖'); btn.type = 'button'; btn.className = 'xp-btn small'; btn.dataset.roiPartyMove = '';
       btn.title = '把同隊的自己角色停止、換到這張地圖，再一起開始掛機';
       const stop = element('button', '取消'); stop.type = 'button'; stop.className = 'xp-btn small'; stop.dataset.roiPartyMoveCancel = ''; stop.hidden = true;
-      const status = element('span', null, 'color:#38bdf8'); status.dataset.roiPartyMoveStatus = '';
+      const status = element('span', null, 'color:var(--roi-info)'); status.dataset.roiPartyMoveStatus = '';
       const out = element('div', null, 'flex-basis:100%;font-size:11.5px;line-height:1.5'); out.dataset.roiPartyMoveResult = '';
       btn.onclick = () => { void startPartyMove(bar); };
       stop.onclick = () => { partyMoveActive?.cancel(); };
@@ -6059,9 +6083,9 @@
       }
       #roi-helper-mvp-open:hover,
       #roi-helper-mvp-open[aria-expanded="true"] {
-        border-bottom-color: #fbbf24;
-        color: #fbbf24;
-        background: rgba(30, 41, 59, 0.9);
+        border-bottom-color: var(--roi-warning);
+        color: var(--roi-warning);
+        background: var(--roi-panel);
       }
       #roi-helper-mvp-open .badge {
         display: inline-flex;
@@ -6090,23 +6114,22 @@
         max-height: 84vh;
         max-height: 84dvh;
         padding: 0;
-        background: linear-gradient(165deg, rgba(15, 23, 42, 0.97), rgba(9, 13, 22, 0.99));
+        background: var(--roi-surface);
         backdrop-filter: blur(12px);
-        color: #edf1f7;
-        border: 1.5px solid rgba(56, 189, 248, 0.72);
+        color: var(--roi-text);
+        border: 1.5px solid var(--roi-frame);
         border-radius: 12px;
-        box-shadow: 0 20px 64px rgba(0, 0, 0, 0.9), 0 0 18px rgba(56, 189, 248, 0.14);
+        box-shadow: 0 20px 64px var(--roi-shadow);
         font: 13.5px/1.45 system-ui, -apple-system, "Microsoft JhengHei", sans-serif;
-        color-scheme: dark;
         overflow: hidden;
       }
       #roi-helper-mvp-panel:not([open]) { display: none; }
       #roi-helper-mvp-panel[open] { display: flex; flex-direction: column; }
 
       #roi-helper-mvp-panel button {
-        border: 1px solid #485b73;
-        background: #223146;
-        color: #eef3fa;
+        border: 1px solid var(--roi-edge);
+        background: var(--roi-panel);
+        color: var(--roi-text);
         border-radius: 7px;
         padding: 6px 12px;
         font: inherit;
@@ -6114,7 +6137,7 @@
         transition: background .15s ease, border-color .15s ease, color .15s ease;
       }
       #roi-helper-mvp-panel button:hover {
-        background: #2b3e57;
+        background: var(--roi-selected);
         border-color: #6b84a3;
       }
       #roi-helper-mvp-panel button:focus-visible,
@@ -6130,9 +6153,9 @@
         justify-content: space-between;
         gap: 12px;
         padding: 11px 16px;
-        background: linear-gradient(90deg, #1e293b, #0f172a);
+        background: var(--roi-title);
         border-top: 2px solid #fbbf24;
-        border-bottom: 1px solid #334155;
+        border-bottom: 1px solid var(--roi-edge);
       }
       #roi-helper-mvp-panel .title-wrap {
         display: flex;
@@ -6147,7 +6170,7 @@
       }
       #roi-helper-mvp-panel h2 {
         margin: 0;
-        color: #38bdf8;
+        color: var(--roi-info);
         font-size: 16.5px;
         font-weight: 750;
         letter-spacing: .02em;
@@ -6161,11 +6184,11 @@
       #roi-helper-mvp-panel .btn-ghost {
         background: transparent;
         border-color: #3d4f66;
-        color: #c2d0e2;
+        color: var(--roi-muted);
       }
       #roi-helper-mvp-panel .btn-ghost:hover {
-        background: #223146;
-        color: #fff;
+        background: var(--roi-panel);
+        color: var(--roi-text);
       }
 
       #roi-helper-mvp-panel .toolbar {
@@ -6175,8 +6198,8 @@
         justify-content: space-between;
         gap: 10px;
         padding: 9px 16px;
-        background: rgba(15, 23, 42, 0.85);
-        border-bottom: 1px solid #263549;
+        background: var(--roi-panel);
+        border-bottom: 1px solid var(--roi-edge);
       }
       #roi-helper-mvp-panel .filters {
         display: flex;
@@ -6189,33 +6212,33 @@
         gap: 6px;
         padding: 4px 10px;
         border-radius: 999px;
-        border: 1px solid #384960;
-        background: #1b283b;
-        color: #b7c6da;
+        border: 1px solid var(--roi-edge);
+        background: var(--roi-panel);
+        color: var(--roi-muted);
         font-size: 12.5px;
         font-weight: 500;
       }
       #roi-helper-mvp-panel .filter-chip:hover {
         border-color: #5a7291;
-        color: #fff;
+        color: var(--roi-text);
       }
       #roi-helper-mvp-panel .filter-chip[aria-pressed="true"] {
-        background: #2b415e;
+        background: var(--roi-selected);
         border-color: #82a6d1;
-        color: #fff;
+        color: var(--roi-text);
         font-weight: 650;
       }
       #roi-helper-mvp-panel .filter-chip .count {
         padding: 0 5px;
         border-radius: 999px;
-        background: #0f1724;
-        color: #9fb3cc;
+        background: var(--roi-surface);
+        color: var(--roi-muted);
         font-size: 11px;
         font-variant-numeric: tabular-nums;
       }
       #roi-helper-mvp-panel .filter-chip[aria-pressed="true"] .count {
-        background: #17263a;
-        color: #ffd894;
+        background: var(--roi-panel);
+        color: var(--roi-warning);
       }
 
       #roi-helper-mvp-panel .search-wrap {
@@ -6227,14 +6250,14 @@
         width: 100%;
         box-sizing: border-box;
         padding: 5px 28px 5px 10px;
-        border: 1px solid #3c4e66;
+        border: 1px solid var(--roi-edge);
         border-radius: 7px;
-        background: #090d16;
-        color: #eef3fa;
+        background: var(--roi-surface);
+        color: var(--roi-text);
         font: inherit;
         font-size: 13px;
       }
-      #roi-helper-mvp-panel .search-input::placeholder { color: #7588a3; }
+      #roi-helper-mvp-panel .search-input::placeholder { color: var(--roi-muted); }
       #roi-helper-mvp-panel .search-clear {
         position: absolute;
         right: 4px;
@@ -6243,16 +6266,16 @@
         padding: 1px 6px;
         border: none;
         background: transparent;
-        color: #8ca0bc;
+        color: var(--roi-muted);
         font-size: 14px;
         line-height: 1;
       }
       #roi-helper-mvp-panel .search-clear:hover {
         background: transparent;
-        color: #fff;
+        color: var(--roi-text);
       }
 
-      #roi-helper-mvp-panel small { color: #a9b9ce; font-size: 12px; }
+      #roi-helper-mvp-panel small { color: var(--roi-muted); font-size: 12px; }
 
       #roi-helper-mvp-panel main {
         padding: 14px 16px;
@@ -6266,15 +6289,15 @@
         margin: 0;
         padding: 8px 12px;
         border-radius: 8px;
-        background: rgba(30, 41, 59, 0.75);
-        border: 1px solid #344761;
-        color: #c8d7ea;
+        background: var(--roi-panel);
+        border: 1px solid var(--roi-edge);
+        color: var(--roi-text);
         font-size: 12.5px;
       }
       #roi-helper-mvp-panel .notice-bar.warn {
-        background: #2d2118;
+        background: var(--roi-inset);
         border-color: #7c5330;
-        color: #fbd3a8;
+        color: var(--roi-warning);
       }
 
       #roi-helper-mvp-panel .group-section {
@@ -6287,8 +6310,8 @@
         align-items: center;
         gap: 8px;
         padding-bottom: 4px;
-        border-bottom: 1px solid #263549;
-        color: #cddbf0;
+        border-bottom: 1px solid var(--roi-edge);
+        color: var(--roi-text);
         font-size: 13px;
         font-weight: 700;
         letter-spacing: .03em;
@@ -6304,7 +6327,7 @@
       #roi-helper-mvp-panel .group-dot.passed { background: #34d399; }
       #roi-helper-mvp-panel .group-dot.unknown { background: #64748b; }
       #roi-helper-mvp-panel .group-count {
-        color: #889cb8;
+        color: var(--roi-muted);
         font-size: 12px;
         font-weight: 500;
       }
@@ -6323,7 +6346,7 @@
         justify-content: space-between;
         gap: 10px;
         padding: 11px 12px 11px 14px;
-        background: rgba(30, 41, 59, 0.72);
+        background: var(--roi-panel);
         border: 1px solid rgba(71, 85, 105, 0.65);
         border-left-width: 4px;
         border-radius: 10px;
@@ -6334,7 +6357,7 @@
       }
       #roi-helper-mvp-panel article.mvp-card[data-state="window"] {
         border-left-color: #f59e0b;
-        background: linear-gradient(145deg, rgba(66, 44, 16, 0.55), rgba(30, 41, 59, 0.78));
+        background: var(--roi-panel);
       }
       #roi-helper-mvp-panel article.mvp-card[data-state="upcoming"] {
         border-left-color: #60a5fa;
@@ -6357,9 +6380,9 @@
         height: 64px;
         display: grid;
         place-items: center;
-        border: 1px solid #3c4f66;
+        border: 1px solid var(--roi-edge);
         border-radius: 8px;
-        background: radial-gradient(circle at 50% 45%, #37485d, #090d16 82%);
+        background: var(--roi-panel);
         overflow: hidden;
       }
       #roi-helper-mvp-panel canvas {
@@ -6368,7 +6391,7 @@
         image-rendering: pixelated;
       }
       #roi-helper-mvp-panel .no-portrait {
-        color: #7d90aa;
+        color: var(--roi-muted);
         font-size: 11px;
       }
       #roi-helper-mvp-panel .boss-info {
@@ -6386,7 +6409,7 @@
       }
       #roi-helper-mvp-panel h3 {
         margin: 0;
-        color: #fff;
+        color: var(--roi-text);
         font-size: 16px;
         font-weight: 700;
         letter-spacing: .02em;
@@ -6401,39 +6424,39 @@
         font-size: 11.5px;
         font-weight: 650;
         font-variant-numeric: tabular-nums;
-        background: #243347;
-        color: #b7c8de;
-        border: 1px solid #394d68;
+        background: var(--roi-panel);
+        color: var(--roi-muted);
+        border: 1px solid var(--roi-edge);
       }
       #roi-helper-mvp-panel .status-pill[data-state="window"] {
-        background: #422c10;
+        background: var(--roi-inset);
         border-color: #b46914;
-        color: #ffd584;
+        color: var(--roi-warning);
       }
       #roi-helper-mvp-panel .status-pill[data-state="upcoming"] {
-        background: #172e4c;
+        background: var(--roi-inset);
         border-color: #2f629e;
-        color: #9ecbff;
+        color: var(--roi-info);
       }
       #roi-helper-mvp-panel .status-pill[data-state="passed"] {
-        background: #13352c;
+        background: var(--roi-inset);
         border-color: #256e59;
-        color: #8ce9c3;
+        color: var(--roi-success);
       }
 
       #roi-helper-mvp-panel .kill-meta {
         display: flex;
         align-items: center;
         gap: 6px;
-        color: #9eb0c7;
+        color: var(--roi-muted);
         font-size: 12px;
         font-variant-numeric: tabular-nums;
       }
       #roi-helper-mvp-panel .source-tag {
         padding: 0 5px;
         border-radius: 4px;
-        background: #233348;
-        color: #9ec3e6;
+        background: var(--roi-panel);
+        color: var(--roi-info);
         font-size: 11px;
       }
 
@@ -6442,10 +6465,10 @@
         flex-direction: column;
         gap: 7px;
         padding-top: 8px;
-        border-top: 1px solid #29384d;
+        border-top: 1px solid var(--roi-edge);
       }
       #roi-helper-mvp-panel .multi-map-hint {
-        color: #9fb2ca;
+        color: var(--roi-muted);
         font-size: 11.5px;
       }
       #roi-helper-mvp-panel .map-row {
@@ -6454,8 +6477,8 @@
         gap: 5px;
         padding: 7px 9px;
         border-radius: 7px;
-        background: rgba(9, 13, 22, 0.72);
-        border: 1px solid #263549;
+        background: var(--roi-panel);
+        border: 1px solid var(--roi-edge);
       }
       #roi-helper-mvp-panel .map-top {
         display: flex;
@@ -6468,26 +6491,26 @@
         align-items: center;
         gap: 5px;
         padding: 4px 9px;
-        background: #21364c;
+        background: var(--roi-panel);
         border-color: #395878;
-        color: #dceeff;
+        color: var(--roi-text);
         font-size: 12.5px;
         font-weight: 600;
         text-align: left;
       }
       #roi-helper-mvp-panel .map-btn:hover {
-        background: #2a4663;
+        background: var(--roi-selected);
         border-color: #5b87b5;
-        color: #fff;
+        color: var(--roi-text);
       }
       #roi-helper-mvp-panel .map-btn::after {
         content: '前往 ›';
-        color: #8cc5ea;
+        color: var(--roi-info);
         font-size: 11.5px;
         font-weight: 500;
       }
       #roi-helper-mvp-panel .interval-tag {
-        color: #8da1bc;
+        color: var(--roi-muted);
         font-size: 11.5px;
         white-space: nowrap;
         font-variant-numeric: tabular-nums;
@@ -6500,18 +6523,18 @@
         font-size: 12.5px;
       }
       #roi-helper-mvp-panel .window-label {
-        color: #93a7c2;
+        color: var(--roi-muted);
         font-size: 11.5px;
       }
       #roi-helper-mvp-panel .time {
-        color: #ffdc9c;
+        color: var(--roi-warning);
         font-weight: 650;
         font-variant-numeric: tabular-nums;
       }
       #roi-helper-mvp-panel .progress-track {
         height: 3px;
         border-radius: 999px;
-        background: #223044;
+        background: var(--roi-panel);
         overflow: hidden;
       }
       #roi-helper-mvp-panel .progress-fill {
@@ -6525,8 +6548,8 @@
       #roi-helper-mvp-panel .empty-state {
         padding: 28px 16px;
         text-align: center;
-        color: #92a5bf;
-        background: #162131;
+        color: var(--roi-muted);
+        background: var(--roi-panel);
         border: 1px dashed #32445c;
         border-radius: 10px;
       }
@@ -6537,8 +6560,8 @@
         justify-content: space-between;
         gap: 12px;
         padding: 9px 16px;
-        background: rgba(15, 23, 42, 0.9);
-        border-top: 1px solid #2b3a4f;
+        background: var(--roi-panel);
+        border-top: 1px solid var(--roi-edge);
       }
 
       @media (max-width: 560px) {
