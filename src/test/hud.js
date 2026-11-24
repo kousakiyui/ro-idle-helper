@@ -8,6 +8,7 @@
     const pane = document.querySelector('#pane-cfg.active');
     if (!pane) return;
     for (const input of pane.querySelectorAll('[data-ro-pref]')) input.checked = state[input.dataset.roPref];
+    for (const input of pane.querySelectorAll('[data-ro-metric-pref]')) input.checked = state.hudMetrics.includes(input.dataset.roMetricPref);
     pane.querySelector('#c-price-lock').checked = priceOptions.enabled;
     const priceThreshold = pane.querySelector('#c-price-threshold');
     if (priceThreshold && priceThreshold !== document.activeElement && priceThreshold.value !== String(priceOptions.threshold)) {
@@ -119,7 +120,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#0f172a,#1e293b);border:2px solid #38bdf8;color:#38bdf8;align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px rgba(0,0,0,0.85);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(90deg,#1e293b,#0f172a);border-bottom:1px solid #334155;font-weight:bold;color:#38bdf8;cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.5.1 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.6.1 測試版</span>
           <button id="ro-min-btn" style="background:#334155;color:#fff;border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:#090d16;border-bottom:1px solid #1e293b;">
@@ -135,14 +136,10 @@
             <span id="u-time" style="color:#4ade80;font-weight:bold;font-variant-numeric:tabular-nums;">⏱️ 00:00</span>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:7px;">
-            <div class="ro-box"><small style="color:#94a3b8;">Base EXP/h</small><div id="u-bexp" style="font-size:13.5px;font-weight:bold;color:#facc15;margin-top:2px;">0</div></div>
-            <div class="ro-box"><small style="color:#94a3b8;">Job EXP/h</small><div id="u-jexp" style="font-size:13.5px;font-weight:bold;color:#38bdf8;margin-top:2px;">0</div></div>
-            <div class="ro-box"><small style="color:#94a3b8;">擊殺 (累計)</small><div id="u-kph" style="font-size:13.5px;font-weight:bold;color:#4ade80;margin-top:2px;">0/h (0)</div></div>
-            <div class="ro-box"><small style="color:#94a3b8;">均傷 / 最高</small><div id="u-dmg" style="font-size:13.5px;font-weight:bold;color:#f472b6;margin-top:2px;">0 / 0</div></div>
-          </div>
-          <div class="ro-box" style="margin-bottom:7px;display:flex;justify-content:space-between;align-items:center;">
-            <div><small style="color:#94a3b8;">隨身 Zeny (本角淨變動)</small><div id="u-zeny" style="font-weight:bold;color:#facc15;font-size:13px;margin-top:2px;">0 Z (+0)</div></div>
-            <div style="text-align:right;"><small style="color:#94a3b8;">漏撿</small><div id="u-miss" style="font-weight:bold;color:#f87171;font-size:13px;margin-top:2px;">0</div></div>
+            ${Object.entries(hudMetricLabels).map(([key, label]) => `<div class="ro-box" data-roi-metric="${key}" ${state.hudMetrics.includes(key) ? '' : 'hidden'}>
+              <small style="color:#94a3b8;" ${key === 'dmg' ? 'title="本角色在監測期間的輸出 ÷ 未暫停秒數，包含待機時間"' : ''}>${label}</small>
+              <div id="u-${key}" style="font-size:13.5px;font-weight:bold;color:${key === 'dmg' ? '#f472b6' : '#93c5fd'};margin-top:2px;">0</div>
+            </div>`).join('')}
           </div>
           <div style="display:flex;gap:6px;">
             <button id="b-pause" style="flex:1;background:linear-gradient(135deg,#d97706,#b45309);color:#fff;border:none;padding:6px;border-radius:6px;cursor:pointer;font-weight:bold;">⏸️ 暫停監測</button>
@@ -156,6 +153,13 @@
           <div id="u-clist">同步中...</div>
         </div>
         <div class="ro-pane" id="pane-lot">
+          <fieldset class="ro-box">
+            <legend>MVP 紀錄（本次開頁）</legend>
+            <label>查看首領 <select id="u-mvp-boss" class="xp-input"><option value="">全部 MVP</option></select></label>
+            <div id="u-mvp-combat"></div>
+            <details open><summary>MVP 戰鬥結果</summary><div id="u-mvp-battles" style="max-height:135px;overflow:auto;"></div></details>
+            <details open><summary>MVP 掉落與獎勵</summary><div id="u-mvp-loot" style="max-height:135px;overflow:auto;"></div></details>
+          </fieldset>
           <div id="u-rlist" style="background:#090d16;padding:7px;border-radius:6px;border:1px solid #1e293b;margin-bottom:7px;max-height:75px;overflow:auto;color:#fde047;font-size:11px;">尚無稀有掉落...</div>
           <div id="u-llist" style="background:#090d16;padding:7px;border-radius:6px;border:1px solid #1e293b;max-height:190px;overflow:auto;font-size:11px;">尚無撿取紀錄...</div>
         </div>
@@ -167,6 +171,10 @@
             <label><input type="checkbox" data-ro-pref="moneyColor"> 金額分色</label>
             <label><input type="checkbox" data-ro-pref="sound"> 音效</label>
             <label><input type="checkbox" data-ro-pref="notify"> 桌面通知</label>
+          </fieldset>
+          <fieldset class="ro-box"><legend>效率儀表盤欄位</legend>
+            ${Object.entries(hudMetricLabels).map(([key, label]) =>
+              `<label><input type="checkbox" data-ro-metric-pref="${key}"> ${label}</label>`).join('')}
           </fieldset>
           <fieldset class="ro-box"><legend>倉庫</legend>
             <label><input type="checkbox" data-ro-pref="whProtectPins"> 清倉排除自選（★）</label>
@@ -341,10 +349,21 @@
       hud.querySelectorAll('.ro-tab,.ro-pane').forEach((x) => x.classList.remove('active'));
       t.classList.add('active'); document.getElementById('pane-' + t.dataset.t).classList.add('active');
       if (t.dataset.t === 'cfg') syncHudSettings();
+      if (t.dataset.t === 'lot') renderMvpHistory();
     });
 
     const settings = hud.querySelector('#pane-cfg');
     const settingsStatus = settings.querySelector('#c-settings-status');
+    const bossFilter = hud.querySelector('#u-mvp-boss');
+    bossFilter.onchange = () => renderMvpHistory(true);
+    for (const input of settings.querySelectorAll('[data-ro-metric-pref]')) {
+      input.onchange = () => {
+        const key = input.dataset.roMetricPref;
+        state.hudMetrics = input.checked ? [...new Set([...state.hudMetrics, key])] : state.hudMetrics.filter(value => value !== key);
+        savePrefs();
+        updateHUD();
+      };
+    }
     for (const input of settings.querySelectorAll('[data-ro-pref]')) {
       input.onchange = () => {
         const key = input.dataset.roPref;
@@ -446,8 +465,8 @@
       updateHUD();
     };
     document.getElementById('b-reset').onclick = () => {
-      state.accMs = 0; state.lastResumed = Date.now(); state.kills = 0; state.bexp = 0; state.jexp = 0; state.dmgSum = 0; state.hits = 0; state.maxDmg = 0; state.missed = 0;
-      state.loot = {}; state.lootRev++; state.renderedLootRev = -1;
+      state.accMs = 0; state.lastResumed = Date.now(); state.kills = 0; state.bexp = 0; state.jexp = 0; state.dmgSum = 0; state.hits = 0; state.maxDmg = 0; state.damageTaken = 0; state.damageStartMs = 0; state.pickupQty = 0; state.missed = 0;
+      state.loot = Object.create(null); state.lootRev++; state.renderedLootRev = -1;
       if (state.activeCharId) state.initZenyMap[state.activeCharId] = state.curZeny;
       document.getElementById('u-llist').innerHTML = '尚無撿取紀錄...';
       updateHUD();
@@ -466,6 +485,12 @@
       jexp: document.getElementById('u-jexp'),
       kph: document.getElementById('u-kph'),
       dmg: document.getElementById('u-dmg'),
+      total: document.getElementById('u-total'),
+      peak: document.getElementById('u-peak'),
+      hits: document.getElementById('u-hits'),
+      hitRate: document.getElementById('u-hitRate'),
+      taken: document.getElementById('u-taken'),
+      pickups: document.getElementById('u-pickups'),
       zeny: document.getElementById('u-zeny'),
       miss: document.getElementById('u-miss'),
       llist: document.getElementById('u-llist'),
@@ -480,13 +505,28 @@
     syncHudSettings();
     const refs = getHudRefs();
     if (!refs) return;
-    const sec = Math.max(1, Math.floor((state.accMs + (state.paused ? 0 : Date.now() - state.lastResumed)) / 1000)), hrs = sec / 3600;
+    const monitoredMs = state.accMs + (state.paused ? 0 : Date.now() - state.lastResumed);
+    const sec = Math.max(1, Math.floor(monitoredMs / 1000)), hrs = sec / 3600;
+    if (refs.metrics !== state.hudMetrics) {
+      for (const box of document.querySelectorAll('#pane-tel [data-roi-metric]')) {
+        box.hidden = !state.hudMetrics.includes(box.dataset.roiMetric);
+      }
+      refs.metrics = state.hudMetrics;
+    }
     refs.name.textContent = state.activeCharName;
     refs.time.textContent = `${state.paused ? '⏸️ ' : '⏱️ '}${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
     refs.bexp.textContent = fmt(state.bexp / hrs);
     refs.jexp.textContent = fmt(state.jexp / hrs);
     refs.kph.textContent = `${Math.round(state.kills / hrs)}/h (${state.kills})`;
-    refs.dmg.textContent = `${fmt(state.hits ? state.dmgSum / state.hits : 0)} / ${fmt(state.maxDmg)}`;
+    const damageSeconds = Math.max(1, (monitoredMs - state.damageStartMs) / 1000);
+    refs.dmg.textContent = fmt(state.dmgSum / damageSeconds);
+    refs.total.textContent = fmt(state.dmgSum);
+    refs.peak.textContent = fmt(state.maxDmg);
+    refs.hits.textContent = fmt(state.hits);
+    refs.hitRate.textContent = (state.hits / damageSeconds).toLocaleString('zh-TW', { maximumFractionDigits: 2 }) + ' 次/秒';
+    refs.taken.textContent = fmt(state.damageTaken);
+    refs.pickups.textContent = fmt(state.pickupQty);
+    renderMvpHistory();
     const initZ = state.initZenyMap[state.activeCharId] ?? state.curZeny, diff = state.curZeny - initZ;
     refs.zeny.textContent = `${state.curZeny.toLocaleString()} Z (${diff >= 0 ? '+' : ''}${diff.toLocaleString()})`;
     refs.miss.textContent = `${state.missed} 次`;
@@ -509,6 +549,41 @@
       while (list.children.length > rareLimit) list.lastElementChild.remove();
       list.dataset.rev = state.rareRev;
     }
+  }
+
+  function renderMvpHistory(force = false) {
+    const pane = document.querySelector('#pane-lot.active');
+    if (!pane) return;
+    const filter = pane.querySelector('#u-mvp-boss');
+    const actor = state.activeCharId;
+    const history = mvpBattleHistory.get(actor);
+    const key = `${actor}/${history?.rev ?? 0}`;
+    if (!force && filter.dataset.roiHistoryKey === key) return;
+    const entries = history?.entries ?? [];
+    const combat = history?.combat ?? new Map();
+    const selected = filter.dataset.roiActor === String(actor) ? filter.value : '';
+    if (filter.dataset.roiHistoryKey !== key) {
+      const bosses = [...new Set([...entries.map(entry => entry.boss), ...combat.keys()])].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+      const names = ['', ...bosses];
+      if (filter.options.length !== names.length || names.some((name, i) => filter.options[i]?.value !== name)) {
+        filter.replaceChildren(new Option('全部 MVP', ''), ...bosses.map(boss => new Option(boss, boss)));
+      }
+      filter.value = bosses.includes(selected) ? selected : '';
+      filter.dataset.roiActor = String(actor);
+      filter.dataset.roiHistoryKey = key;
+    }
+    const summaries = [...combat].filter(([boss]) => !filter.value || boss === filter.value);
+    const summary = pane.querySelector('#u-mvp-combat');
+    summary.replaceChildren(...summaries.map(([boss, stats]) => element('div',
+      `${boss} · 輸出 ${fmt(stats.damage)} · 傷害 ${fmt(stats.hits)} 次 · 承傷 ${fmt(stats.taken)}`)));
+    const shown = entries.filter(entry => !filter.value || entry.boss === filter.value);
+    const render = (id, rows, empty) => {
+      const target = pane.querySelector(id);
+      if (!rows.length) { target.textContent = empty; return; }
+      target.replaceChildren(...rows.map(entry => element('div', entry.text)));
+    };
+    render('#u-mvp-battles', shown.filter(entry => entry.kind === 'battle'), '尚無 MVP 戰鬥結果');
+    render('#u-mvp-loot', shown.filter(entry => entry.hasLoot), '尚無可辨識來源的 MVP 掉落');
   }
 
   function recordCharAlert(id, reason) {

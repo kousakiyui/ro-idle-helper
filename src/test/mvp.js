@@ -1323,5 +1323,6 @@
       const control = event.target.closest?.('button, [role="tab"], a');
       if (control && !control.closest('#ro-helper-hud') && !panel.contains(control) && /掛機設定|尋找怪物|切換角色|回城|地圖/.test(control.textContent)) captureBackground();
     }, true);
-    return { button: open, syncFromStats, refreshPreferences };
+    const knownBosses = new Set(Object.keys(schedules).map(clean));
+    return { button: open, syncFromStats, refreshPreferences, isKnownBoss: name => knownBosses.has(name) };
   }

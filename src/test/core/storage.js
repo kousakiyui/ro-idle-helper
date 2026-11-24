@@ -20,6 +20,13 @@
       checkDataTree(value[key], depth + 1, budget);
     }
   }
+  const hudMetricLabels = {
+    bexp: 'Base EXP/h', jexp: 'Job EXP/h', kph: '擊殺 (累計)', dmg: 'DPS',
+    zeny: '隨身 Zeny (本角淨變動)', miss: '漏撿', total: '總輸出', peak: '最高單次傷害',
+    hits: '傷害次數（累計）', hitRate: '每秒傷害次數', taken: '承受傷害', pickups: '一般撿取量'
+  };
+  const defaultHudMetrics = ['bexp', 'jexp', 'kph', 'dmg', 'zeny', 'miss'];
+
   function validatePrefs(value) {
     if (!isPlainRecord(value)) throw Error('偏好設定格式不符');
     const result = {};
@@ -27,6 +34,12 @@
       if (!Object.hasOwn(value, key)) continue;
       if (typeof value[key] !== 'boolean') throw Error('偏好設定的 ' + key + ' 必須是開關');
       result[key] = value[key];
+    }
+    if (Object.hasOwn(value, 'hudMetrics')) {
+      const metrics = value.hudMetrics;
+      if (!Array.isArray(metrics) || metrics.length > Object.keys(hudMetricLabels).length ||
+          metrics.some(key => typeof key !== 'string' || !Object.hasOwn(hudMetricLabels, key))) throw Error('儀表盤欄位不符');
+      result.hudMetrics = [...new Set(metrics)];
     }
     if (Object.hasOwn(value, 'hudPos')) {
       if (value.hudPos === null) result.hudPos = null;

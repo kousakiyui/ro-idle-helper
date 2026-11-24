@@ -8,7 +8,7 @@
     }
   }
 
-  document.querySelectorAll('.log-window .log-line').forEach(queueLogLine);
+  document.querySelectorAll('.log-window .log-line').forEach(line => queueLogLine(line, true));
   listenSharedSettings();
   if (canShareCharPoll()) listenRemote(charPollKey, validateCharPoll, applySharedCharPoll);
   window.addEventListener('focus', runPageRouter);

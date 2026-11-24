@@ -67,7 +67,11 @@
         const ch = d.snapshot.character;
         if (foreground) {
           if (state.activeCharId !== cid) {
-            if (state.activeCharId != null) clearQueuedCharacterLogs();
+            if (state.activeCharId != null) {
+              clearQueuedCharacterLogs();
+              state.dmgSum = state.hits = state.maxDmg = state.damageTaken = 0;
+              state.damageStartMs = state.accMs + (state.paused ? 0 : Date.now() - state.lastResumed);
+            }
             refineIdentityEpoch++;
             pageNet.events.dispatchEvent(new Event('ui-abort'));
             refSelected.clear();

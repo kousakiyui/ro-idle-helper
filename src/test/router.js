@@ -36,7 +36,7 @@
     renderChars();
   }
   function flushLogBatch(size) {
-    for (const text of logSnapshots.splice(0, size)) parseLog(text);
+    for (const { text, historical } of logSnapshots.splice(0, size)) parseLog(text, historical);
   }
   function scheduleLogBatch() {
     if (logTimer !== null || !logSnapshots.length) return;
@@ -46,11 +46,17 @@
       scheduleLogBatch();
     }, isActiveWindow() ? TIMING.activeLogFlush : TIMING.idleLogFlush);
   }
-  function queueLogLine(line) {
+  function queueLogLine(line, historical = false) {
     if (!line) return;
     const text = clean(line.textContent);
     if (!text || state.processedLines.get(line) === text) return;
     state.processedLines.set(line, text);
+    if (!historical) {
+      const gameLog = getReactFiber(line)?.return?.memoizedProps?.l;
+      const eventId = Number.isSafeInteger(gameLog?.id) && Number.isFinite(gameLog?.wall) && text.endsWith(clean(gameLog.text))
+        ? `${gameLog.wall}/${gameLog.id}` : null;
+      recordMvpLog(text, state.activeCharId, eventId);
+    }
     if (rxRareDrop.test(text)) {
       state.rares.unshift(`[${new Date().toLocaleTimeString()}] ✨ ${text}`);
       if (state.rares.length > rareLimit) state.rares.pop();
@@ -64,7 +70,7 @@
     }
     if (state.paused) return;
     if (logSnapshots.length >= 2000) flushLogBatch(document.hidden ? 800 : 200);
-    logSnapshots.push(text);
+    logSnapshots.push({ text, historical });
     scheduleLogBatch();
   }
   function clearQueuedCharacterLogs() {
@@ -120,13 +126,13 @@
         r.addedNodes.forEach((n) => {
           if (n.nodeType !== 1) return;
           if (n.matches?.('.log-line')) queueLogLine(n);
-          n.querySelectorAll?.('.log-line').forEach(queueLogLine);
+          n.querySelectorAll?.('.log-line').forEach(line => queueLogLine(line));
         });
         continue;
       }
       if (r.type === 'childList') r.addedNodes.forEach((n) => {
         if (n.nodeType !== 1) return;
-        n.querySelectorAll?.('.log-window .log-line').forEach(queueLogLine);
+        n.querySelectorAll?.('.log-window .log-line').forEach(line => queueLogLine(line));
       });
       // 純文字變動且不在需處理的容器內：改走慢速通道，避免倒數計時、HP 等文字每 160ms 觸發整頁路由。
       if (!el.closest(ROUTER_TEXT_SCOPE) && (r.type === 'characterData' ||

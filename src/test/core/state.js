@@ -6,8 +6,8 @@
     paused: false, accMs: 0, lastResumed: Date.now(),
     activeCharId: null, activeCharName: '讀取中...',
     initZenyMap: {}, curZeny: 0, chars: [], charZenyMap: {}, myCharIds: new Set(),
-    kills: 0, bexp: 0, jexp: 0, dmgSum: 0, hits: 0, maxDmg: 0,
-    loot: {}, lootRev: 0, renderedLootRev: -1,
+    kills: 0, bexp: 0, jexp: 0, dmgSum: 0, hits: 0, maxDmg: 0, damageTaken: 0, damageStartMs: 0, pickupQty: 0, hudMetrics: [...defaultHudMetrics],
+    loot: Object.create(null), lootRev: 0, renderedLootRev: -1,
     rares: [], rareRev: 0,
     missed: 0,
     sound: false, notify: false, moneyColor: true, itemHover: true, marketHover: true,
@@ -82,7 +82,7 @@
   }
 
   const prefKeys = ['sound', 'notify', 'moneyColor', 'itemHover', 'marketHover', 'whProtectPins', 'mvpMergeRoster', 'whProtect',
-    'whSaleReview', 'whAutoEquipCard', 'hudMin', 'hudPos', 'mktUpperFold'];
+    'whSaleReview', 'whAutoEquipCard', 'hudMin', 'hudPos', 'mktUpperFold', 'hudMetrics'];
   const prefValueSig = (value) => JSON.stringify(value ?? null);
   // 本頁最後一次與已存值同步時的各欄位；儲存時只寫入與此不同（本頁改過）的欄位。
   const prefsSynced = new Map(prefKeys.map((key) => [key, prefValueSig(state[key])]));
