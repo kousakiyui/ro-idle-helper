@@ -511,7 +511,7 @@
         color: var(--roi-text);
       }
       #roi-helper-mvp-panel .map-btn::after {
-        content: '全隊前往 ›';
+        content: '同帳號前往 ›';
         color: var(--roi-info);
         font-size: 11.5px;
         font-weight: 500;
@@ -699,7 +699,7 @@
     const footer = document.createElement('footer');
     footer.append(
       node('small', '台北時間 (UTC+8) · 點選視窗外畫面自動關閉'),
-      node('small', '點擊地圖讓同隊的本帳號角色全數前往')
+      node('small', '點擊地圖讓本帳號同隊角色前往，擺攤角色略過')
     );
 
     const portraits = new IntersectionObserver(entries => {
@@ -711,7 +711,7 @@
 
     const travelStatus = node('div');
     travelStatus.setAttribute('role', 'status');
-    const travelCancel = node('button', '取消全隊移動');
+    const travelCancel = node('button', '取消同帳號移動');
     travelCancel.type = 'button';
     travelCancel.hidden = true;
     const travelResults = node('div');
@@ -762,7 +762,7 @@
       if (navigating) return;
       navigating = true;
       travelResults.replaceChildren();
-      travelStatus.textContent = '全隊前往 ' + map + '…';
+      travelStatus.textContent = '同帳號前往 ' + map + '…';
       try {
         const result = await startMvpPartyMove(id, (message) => {
           travelStatus.textContent = map + ' · ' + message;
@@ -770,10 +770,10 @@
           travelCancel.hidden = !cancel;
           travelCancel.onclick = cancel;
         });
-        travelStatus.textContent = result.ok ? '全隊已抵達 ' + map + ' 並開始掛機' : '全隊移動未完成 · ' + map;
+        travelStatus.textContent = result.ok ? '同帳號隊員已抵達 ' + map + ' 並開始掛機' : '同帳號移動未完成 · ' + map;
         for (const line of result.lines) travelResults.append(node('div', line));
       } catch (error) {
-        travelStatus.textContent = '無法全隊移動 · ' + error.message;
+        travelStatus.textContent = '無法移動同帳號隊員 · ' + error.message;
       } finally { navigating = false; }
     }
 
@@ -1130,7 +1130,7 @@
             const top = node('div', null, 'map-top');
             const place = node('button', map, 'map-btn');
             place.type = 'button';
-            place.title = '全隊前往 ' + id;
+            place.title = '同帳號前往 ' + id;
             place.onclick = () => chooseMap(map, id);
 
             const intervalText = base == null
