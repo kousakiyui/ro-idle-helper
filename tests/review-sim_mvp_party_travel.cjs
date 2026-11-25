@@ -28,8 +28,12 @@ function fixture(options) {
     { id: 3, name: '隊員乙', mapId: 'pay_fild01', running: false }
   ];
   if (options.arrived) for (const player of players) { player.mapId = target; player.running = true; }
-  const own = () => players.filter(p => p.id !== (options.foreign ? 3 : 1))
-    .map(p => ({ id: p.id, partyId: 19, vending: options.vending && p.id === 3 }));
+  const foreignIds = new Set(options.onlySelf ? [2, 3] : options.foreign ? [3] : []);
+  const vendors = new Set(options.vending ? [3] : []);
+  for (const player of players) if (foreignIds.has(player.id) || vendors.has(player.id)) player.running = true;
+  const own = () => players.filter(p => p.id !== 1 && !foreignIds.has(p.id))
+    .map(p => ({ id: p.id, partyId: 19, vending: vendors.has(p.id) }));
+  const canMove = (id) => !foreignIds.has(id) && !vendors.has(id);
   const sent = [], ids = new Set(), pending = new Map();
   let inFlight = 0, cutoff;
   const res = (status, body) => ({ ok: status < 400, status, text: async () => JSON.stringify(body), json: async () => body });
@@ -44,7 +48,7 @@ function fixture(options) {
   let catchup = options.catchup ?? 0;
   w.fetch = async (url, init = {}) => {
     const path = new URL(String(url), w.location.href).pathname;
-    if (path === '/api/characters') return res(200, { characters: players.filter(p => !options.foreign || p.id !== 3) });
+    if (path === '/api/characters') return res(200, { characters: players.filter(p => !foreignIds.has(p.id)) });
     if (path === '/api/characters/1/party') {
       for (const [id, deadline] of pending) {
         if (Date.now() >= deadline) {
@@ -52,7 +56,7 @@ function fixture(options) {
           pending.delete(id);
         }
       }
-      const members = players.filter(p => !options.leftParty || sent.length === 0 || p.id !== 3);
+      const members = players.filter(p => !(options.leftParty || options.foreignLeaves) || sent.length === 0 || p.id !== 3);
       return res(200, { party: { id: 19, members }, own: own() });
     }
     const match = path.match(/^\/api\/characters\/(\d+)(\/commands)?$/);
@@ -60,7 +64,7 @@ function fixture(options) {
     const player = players.find(p => p.id === Number(match[1]));
     if (!match[2]) return res(200, { characterId: player.id, running: player.running, commandRevision, snapshot: { character: { name: player.name, zeny: 10 }, mapId: player.mapId, vend: false, config } });
     const { command, commandId, expectedCommandRevision } = JSON.parse(init.body);
-    checks.push(init.method === 'POST' && init.credentials === 'same-origin' && !ids.has(commandId));
+    checks.push(canMove(player.id) && init.method === 'POST' && init.credentials === 'same-origin' && !ids.has(commandId));
     ids.add(commandId);
     inFlight++;
     checks.push(inFlight === 1);
@@ -72,7 +76,7 @@ function fixture(options) {
         pending.set(player.id, Date.now() + (player.id === 1 ? 16 : 35));
       }
       if (command.type === 'updateConfig') {
-        checks.push(players.every(p => !p.running) && player.id === 1 && expectedCommandRevision === commandRevision);
+        checks.push(players.filter(p => canMove(p.id)).every(p => !p.running) && player.id === 1 && expectedCommandRevision === commandRevision);
         checks.push(JSON.stringify(command.config) === JSON.stringify({ ...config, lockMap: target }));
         if (options.applyIgnored) return res(200, { ok: true });
         config = command.config;
@@ -101,10 +105,10 @@ function fixture(options) {
   w.eval(script);
   const state = w.roiTestTravel.state;
   state.activeCharId = 1;
-  state.myCharIds = new w.Set(options.foreign ? [1, 2] : [1, 2, 3]);
+  state.myCharIds = new w.Set(options.staleRoster ? [1] : [1, 2, 3]);
   d.querySelector('#roi-helper-mvp-open').click();
   const panel = d.querySelector('#roi-helper-mvp-panel');
-  const button = panel.querySelector('button[title="全隊前往 moc_pryd04"]');
+  const button = panel.querySelector('button[title="同帳號前往 moc_pryd04"]');
   assert.ok(button, 'MVP 地圖按鈕不存在');
   const travel = panel.querySelector('section:has(button[hidden]) [role="status"]')?.parentElement;
   assert.ok(travel, 'MVP 移動狀態列不存在');
@@ -117,8 +121,8 @@ function fixture(options) {
         travel.querySelector('button').click();
       }
       const status = travel.querySelector('[role="status"]');
-      for (let i = 0; i < 140 && !/^(全隊已抵達|全隊移動未完成|無法全隊移動)/.test(status.textContent); i++) await pause(5);
-      assert.match(status.textContent, /^(全隊已抵達|全隊移動未完成|無法全隊移動)/);
+      for (let i = 0; i < 140 && !/^(同帳號隊員已抵達|同帳號移動未完成|無法移動同帳號隊員)/.test(status.textContent); i++) await pause(5);
+      assert.match(status.textContent, /^(同帳號隊員已抵達|同帳號移動未完成|無法移動同帳號隊員)/);
       assert.ok(travel.querySelector('button').hidden, '流程結束後已收起取消按鈕');
       assert.deepEqual(errors, []);
       assert.ok(checks.every(Boolean), '請求順序、節流或目標不符');
@@ -140,28 +144,40 @@ async function scenario(options, label, verify) {
 }
 (async () => {
   await scenario({}, '點 MVP 地圖一次，三名隊員都停止、換圖並在指定地圖開始掛機', r => {
-    assert.match(r.text, /全隊已抵達/);
+    assert.match(r.text, /同帳號隊員已抵達/);
     assert.deepEqual(r.sent.map(([id, type]) => id + ':' + type), [
       '1:stop', '2:stop', '1:updateConfig', '1:start', '2:selectMap', '2:start', '3:selectMap', '3:start'
     ]);
     assert.ok(r.players.every(p => p.mapId === target && p.running));
   });
   await scenario({ arrived: true }, '全隊已在指定圖掛機時只確認狀態，不重送任何指令', r => {
-    assert.match(r.text, /全隊已抵達/);
+    assert.match(r.text, /同帳號隊員已抵達/);
     assert.equal(r.sent.length, 0);
   });
   await scenario({ cancel: true }, '送出套用後取消，停止後續指令', r => {
-    assert.match(r.text, /全隊移動未完成.*已取消/);
+    assert.match(r.text, /同帳號移動未完成.*已取消/);
     assert.equal(r.sent.some(([, type]) => type === 'start'), false);
   });
-  for (const [key, label] of [['foreign', '隊伍有其他帳號角色'], ['vending', '有隊員擺攤']]) {
-    await scenario({ [key]: true }, label + '時全隊不動', r => {
-      assert.match(r.text, /無法全隊移動/);
-      assert.equal(r.sent.length, 0);
+  for (const [options, label] of [
+    [{ foreign: true }, '混合隊伍只處理本帳號，外帳號不需停止也不收任何命令'],
+    [{ foreign: true, foreignLeaves: true }, '外帳號中途離隊不影響本帳號換圖'],
+    [{ vending: true }, '本帳號分身擺攤時跳過該角色，其他同帳號隊員照常完成'],
+    [{ foreign: true, staleRoster: true }, '以伺服器 own 名單確認分身，舊快取不影響名單']
+  ]) {
+    await scenario(options, label, r => {
+      assert.match(r.text, /同帳號隊員已抵達/);
+      assert.ok(r.sent.length > 0 && r.sent.every(([id]) => id !== 3));
+      assert.ok(r.players.slice(0, 2).every(p => p.mapId === target && p.running));
+      assert.deepEqual(r.players[2], { id: 3, name: '隊員乙', mapId: 'pay_fild01', running: true });
     });
   }
+  await scenario({ onlySelf: true }, '混隊若只有目前角色屬於本帳號，只移動此角色', r => {
+    assert.match(r.text, /同帳號隊員已抵達/);
+    assert.deepEqual(r.sent.map(([id, type]) => id + ':' + type), ['1:stop', '1:updateConfig', '1:start']);
+    assert.ok(r.players.slice(1).every(p => p.mapId !== target && p.running));
+  });
   await scenario({ ignored: true }, '換圖回成功但有隊員未抵達，該隊員不會開始掛機', r => {
-    assert.match(r.text, /全隊移動未完成.*等待確認抵達：隊員乙/);
+    assert.match(r.text, /同帳號移動未完成.*等待確認抵達：隊員乙/);
     assert.equal(r.sent.some(([id, type]) => id === 3 && type === 'start'), false);
   });
   await scenario({ applyIgnored: true }, '套用掛機地圖未入帳，不送出任何啟動', r => {
@@ -169,7 +185,7 @@ async function scenario(options, label, verify) {
     assert.ok(r.sent.every(([, type]) => type === 'stop' || type === 'updateConfig'));
   });
   await scenario({ catchup: 2 }, '補算明確拒絕兩次後重試，最後三名都到目標圖掛機', r => {
-    assert.match(r.text, /全隊已抵達/);
+    assert.match(r.text, /同帳號隊員已抵達/);
     assert.equal(r.sent.filter(([id, type]) => id === 2 && type === 'start').length, 3);
     assert.ok(r.players.every(p => p.mapId === target && p.running));
   });
@@ -178,18 +194,18 @@ async function scenario(options, label, verify) {
     assert.equal(r.sent.some(([id, type]) => id === 3 && type === 'start'), false);
   });
   await scenario({ wrongAfterStart: true }, '有隊員開始後回舊圖，逐人驗證不會報全隊完成', r => {
-    assert.match(r.text, /全隊移動未完成.*⚠️ 隊員乙：prt_fild01/);
+    assert.match(r.text, /同帳號移動未完成.*⚠️ 隊員乙：prt_fild01/);
   });
   await scenario({ rateLimit: true }, '換圖遭限流後不再送指令', r => {
-    assert.match(r.text, /全隊移動未完成.*請求太頻繁/);
+    assert.match(r.text, /同帳號移動未完成.*請求太頻繁/);
     assert.equal(r.sent.length, r.cutoff);
   });
   await scenario({ switchActor: true }, '換角停止後續操作', r => {
-    assert.match(r.text, /全隊移動未完成.*角色已切換/);
+    assert.match(r.text, /同帳號移動未完成.*角色已切換/);
     assert.equal(r.sent.length, 1);
   });
   await scenario({ leftParty: true }, '隊員離隊後不再換圖或重新開始', r => {
-    assert.match(r.text, /全隊移動未完成.*隊伍名單/);
+    assert.match(r.text, /同帳號移動未完成.*隊伍名單/);
     assert.ok(r.sent.every(([, type]) => type === 'stop'));
   });
 })().catch(e => { console.error(e); process.exitCode = 1; });

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.5.8.4
+// @version      3.5.8.5
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -4891,7 +4891,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:var(--roi-title);border:2px solid var(--roi-frame);color:var(--roi-info);align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px var(--roi-shadow);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:var(--roi-title);border-bottom:1px solid var(--roi-edge);font-weight:bold;color:var(--roi-title-text);cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.4 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.5 測試版</span>
           <button id="ro-min-btn" style="background:var(--roi-selected);color:var(--roi-text);border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:var(--roi-inset);border-bottom:1px solid var(--roi-edge);">
@@ -5522,26 +5522,23 @@
     if (!partyMapIdRx.test(target || '')) throw Error('沒有選擇有效的地圖');
     if (!view.party) throw Error('目前角色沒有隊伍');
     const mine = new Set([...rosterIds].map(Number));
-    if (!mine.has(me)) throw Error('目前角色不在本帳號名單內');
+    if (!strict && !mine.has(me)) throw Error('目前角色不在本帳號名單內');
     const own = new Map(view.own.filter((o) => o.partyId === view.party.id).map((o) => [o.id, o]));
     const meMember = view.party.members.find((m) => m.id === me);
     if (!meMember) throw Error('隊伍資料裡找不到目前角色');
     const rows = view.party.members.map((m) => {
       const self = m.id === me;
-      const ours = self || (own.has(m.id) && mine.has(m.id));
+      const ours = self || (own.has(m.id) && (strict || mine.has(m.id)));
       const vending = ours && own.get(m.id)?.vending === true;
       return { ...m, self, ours, vending, move: ours && !vending };
     });
-    if (strict) {
-      const blocked = rows.filter((r) => !r.move);
-      if (blocked.length) {
-        const detail = blocked.map((r) => r.name + (r.vending ? '（擺攤中）' : '（無法操作）'));
-        throw Error('無法全隊移動：' + detail.join('、'));
-      }
-      if (new Set(rows.map((r) => r.id)).size !== rows.length) throw Error('隊員名單有重複角色');
-    }
     const movers = rows.filter((r) => r.move);
-    if (movers.length < 2) throw Error('隊伍裡沒有其他可移動的同帳號角色');
+    if (strict) {
+      if (!movers.some((r) => r.self)) throw Error('目前角色擺攤中，無法移動');
+      if (new Set(movers.map((r) => r.id)).size !== movers.length) throw Error('本帳號隊員名單有重複角色');
+    } else if (movers.length < 2) {
+      throw Error('隊伍裡沒有其他可移動的同帳號角色');
+    }
     if (!strict && movers.every((r) => r.running && r.mapId === target)) throw Error('大家已經都在這張地圖掛機');
     return { me, target, rows, movers, partyId: view.party.id, strict, stopIds: movers.filter((r) => r.running).map((r) => r.id) };
   }
@@ -5551,11 +5548,13 @@
     const L = { stopWaitMs: 180000, verifyMs: 30000, minGapMs: 2500, heartbeatMs: 10000, catchupMs: 180000, retryMs: 5000, ...deps.limits };
     let cancelled = false;
     const names = new Map();
+    let allowedIds = null;
     const label = (id) => names.get(id) || `#${id}`;
     const isRateLimit = (e) => e?.status === 429 || e?.code === 'RATE_LIMITED';
     let inFlight = 0, maxInFlight = 0;
     async function send(id, command, revision) {
       if (cancelled) throw new PartyMoveError('已取消');
+      if (allowedIds && !allowedIds.has(id)) throw new PartyMoveError('角色不在本帳號的移動名單');
       deps.checkActor?.();
       inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
       try { return await deps.command(id, command, revision); }
@@ -5621,13 +5620,13 @@
         const view = await deps.getParty();
         deps.checkActor?.();
         if (cancelled && !allowCancelled) throw new PartyMoveError('已取消');
-        const members = view.party?.members;
-        const owns = new Map(view.own.map((r) => [r.id, r]));
+        // 外帳號隊員可以自由進出，驗證範圍始終是原生 own 名單裡可移動的同隊角色。
+        const owns = new Map(view.own.filter((r) => r.partyId === plan.partyId).map((r) => [r.id, r]));
+        const members = view.party?.members.filter((r) =>
+          (r.id === plan.me || owns.has(r.id)) && !owns.get(r.id)?.vending) ?? [];
         if (view.party?.id !== plan.partyId || members.length !== ids.length ||
-            new Set(members.map((r) => r.id)).size !== ids.length ||
-            members.some((r) => !expected.has(r.id) ||
-              (r.id !== plan.me && owns.get(r.id)?.partyId !== plan.partyId) || owns.get(r.id)?.vending)) {
-          throw new PartyMoveError('隊伍名單、角色權限或擺攤狀態已變更', 0, 'PARTY_CHANGED');
+            new Set(members.map((r) => r.id)).size !== ids.length || members.some((r) => !expected.has(r.id))) {
+          throw new PartyMoveError('本帳號的隊伍名單或擺攤狀態已變更', 0, 'PARTY_CHANGED');
         }
         last = view;
         return view;
@@ -5723,6 +5722,7 @@
 
     async function run(plan, { startAfter = true } = {}) {
       for (const r of plan.rows) names.set(r.id, r.self ? `${r.name}（你）` : r.name);
+      allowedIds = plan.strict ? new Set(plan.movers.map((r) => r.id)) : null;
       if (plan.strict) return runMvpMove(plan);
       const stopped = [], started = [], lines = [];
       const byId = (view, id) => view?.party?.members.find((m) => m.id === id);
@@ -6782,7 +6782,7 @@
         color: var(--roi-text);
       }
       #roi-helper-mvp-panel .map-btn::after {
-        content: '全隊前往 ›';
+        content: '同帳號前往 ›';
         color: var(--roi-info);
         font-size: 11.5px;
         font-weight: 500;
@@ -6970,7 +6970,7 @@
     const footer = document.createElement('footer');
     footer.append(
       node('small', '台北時間 (UTC+8) · 點選視窗外畫面自動關閉'),
-      node('small', '點擊地圖讓同隊的本帳號角色全數前往')
+      node('small', '點擊地圖讓本帳號同隊角色前往，擺攤角色略過')
     );
 
     const portraits = new IntersectionObserver(entries => {
@@ -6982,7 +6982,7 @@
 
     const travelStatus = node('div');
     travelStatus.setAttribute('role', 'status');
-    const travelCancel = node('button', '取消全隊移動');
+    const travelCancel = node('button', '取消同帳號移動');
     travelCancel.type = 'button';
     travelCancel.hidden = true;
     const travelResults = node('div');
@@ -7033,7 +7033,7 @@
       if (navigating) return;
       navigating = true;
       travelResults.replaceChildren();
-      travelStatus.textContent = '全隊前往 ' + map + '…';
+      travelStatus.textContent = '同帳號前往 ' + map + '…';
       try {
         const result = await startMvpPartyMove(id, (message) => {
           travelStatus.textContent = map + ' · ' + message;
@@ -7041,10 +7041,10 @@
           travelCancel.hidden = !cancel;
           travelCancel.onclick = cancel;
         });
-        travelStatus.textContent = result.ok ? '全隊已抵達 ' + map + ' 並開始掛機' : '全隊移動未完成 · ' + map;
+        travelStatus.textContent = result.ok ? '同帳號隊員已抵達 ' + map + ' 並開始掛機' : '同帳號移動未完成 · ' + map;
         for (const line of result.lines) travelResults.append(node('div', line));
       } catch (error) {
-        travelStatus.textContent = '無法全隊移動 · ' + error.message;
+        travelStatus.textContent = '無法移動同帳號隊員 · ' + error.message;
       } finally { navigating = false; }
     }
 
@@ -7401,7 +7401,7 @@
             const top = node('div', null, 'map-top');
             const place = node('button', map, 'map-btn');
             place.type = 'button';
-            place.title = '全隊前往 ' + id;
+            place.title = '同帳號前往 ' + id;
             place.onclick = () => chooseMap(map, id);
 
             const intervalText = base == null
