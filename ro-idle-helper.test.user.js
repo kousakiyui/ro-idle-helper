@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.5.8.3
+// @version      3.5.8.4
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -4891,7 +4891,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:var(--roi-title);border:2px solid var(--roi-frame);color:var(--roi-info);align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px var(--roi-shadow);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:var(--roi-title);border-bottom:1px solid var(--roi-edge);font-weight:bold;color:var(--roi-title-text);cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.3 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.4 測試版</span>
           <button id="ro-min-btn" style="background:var(--roi-selected);color:var(--roi-text);border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:var(--roi-inset);border-bottom:1px solid var(--roi-edge);">
@@ -5548,17 +5548,17 @@
   // deps：getParty()、command(id, cmd)、applyOwnMap(target)、kicks（EventTarget，遊戲有請求完成或戰鬥日誌時發 'settled'／'kick'）
   //       onStatus(text)、limits {stopWaitMs, verifyMs, minGapMs, heartbeatMs}
   function createPartyMoveRunner(deps) {
-    const L = { stopWaitMs: 180000, verifyMs: 30000, minGapMs: 2500, heartbeatMs: 10000, ...deps.limits };
+    const L = { stopWaitMs: 180000, verifyMs: 30000, minGapMs: 2500, heartbeatMs: 10000, catchupMs: 180000, retryMs: 5000, ...deps.limits };
     let cancelled = false;
     const names = new Map();
     const label = (id) => names.get(id) || `#${id}`;
     const isRateLimit = (e) => e?.status === 429 || e?.code === 'RATE_LIMITED';
     let inFlight = 0, maxInFlight = 0;
-    async function send(id, command) {
+    async function send(id, command, revision) {
       if (cancelled) throw new PartyMoveError('已取消');
       deps.checkActor?.();
       inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
-      try { return await deps.command(id, command); }
+      try { return await deps.command(id, command, revision); }
       catch (e) { throw e instanceof PartyMoveError ? new PartyMoveError(`${label(id)}：${e.message}`, e.status, e.code) : new PartyMoveError(`${label(id)}：${e?.message || e}`); }
       finally { inFlight--; }
     }
@@ -5616,6 +5616,7 @@
       const arrived = (row) => atTarget(row) && row.running;
       const isStopped = (row) => row?.running === false;
       const read = async (allowCancelled = false) => {
+        if (cancelled && !allowCancelled) throw new PartyMoveError('已取消');
         deps.checkActor?.();
         const view = await deps.getParty();
         deps.checkActor?.();
@@ -5635,6 +5636,31 @@
         (v) => ids.every((id) => check(byId(v, id))), timeout,
         (v) => message + describe(v, check), read
       );
+      const retryCatchup = async (id, attempt, alreadyDone = () => false) => {
+        const deadline = Date.now() + L.catchupMs;
+        for (;;) {
+          deps.checkActor?.();
+          if (cancelled) throw new PartyMoveError('已取消');
+          try { return await attempt(); }
+          catch (error) {
+            if (error.status === 429 || error.code !== 'BUSY_CATCHING_UP') throw error;
+            if (Date.now() + L.retryMs > deadline) throw new PartyMoveError(label(id) + '：等待補算逾時');
+            deps.onStatus?.('等待補算：' + label(id));
+            // 只有伺服器明確拒絕的請求才會重試，並保留補算時間。
+            await new Promise((resolve, reject) => {
+              const timer = setTimeout(() => { cancelHook = null; resolve(); }, L.retryMs);
+              cancelHook = () => {
+                clearTimeout(timer);
+                cancelHook = null;
+                reject(new PartyMoveError('已取消'));
+              };
+            });
+            await read();
+            const row = byId(last, id);
+            if (alreadyDone(row)) return;
+          }
+        }
+      };
       const details = (view) => ids.map((id) => {
         const row = byId(view, id);
         return `${arrived(row) ? '✅' : '⚠️'} ${label(id)}：${row ? row.mapId + (row.running ? ' 掛機中' : '（已停止）') : '狀態尚未確認'}`;
@@ -5646,20 +5672,25 @@
         }
         for (const id of ids.filter((id) => byId(current, id).running)) {
           deps.onStatus?.('停止掛機：' + label(id));
-          await send(id, { type: 'stop' });
+          await retryCatchup(id, () => send(id, { type: 'stop' }), isStopped);
           stopped.push(id);
         }
         await waitAll(isStopped, L.stopWaitMs, '等待打完這場：');
-        for (const id of ids) {
-          deps.onStatus?.('切換地圖：' + label(id));
-          // 請求即使逾時也可能已生效。從送出換圖起，不能假設仍在原圖而自動恢復。
-          moved = true;
-          await send(id, { type: 'selectMap', mapId: plan.target });
-        }
-        await waitAll((row) => isStopped(row) && atTarget(row), L.verifyMs, '等待確認抵達：');
-        for (const id of ids) {
+        moved = true; // 套用即使回應逾時也可能已生效，不能自動使用原設定重啟。
+        deps.onStatus?.('套用掛機地圖…');
+        await retryCatchup(plan.me, () => deps.applyOwnMap(plan.target, send));
+        // 跟隨原生「全隊開始」：當前角色用已套用的地圖，其他分身先前往該圖。
+        for (const id of [plan.me, ...ids.filter((id) => id !== plan.me)]) {
+          const row = byId(await read(), id);
+          if (arrived(row)) continue;
+          if (!isStopped(row)) throw new PartyMoveError(label(id) + '：已在其他地圖掛機');
+          if (id !== plan.me && !atTarget(row)) {
+            deps.onStatus?.('切換地圖：' + label(id));
+            await retryCatchup(id, () => send(id, { type: 'selectMap', mapId: plan.target }), atTarget);
+            await waitParty((view) => atTarget(byId(view, id)), L.verifyMs, () => '等待確認抵達：' + label(id), read);
+          }
           deps.onStatus?.('開始掛機：' + label(id));
-          await send(id, { type: 'start' });
+          await retryCatchup(id, () => send(id, { type: 'start' }), arrived);
         }
         const final = await waitAll(arrived, L.verifyMs, '等待確認目標地圖掛機：');
         return { ok: true, lines: details(final), maxInFlight };
@@ -5781,11 +5812,11 @@
     if (!res.ok) throw new PartyMoveError(String(body?.error?.message || `請求失敗（HTTP ${res.status}）`).slice(0, 200), res.status, String(body?.error?.code || 'HTTP_' + res.status));
     return body;
   }
-  async function partyCommand(id, command) {
+  async function partyCommand(id, command, expectedCommandRevision) {
     if (!Number.isSafeInteger(id) || id <= 0) throw new PartyMoveError('角色編號不正確');
     const body = await partyApiJson(`/api/characters/${id}/commands`, { method: 'POST',
       headers: { 'content-type': 'application/json', 'x-ro-client': '1' },
-      body: JSON.stringify({ commandId: partyCommandId(), command }) });
+      body: JSON.stringify({ commandId: partyCommandId(), command, expectedCommandRevision }) });
     if (body?.ok !== true) throw new PartyMoveError('伺服器沒有確認這個指令', 200, 'NOT_OK');
     pageNet.events.dispatchEvent(new Event('kick'));
     return body;
@@ -5946,6 +5977,21 @@
       if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
     });
   }
+  async function partyApplyMvpMap(me, target, send) {
+    const path = `/api/characters/${me}?deferCatchup=1`;
+    const read = async () => {
+      const view = await partyApiJson(path);
+      if (Number(view?.characterId) !== me || !isPlainRecord(view.snapshot?.config) ||
+          typeof view.snapshot.config.lockMap !== 'string') throw Error('讀不到目前角色的掛機設定');
+      return view;
+    };
+    const view = await read();
+    if (view.snapshot.config.lockMap === target) return;
+    if (view.running !== false || !Number.isSafeInteger(view.commandRevision)) throw Error('無法確認角色已停止或設定版本，已中止套用');
+    await send(me, { type: 'updateConfig', config: { ...view.snapshot.config, lockMap: target } }, view.commandRevision);
+    if ((await read()).snapshot.config.lockMap !== target) throw Error('伺服器尚未確認套用掛機地圖');
+  }
+
   async function startMvpPartyMove(target, onStatus, onActive) {
     if (hasActiveOperation() || document.hidden) throw Error('有其他助手操作進行中，請稍後再試');
     if (!partyMapIdRx.test(target)) throw Error('MVP 地圖編號無效');
@@ -5973,7 +6019,10 @@
         checkActor();
         if (cancelled) throw Error('已取消');
         const plan = planPartyMove(view, me, target, nativeRosterIds?.size ? nativeRosterIds : state.myCharIds, { strict: true });
-        runner = createPartyMoveRunner({ getParty, command: partyCommand, kicks: pageNet.events, onStatus, checkActor });
+        runner = createPartyMoveRunner({
+          getParty, command: partyCommand, kicks: pageNet.events, onStatus, checkActor,
+          applyOwnMap: (target, send) => partyApplyMvpMap(me, target, send)
+        });
         return runner.run(plan);
       };
       onStatus('正在核對隊伍…');
