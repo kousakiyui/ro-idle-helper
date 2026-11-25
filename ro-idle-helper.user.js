@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.5.8.1
+// @version      3.5.8.2
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -1586,7 +1586,20 @@
   document.addEventListener('visibilitychange', () => { if (document.hidden) flushWarehouseSave({ sync: true }); });
 
   function warehouseItemId(li) {
-    return li?.querySelector('img[src*="/client/item/"]')?.getAttribute('src')?.match(/\/client\/item\/(\d+)\.png(?:[?#]|$)/)?.[1];
+    const iconId = li?.querySelector('img[src*="/client/item/"]')?.getAttribute('src')?.match(/\/client\/item\/(\d+)\.png(?:[?#]|$)/)?.[1];
+    if (iconId || !li) return iconId;
+
+    // 舊版介面不渲染物品圖示。從已提交的倉庫列取得道具 ID。
+    let row = getReactFiber(li);
+    if (!row) return undefined;
+    let root = row;
+    while (root.return) root = root.return;
+    if (!root.stateNode?.current) return undefined;
+    if (root.stateNode.current !== root) row = row.alternate;
+    const item = row?.child?.memoizedProps?.it;
+    if (row?.stateNode !== li || row.key == null || item?.sid == null ||
+        String(item.sid) !== row.key || !Number.isSafeInteger(item.itemId) || item.itemId < 1) return undefined;
+    return String(item.itemId);
   }
 
   const warehouseCustomViews = new WeakMap();
@@ -4878,7 +4891,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:var(--roi-title);border:2px solid var(--roi-frame);color:var(--roi-info);align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px var(--roi-shadow);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:var(--roi-title);border-bottom:1px solid var(--roi-edge);font-weight:bold;color:var(--roi-title-text);cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.1</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.2</span>
           <button id="ro-min-btn" style="background:var(--roi-selected);color:var(--roi-text);border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:var(--roi-inset);border-bottom:1px solid var(--roi-edge);">

@@ -152,7 +152,20 @@
   document.addEventListener('visibilitychange', () => { if (document.hidden) flushWarehouseSave({ sync: true }); });
 
   function warehouseItemId(li) {
-    return li?.querySelector('img[src*="/client/item/"]')?.getAttribute('src')?.match(/\/client\/item\/(\d+)\.png(?:[?#]|$)/)?.[1];
+    const iconId = li?.querySelector('img[src*="/client/item/"]')?.getAttribute('src')?.match(/\/client\/item\/(\d+)\.png(?:[?#]|$)/)?.[1];
+    if (iconId || !li) return iconId;
+
+    // 舊版介面不渲染物品圖示。從已提交的倉庫列取得道具 ID。
+    let row = getReactFiber(li);
+    if (!row) return undefined;
+    let root = row;
+    while (root.return) root = root.return;
+    if (!root.stateNode?.current) return undefined;
+    if (root.stateNode.current !== root) row = row.alternate;
+    const item = row?.child?.memoizedProps?.it;
+    if (row?.stateNode !== li || row.key == null || item?.sid == null ||
+        String(item.sid) !== row.key || !Number.isSafeInteger(item.itemId) || item.itemId < 1) return undefined;
+    return String(item.itemId);
   }
 
   const warehouseCustomViews = new WeakMap();
