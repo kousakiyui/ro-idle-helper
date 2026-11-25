@@ -22,7 +22,7 @@
       isPlainRecord(o) && id(o.id) && (o.partyId === null || id(o.partyId)) ? [{ id: o.id, partyId: o.partyId, vending: o.vending === true }] : []));
     return { party: { id: party.id, leaderId: id(party.leaderId) ? party.leaderId : null, members }, own };
   }
-  function planPartyMove(view, me, target, rosterIds) {
+  function planPartyMove(view, me, target, rosterIds, { strict = false } = {}) {
     if (!partyMapIdRx.test(target || '')) throw Error('沒有選擇有效的地圖');
     if (!view.party) throw Error('目前角色沒有隊伍');
     const mine = new Set([...rosterIds].map(Number));
@@ -36,10 +36,18 @@
       const vending = ours && own.get(m.id)?.vending === true;
       return { ...m, self, ours, vending, move: ours && !vending };
     });
+    if (strict) {
+      const blocked = rows.filter((r) => !r.move);
+      if (blocked.length) {
+        const detail = blocked.map((r) => r.name + (r.vending ? '（擺攤中）' : '（無法操作）'));
+        throw Error('無法全隊移動：' + detail.join('、'));
+      }
+      if (new Set(rows.map((r) => r.id)).size !== rows.length) throw Error('隊員名單有重複角色');
+    }
     const movers = rows.filter((r) => r.move);
     if (movers.length < 2) throw Error('隊伍裡沒有其他可移動的同帳號角色');
-    if (movers.every((r) => r.running && r.mapId === target)) throw Error('大家已經都在這張地圖掛機');
-    return { me, target, rows, movers, stopIds: movers.filter((r) => r.running).map((r) => r.id) };
+    if (!strict && movers.every((r) => r.running && r.mapId === target)) throw Error('大家已經都在這張地圖掛機');
+    return { me, target, rows, movers, partyId: view.party.id, strict, stopIds: movers.filter((r) => r.running).map((r) => r.id) };
   }
   // deps：getParty()、command(id, cmd)、applyOwnMap(target)、kicks（EventTarget，遊戲有請求完成或戰鬥日誌時發 'settled'／'kick'）
   //       onStatus(text)、limits {stopWaitMs, verifyMs, minGapMs, heartbeatMs}
@@ -52,6 +60,7 @@
     let inFlight = 0, maxInFlight = 0;
     async function send(id, command) {
       if (cancelled) throw new PartyMoveError('已取消');
+      deps.checkActor?.();
       inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
       try { return await deps.command(id, command); }
       catch (e) { throw e instanceof PartyMoveError ? new PartyMoveError(`${label(id)}：${e.message}`, e.status, e.code) : new PartyMoveError(`${label(id)}：${e?.message || e}`); }
@@ -59,7 +68,7 @@
     }
     // 事件驅動等待：遊戲請求完成、戰鬥日誌、指令回應都會「踢」一下，重抓隊伍資料（至少間隔 minGapMs）；
     // 完全沒有事件時每 heartbeatMs 補抓一次；超過 timeoutMs 失敗。所有計時器與監聽在結束時清除。
-    function waitParty(check, timeoutMs, describe) {
+    function waitParty(check, timeoutMs, describe, read = deps.getParty) {
       return new Promise((resolve, reject) => {
         const started = Date.now();
         let done = false, fetching = false, lastFetch = 0, gapTimer = 0, beatTimer = 0, limitTimer = 0, last = null;
@@ -74,13 +83,14 @@
           fetching = true; lastFetch = Date.now();
           clearTimeout(beatTimer);
           try {
-            last = await deps.getParty();
+            last = await read();
             if (done) return;
             const r = check(last);
             if (r) return finish(resolve, last);
             deps.onStatus?.(describe(last, Math.round((Date.now() - started) / 1000)));
           } catch (e) {
             if (isRateLimit(e)) return finish(reject, new PartyMoveError('讀取隊伍資料被限流：' + e.message, e.status, e.code));
+            if (e?.code === 'PARTY_CHANGED' || e?.code === 'ACTOR_CHANGED' || cancelled) return finish(reject, e);
           } finally {
             fetching = false;
             if (!done) beatTimer = setTimeout(fetchNow, L.heartbeatMs);
@@ -99,8 +109,94 @@
       });
     }
     let cancelHook = null;
+    async function runMvpMove(plan) {
+      const ids = plan.movers.map((r) => r.id);
+      const expected = new Set(ids);
+      const stopped = [];
+      let moved = false, last = null;
+      const byId = (view, id) => view?.party?.members.find((r) => r.id === id);
+      const describe = (view, check) => ids.filter((id) => !check(byId(view, id))).map(label).join('、');
+      const atTarget = (row) => row?.mapId === plan.target;
+      const arrived = (row) => atTarget(row) && row.running;
+      const isStopped = (row) => row?.running === false;
+      const read = async (allowCancelled = false) => {
+        deps.checkActor?.();
+        const view = await deps.getParty();
+        deps.checkActor?.();
+        if (cancelled && !allowCancelled) throw new PartyMoveError('已取消');
+        const members = view.party?.members;
+        const owns = new Map(view.own.map((r) => [r.id, r]));
+        if (view.party?.id !== plan.partyId || members.length !== ids.length ||
+            new Set(members.map((r) => r.id)).size !== ids.length ||
+            members.some((r) => !expected.has(r.id) ||
+              (r.id !== plan.me && owns.get(r.id)?.partyId !== plan.partyId) || owns.get(r.id)?.vending)) {
+          throw new PartyMoveError('隊伍名單、角色權限或擺攤狀態已變更', 0, 'PARTY_CHANGED');
+        }
+        last = view;
+        return view;
+      };
+      const waitAll = (check, timeout, message) => waitParty(
+        (v) => ids.every((id) => check(byId(v, id))), timeout,
+        (v) => message + describe(v, check), read
+      );
+      const details = (view) => ids.map((id) => {
+        const row = byId(view, id);
+        return `${arrived(row) ? '✅' : '⚠️'} ${label(id)}：${row ? row.mapId + (row.running ? ' 掛機中' : '（已停止）') : '狀態尚未確認'}`;
+      });
+      try {
+        const current = await read();
+        if (ids.every((id) => arrived(byId(current, id)))) {
+          return { ok: true, lines: details(current), maxInFlight };
+        }
+        for (const id of ids.filter((id) => byId(current, id).running)) {
+          deps.onStatus?.('停止掛機：' + label(id));
+          await send(id, { type: 'stop' });
+          stopped.push(id);
+        }
+        await waitAll(isStopped, L.stopWaitMs, '等待打完這場：');
+        for (const id of ids) {
+          deps.onStatus?.('切換地圖：' + label(id));
+          // 請求即使逾時也可能已生效。從送出換圖起，不能假設仍在原圖而自動恢復。
+          moved = true;
+          await send(id, { type: 'selectMap', mapId: plan.target });
+        }
+        await waitAll((row) => isStopped(row) && atTarget(row), L.verifyMs, '等待確認抵達：');
+        for (const id of ids) {
+          deps.onStatus?.('開始掛機：' + label(id));
+          await send(id, { type: 'start' });
+        }
+        const final = await waitAll(arrived, L.verifyMs, '等待確認目標地圖掛機：');
+        return { ok: true, lines: details(final), maxInFlight };
+      } catch (error) {
+        const lines = ['🛑 ' + error.message];
+        const mayRead = !isRateLimit(error) && !['PARTY_CHANGED', 'ACTOR_CHANGED'].includes(error.code);
+        if (!moved && stopped.length && mayRead) {
+          // 取消只撤回尚未換圖的停機。成員變動或限流時不再送出指令。
+          try {
+            const latest = await read(true);
+            const wasCancelled = cancelled;
+            cancelled = false;
+            try {
+              for (const id of stopped.filter((id) => isStopped(byId(latest, id)))) await send(id, { type: 'start' });
+            } finally { cancelled = wasCancelled; }
+          } catch (e) { lines.push('⚠️ 無法確認已停角色都恢復掛機：' + e.message); }
+        }
+        if (mayRead) {
+          try { await read(true); } catch { last = null; }
+        }
+        if (!moved && stopped.length && mayRead && last) {
+          for (const id of stopped) {
+            if (byId(last, id)?.running) lines.push('ℹ️ ' + label(id) + '：已送出停止，請確認打完這場後的狀態');
+          }
+        }
+        if (moved || stopped.length) lines.push(...details(mayRead ? last : null));
+        return { ok: false, error, lines, maxInFlight };
+      }
+    }
+
     async function run(plan, { startAfter = true } = {}) {
       for (const r of plan.rows) names.set(r.id, r.self ? `${r.name}（你）` : r.name);
+      if (plan.strict) return runMvpMove(plan);
       const stopped = [], started = [], lines = [];
       const byId = (view, id) => view?.party?.members.find((m) => m.id === id);
       let phase = 'apply';
@@ -354,6 +450,50 @@
       if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
     });
   }
+  async function startMvpPartyMove(target, onStatus, onActive) {
+    if (hasActiveOperation() || document.hidden) throw Error('有其他助手操作進行中，請稍後再試');
+    if (!partyMapIdRx.test(target)) throw Error('MVP 地圖編號無效');
+    const me = Number(state.activeCharId), epoch = refineIdentityEpoch;
+    if (!Number.isSafeInteger(me) || me <= 0) throw Error('還不知道目前角色，請稍候再試');
+    let cancelled = false, pageLeft = false, runner;
+    const cancel = () => { cancelled = true; runner?.cancel(); };
+    const onLeave = () => { pageLeft = true; cancel(); };
+    const checkActor = () => {
+      if (pageLeft || Number(state.activeCharId) !== me || refineIdentityEpoch !== epoch || refBusy || cartShortcutBusy || visitingWarehouse) {
+        throw new PartyMoveError('角色已切換或頁面已離開，已停止移動', 0, 'ACTOR_CHANGED');
+      }
+    };
+    partyMoveActive = { cancel };
+    try {
+      window.addEventListener('pagehide', onLeave);
+      onActive(cancel);
+      const run = async () => {
+        const snapshot = await partyApiJson(`/api/characters/${me}?deferCatchup=1`);
+        checkActor();
+        if (Number(snapshot?.characterId) !== me || !snapshot?.snapshot?.character) throw Error('無法確認目前角色狀態');
+        if (snapshot.snapshot.vend) throw Error('目前角色擺攤中，無法全隊移動');
+        const getParty = async () => validatePartyView(await partyApiJson(`/api/characters/${me}/party`));
+        const view = await getParty();
+        checkActor();
+        if (cancelled) throw Error('已取消');
+        const plan = planPartyMove(view, me, target, nativeRosterIds?.size ? nativeRosterIds : state.myCharIds, { strict: true });
+        runner = createPartyMoveRunner({ getParty, command: partyCommand, kicks: pageNet.events, onStatus, checkActor });
+        return runner.run(plan);
+      };
+      onStatus('正在核對隊伍…');
+      if (typeof navigator.locks?.request !== 'function') return await run();
+      return await navigator.locks.request('roi-mvp-party-travel', { ifAvailable: true }, (lock) => {
+        if (!lock) throw Error('另一個分頁正在移動隊伍');
+        if (cancelled) throw Error('已取消');
+        return run();
+      });
+    } finally {
+      window.removeEventListener('pagehide', onLeave);
+      partyMoveActive = null;
+      onActive(null);
+    }
+  }
+
   async function startPartyMove(bar) {
     const status = bar.querySelector('[data-roi-party-move-status]');
     const btn = bar.querySelector('[data-roi-party-move]');
@@ -363,6 +503,7 @@
     if (hasActiveOperation()) { status.textContent = '⚠️ 精煉／領倉進行中，請稍後再試'; return; }
     const group = partyMapGroup();
     const me = Number(state.activeCharId);
+    partyMoveActive = { cancel() {} };
     btn.disabled = true; out.replaceChildren();
     try {
       if (!group) throw Error('請先開啟掛機設定的地圖選單');

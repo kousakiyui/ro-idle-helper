@@ -511,7 +511,7 @@
         color: var(--roi-text);
       }
       #roi-helper-mvp-panel .map-btn::after {
-        content: '前往 ›';
+        content: '全隊前往 ›';
         color: var(--roi-info);
         font-size: 11.5px;
         font-weight: 500;
@@ -699,7 +699,7 @@
     const footer = document.createElement('footer');
     footer.append(
       node('small', '台北時間 (UTC+8) · 點選視窗外畫面自動關閉'),
-      node('small', '點擊地圖名稱可自動帶入掛機設定')
+      node('small', '點擊地圖讓同隊的本帳號角色全數前往')
     );
 
     const portraits = new IntersectionObserver(entries => {
@@ -709,7 +709,17 @@
       }
     }, { root: results });
 
-    panel.append(header, toolbar, results, footer);
+    const travelStatus = node('div');
+    travelStatus.setAttribute('role', 'status');
+    const travelCancel = node('button', '取消全隊移動');
+    travelCancel.type = 'button';
+    travelCancel.hidden = true;
+    const travelResults = node('div');
+    travelResults.style.cssText = 'max-height:22vh;overflow:auto;';
+    const travel = node('section');
+    travel.style.cssText = 'display:grid;gap:4px;padding:0 16px;';
+    travel.append(travelStatus, travelResults, travelCancel);
+    panel.append(header, toolbar, results, travel, footer);
     document.body.append(panel);
 
     function nativeProfileName() {
@@ -747,87 +757,23 @@
     }
 
     const visibleIgnoringAria = el => el && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
-    function namedButton(label) {
-      return [...document.querySelectorAll('button,[role="tab"]')].find(el =>
-        visibleIgnoringAria(el) && !el.disabled && [el.textContent.trim(),el.getAttribute('aria-label'),el.title].includes(label));
-    }
-    function setSearch(input, value) {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);
-      input.dispatchEvent(new InputEvent('input', {bubbles:true, composed:true, inputType:'insertReplacementText', data:value}));
-      input.dispatchEvent(new Event('change', {bubbles:true}));
-    }
-    function until(read, shouldAbort, root) {
-      return waitForUi(read, { root, timeout: 8000, shouldAbort });
-    }
-    const mapGroup = () => [...document.querySelectorAll('[role="group"][aria-label="掛機地圖"]')].find(visibleIgnoringAria);
-    function reactFiber(el) {
-      const key = Object.keys(el).find(name => name.startsWith('__reactFiber$'));
-      return key && el[key];
-    }
-    function pickerMaps(group) {
-      for (let fiber = reactFiber(group); fiber; fiber = fiber.return) {
-        const props = fiber.memoizedProps;
-        if (props?.label === '掛機地圖' && Array.isArray(props.maps)) return props.maps;
-      }
-      return [];
-    }
     let navigating = false;
     async function chooseMap(map, id) {
       if (navigating) return;
       navigating = true;
-      const actor = state.activeCharId, epoch = refineIdentityEpoch;
-      const shouldAbort = () => state.activeCharId !== actor || refineIdentityEpoch !== epoch;
-      closeRadar();
+      travelResults.replaceChildren();
+      travelStatus.textContent = '全隊前往 ' + map + '…';
       try {
-        if (!mapGroup()) {
-          let tab = namedButton('掛機設定');
-          if (!tab) {
-            namedButton('冒險')?.click();
-            tab = await until(() => namedButton('掛機設定'), shouldAbort);
-          }
-          if (!tab && !mapGroup()) throw Error('找不到掛機設定入口。請先開啟掛機設定再點地圖。');
-          tab?.click();
-        }
-        const findFilter = () => [...document.querySelectorAll('input[type="search"]')].find(el =>
-          visibleIgnoringAria(el) && el.closest('label')?.textContent.includes('搜尋設定'));
-        await until(() => mapGroup() || findFilter(), shouldAbort);
-        if (!mapGroup() && findFilter()) setSearch(findFilter(),'掛機地圖');
-        const field = await until(() => mapGroup()?.querySelector('input[aria-label="掛機地圖：搜尋"]'), shouldAbort);
-        if (!field) throw Error('找不到原生掛機地圖選單。');
-        const options = pickerMaps(field.closest('[role="group"]'));
-        const label = options.find(option => option.id === id)?.name || map;
-        const uniqueLabel = options.filter(option => option.name === label).length === 1;
-        const query = uniqueLabel ? label : id;
-        setSearch(field, query);
-        const choice = () => {
-          const group = mapGroup();
-          if (group?.querySelector('input[aria-label="掛機地圖：搜尋"]')?.value !== query) return null;
-          const buttons = [...group.querySelectorAll('button[aria-pressed]')].filter(visibleIgnoringAria);
-          const exact = buttons.filter(button => reactFiber(button)?.key === id);
-          if (exact.length > 1) return null;
-          let button = exact[0];
-          if (!button) {
-            const byName = buttons.filter(candidate => candidate.firstElementChild?.textContent.trim() === label);
-            if (byName.length !== 1 || reactFiber(byName[0])?.key != null) return null;
-            button = byName[0];
-          }
-          return !button.disabled || button.getAttribute('aria-pressed') === 'true' ? button : null;
-        };
-        const button = await until(choice, shouldAbort, field.closest('[role="group"]')?.parentElement);
-        if (!button) throw Error('原生選單無法確認這張地圖：'+map+'（'+id+'）。');
-        let selected = button;
-        if (button.getAttribute('aria-pressed') !== 'true') {
-          button.click();
-          selected = await until(() => {
-            const target = choice();
-            return target?.getAttribute('aria-pressed') === 'true' && target;
-          }, shouldAbort, field.closest('[role="group"]')?.parentElement);
-        }
-        if (!selected) throw Error('尚未確認選取成功，請在掛機設定檢查地圖。');
-        selected.scrollIntoView({block:'nearest'});
-        selected.focus({preventScroll:true});
+        const result = await startMvpPartyMove(id, (message) => {
+          travelStatus.textContent = map + ' · ' + message;
+        }, (cancel) => {
+          travelCancel.hidden = !cancel;
+          travelCancel.onclick = cancel;
+        });
+        travelStatus.textContent = result.ok ? '全隊已抵達 ' + map + ' 並開始掛機' : '全隊移動未完成 · ' + map;
+        for (const line of result.lines) travelResults.append(node('div', line));
       } catch (error) {
-        alert(error.message);
+        travelStatus.textContent = '無法全隊移動 · ' + error.message;
       } finally { navigating = false; }
     }
 
@@ -1184,7 +1130,7 @@
             const top = node('div', null, 'map-top');
             const place = node('button', map, 'map-btn');
             place.type = 'button';
-            place.title = '在掛機設定選擇 ' + id;
+            place.title = '全隊前往 ' + id;
             place.onclick = () => chooseMap(map, id);
 
             const intervalText = base == null
