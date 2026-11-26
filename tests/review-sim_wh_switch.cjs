@@ -1,115 +1,149 @@
-// 倉庫切角提交路徑模擬：以函式切片 + jsdom 假 DOM / 假 Fiber，比對 v3.5.0 與 3.5.1 候選。
-// 用法：node tests/review-sim_wh_switch.cjs <userscript> [--stale]   （--stale：模擬未更新的舊測試替身，不提供 3.5.1 新增的 createFiberScanBudget）
-const fs = require('fs'); const path = require('path');
-const { JSDOM } = require(path.join(__dirname, 'node_modules/jsdom'));
-const file = process.argv[2]; const stale = process.argv.includes('--stale'); const staleSet = process.argv.includes('--stale-weakset');
-const src = fs.readFileSync(file, 'utf8');
-function slice(name) {
-  const m = new RegExp('(?:async )?function ' + name + '\\(').exec(src); if (!m) return null;
-  let i = src.indexOf('{', m.index + src.slice(m.index).indexOf(')')), d = 0, j = i;
-  for (; j < src.length; j++) { if (src[j] == '{') d++; else if (src[j] == '}') { d--; if (!d) break; } }
-  return src.slice(m.index, j + 1);
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync(process.argv[2], 'utf8').replace(/\r\n/g, '\n');
+function extract(from, to) {
+  const start = source.indexOf(from);
+  const end = source.indexOf(to, start);
+  assert.ok(start >= 0 && end > start, from);
+  return source.slice(start, end);
 }
-const names = ['tryWithdrawFromWarehouse','assertRefineSession','assertRefineTarget','refineAwait','clickRefineControl','refineActor',
-  'readBackpackContext','findModernBackpack','getCommittedProps','currentFiberRoot','getReactFiber','nativeStoreActor','findRefineNativeStore',
-  'warehouseItemId','materialWithdrawalAmount','validMaterialBatch','waitForUi','waitForRefineUi','waitForRefineCommandSlot','clickRefineCommand'];
-if (!stale) names.push('createFiberScanBudget');
-const identityError = src.match(/  class RefineIdentityPending extends Error \{[\s\S]*?\r?\n  \}/)?.[0];
-const parts = [...names.map(slice), identityError].filter(Boolean);
-const v351 = /createFiberScanBudget/.test(src);
-const prelude = `
-  let refineIdentityEpoch = 0, refineNativeStore = null, cachedFiberKey = null, bagMemo = null, fiberRetryScheduled = false;
-  const TIMING = { refineCommandGap: 1000 }; let lastRefineCommandAt = -Infinity;
-  let refineWarehouseSubmitButton = null, visitingWarehouse = false, refStop = false;
-  const fiberRouteMap = new WeakMap(), bagFastMiss = ${v351 && !staleSet ? 'new WeakMap()' : 'new WeakSet()'};
-  const propsScanRetries = new WeakMap(), backpackScanRetries = new WeakMap(), detailScanRetries = new WeakMap();
-  class FiberTraversalTimeout extends Error {}
-  const positiveId = (value) => (typeof value === 'number' || (typeof value === 'string' && /^[1-9]\\d*$/.test(value))) &&
-    Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : null;
-  const snapshotCharacterId = (s) => positiveId(s?.character?.id ?? s?.characterId ?? s?.character?.characterId);
-  const refineItemSignature = (item) => JSON.stringify([item.itemId, item.cards ?? [], item.forged ?? null]);
-`;
-function build(withBag = false) {
-  const dom = new JSDOM(`<body><nav><button class="xp-menu-item">背包</button><button class="xp-menu-item">倉庫</button></nav>
-    <fieldset id="wh"><legend>倉庫 (2/300)</legend><ul>
-      <li><img src="/client/item/984.png"><input type="checkbox" aria-label="取出 神之金屬"><button aria-label="神之金屬的物品資訊">神之金屬</button> ×5</li>
-      <li><img src="/client/item/1201.png"><input type="checkbox" aria-label="取出 短劍"><button aria-label="短劍的物品資訊">+3 短劍</button></li>
-    </ul><button id="submit" disabled>取出 0 項</button></fieldset>
-    ${withBag ? '<div id="bag"><input aria-label="搜尋物品"><table class="xp-table"><thead><tr><th>回城賣 / 存倉</th></tr></thead><tbody></tbody></table></div>' : ''}</body>`, { pretendToBeVisual: true });
-  const { document } = dom.window;
-  const field = document.getElementById('wh'), submit = document.getElementById('submit');
-  const counters = { submit: 0, tabClicks: 0 };
-  const hooks = { onCheck: null, onSubmit: null, onLeaveBag: null, onReturnBag: null };
-  const sync = () => { const n = field.querySelectorAll('ul input:checked').length; submit.textContent = `取出 ${n} 項`; submit.disabled = n === 0; };
-  for (const cb of field.querySelectorAll('ul input')) cb.addEventListener('click', () => { sync(); hooks.onCheck?.(); });
-  submit.addEventListener('click', () => { counters.submit++; hooks.onSubmit?.(); for (const cb of field.querySelectorAll("ul input")) cb.checked = false; sync(); });
-  const bag = document.getElementById('bag');
-  if (withBag === 'transition') field.hidden = true;
-  for (const b of document.querySelectorAll('nav button')) b.addEventListener('click', () => {
-    counters.tabClicks++;
-    if (withBag !== 'transition') return;
-    const back = b.textContent === '背包';
-    field.hidden = bag.hidden = true;
-    (back ? hooks.onReturnBag : hooks.onLeaveBag)?.();
-    if (!back || !hooks.noReturn) setTimeout(() => { (back ? bag : field).hidden = false; }, 25);
-  });
-  // 假 React：HostRoot -> fieldset（props.snap 帶角色）
-  const snap = { character: { id: 1, name: '甲', zeny: 100 }, inventory: [], mapId: 'prontera' };
-  const root = { return: null, memoizedProps: null }; root.stateNode = { current: root };
-  const fsFiber = { return: root, stateNode: field, memoizedProps: { snap }, child: null, sibling: null };
-  root.child = fsFiber; field.__reactFiber$test = fsFiber;
-  let tableFiber = null;
-  if (withBag) {
-    const table = document.querySelector('table.xp-table');
-    tableFiber = { return: root, stateNode: table, memoizedProps: { s: snap }, child: null, sibling: null };
-    fsFiber.sibling = tableFiber; table.__reactFiber$test = tableFiber;
+const production = extract('  function planRefineWithdrawal(', '  const isWeaponRefineButton')
+  + extract('  async function partyApiJson(', '  async function partyReadConfig(');
+
+function fixture(options = {}) {
+  const equipment = { uid: 41, itemId: 1201, qty: 1, refine: 4 };
+  const inventory = [equipment, ...(options.inventory ?? [])];
+  const snapshot = { character: { zeny: options.zeny ?? 100 }, inventory,
+    weight: options.weight ?? 40, derived: { weightMax: 100 }, mapId: options.mapId ?? 'prontera' };
+  const storage = { fees: { prontera: 40 }, items: options.items ?? [{ sid: 7, itemId: 984, qty: 50 }] };
+  const characterId = 1;
+  const signature = item => JSON.stringify([item.itemId, item.cards ?? [], item.forged ?? null]);
+  const session = { characterId, targetUid: options.equipment ? null : 41, items: new Map([[41, signature(equipment)]]) };
+  let actor = characterId;
+  const requests = [];
+  const document = new Proxy({}, { get() { throw Error('背景領倉不可依賴頁面切換或點擊'); } });
+  function assertSession(session) {
+    if (actor !== session.characterId) throw Error('角色已切換');
+    return { s: snapshot };
   }
-  const env = {
-    document, MutationObserver: dom.window.MutationObserver, pageNet: { events: new dom.window.EventTarget() }, state: { activeCharId: 1 }, performance, requestAnimationFrame: f => setTimeout(f, 16), runPageRouter() {},
-    clean: s => String(s || '').normalize('NFKC').replace(/\s+/g, ' ').trim(),
-    visible: el => Boolean(el && el.isConnected && !el.closest('[hidden]')),
-    sleep: ms => new Promise(r => setTimeout(r, Math.min(ms, 5))), console
+  const context = vm.createContext({
+    document,
+    AbortSignal,
+    Event,
+    performance,
+    lastRefineCommandAt: -Infinity,
+    partyCommandId: () => 'test-command-1',
+    isPlainRecord: value => value !== null && typeof value === 'object' && !Array.isArray(value),
+    PartyMoveError: class extends Error {
+      constructor(message, status, code) { super(message); this.status = status; this.code = code; }
+    },
+    refinePack: { items: new Map([
+      [984, { category: 'material', weight: 2 }],
+      [1201, { category: 'equipment', weight: 24 }],
+    ]) },
+    canRefine: item => item.itemId === 1201 && !item.locked && !item.broken,
+    validMaterialBatch: n => Number.isSafeInteger(n) && n >= 1 && n <= 1000,
+    pageNet: { events: new EventTarget() },
+    waitForRefineCommandSlot: async () => {},
+    assertRefineSession: assertSession,
+    assertRefineTarget(s, uid) { assert.equal(uid, s.targetUid); return assertSession(s); },
+    refineItemSignature: signature,
+    async pollFetch(path, init) {
+      requests.push({ path, ...init });
+      const response = (status, body) => ({ status, ok: status < 400, text: async () => JSON.stringify(body) });
+      if (path === '/api/storage') {
+        if (options.switchOnStock) actor = 2;
+        return response(200, { storage });
+      }
+      if (path === '/api/characters/1?deferCatchup=1') {
+        if (options.switchOnSnapshot) actor = 2;
+        return response(200, { characterId, commandRevision: 12, snapshot: options.serverTargetChanged
+          ? { ...snapshot, inventory: [{ ...equipment, refine: 5 }] } : snapshot });
+      }
+      assert.equal(path, '/api/characters/1/commands');
+      assert.equal(init.credentials, 'same-origin');
+      assert.equal(init.headers['x-ro-client'], '1');
+      assert.equal(init.method, 'POST');
+      if (options.network) throw Error('伺服器未回應');
+      if (options.rejection) return response(409, { error: { code: 'REVISION_CONFLICT', message: '角色狀態已更新' } });
+      return response(200, { ok: true });
+    },
+  });
+  vm.runInContext(production + '\nthis.withdraw = tryWithdrawFromWarehouse;', context);
+  return {
+    async run(batch = 20, limits = null) {
+      return context.withdraw(new Set([options.equipment ? 1201 : 984]), 10, () => {}, limits, options.equipment ? 15 : 1, session, options.equipment ? null : batch);
+    },
+    posts: () => requests.filter(r => r.method === 'POST').map(r => JSON.parse(r.body)),
   };
-  const api = new Function(...Object.keys(env), prelude + parts.join('\n') +
-    '\nreturn { tryWithdrawFromWarehouse, bumpEpoch(){ refineIdentityEpoch++; }, epoch(){ return refineIdentityEpoch; } };')(...Object.values(env));
-  const switchRole = (id) => { const next = { ...snap, character: { ...snap.character, id } }; fsFiber.memoizedProps = { snap: next }; if (tableFiber) tableFiber.memoizedProps = { s: next }; env.state.activeCharId = id; api.bumpEpoch(); };
-  return { api, counters, hooks, switchRole, env, close: () => dom.window.close() };
 }
-async function scenario(label, setup, expectSubmit, withBag = false) {
-  const t = build(withBag); const s = setup(t);
-  let err = null, res;
-  try { res = await t.api.tryWithdrawFromWarehouse(new Set([984]), 10, () => {}, null, 15, s.session ?? { characterId: 1, epoch: t.api.epoch(), targetUid: null, items: new Map() }); }
-  catch (e) { err = e.message; }
-  const ok = t.counters.submit === expectSubmit && (s.verify?.(t.counters, res, err) ?? true);
-  t.close();
-  console.log(`${ok ? 'PASS' : 'FAIL'} ${label}: submit=${t.counters.submit} (期望 ${expectSubmit}) tab點擊=${t.counters.tabClicks} 回傳=${res ? res.length : '-'} 錯誤=${err ?? '無'}`);
-  return ok;
+
+function onlyPost(f, items) {
+  assert.deepEqual(f.posts(), [{
+    commandId: 'test-command-1',
+    expectedCommandRevision: 12,
+    command: { type: 'storageWithdraw', items }
+  }]);
 }
+
+async function check(label, fn) {
+  await fn(); console.log('PASS ' + label);
+}
+
 (async () => {
-  console.log('==', path.basename(file), stale ? '(舊測試替身：缺 createFiberScanBudget)' : '', staleSet ? '(舊測試替身：bagFastMiss 仍為 WeakSet)' : '');
-  const r = [];
-  r.push(await scenario('S0 同角色領倉', () => ({}), 1));
-  r.push(await scenario('S1 勾選後提交前切角 → 不得提交', t => { t.hooks.onCheck = () => t.switchRole(2); return {}; }, 0));
-  r.push(await scenario('S2 提交後立即切角 → 已提交 1 次、不再清理', t => { t.hooks.onSubmit = () => t.switchRole(2); return {}; }, 1));
-  r.push(await scenario('S3 切到角色2後以新 session 領倉', t => { t.switchRole(2); return { session: { characterId: 2, epoch: t.api.epoch(), targetUid: null, items: new Map() } }; }, 1));
-  r.push(await scenario('S4 舊 session（epoch 過期）→ 不得提交', t => { const session = { characterId: 1, epoch: t.api.epoch(), targetUid: null, items: new Map() }; t.switchRole(2); t.switchRole(1); return { session }; }, 0));
-  r.push(await scenario('S5 背包同時可見（refineActor 走背包快照）同角色領倉', () => ({}), 1, true));
-  r.push(await scenario('S6 背包可見、提交後切角', t => { t.hooks.onSubmit = () => t.switchRole(2); return {}; }, 1, true));
-  r.push(await scenario('S7 背包可見、切到角色2後新 session', t => { t.switchRole(2); return { session: { characterId: 2, epoch: t.api.epoch(), targetUid: null, items: new Map() } }; }, 1, true));
-  r.push(await scenario('S8 倉庫與背包之間暫時沒有角色資料，驗證後完成一次領取並回背包', () => ({
-    verify: (c, result, err) => c.tabClicks === 2 && result?.length === 1 && !err,
-  }), 1, 'transition'));
-  r.push(await scenario('S9 背包到倉庫的過場切角，不提交也不切回新角色背包', t => {
-    t.hooks.onLeaveBag = () => t.switchRole(2);
-    return { verify: (c, result, err) => c.tabClicks === 1 && !result && Boolean(err) };
-  }, 0, 'transition'));
-  r.push(await scenario('S10 領取已提交但背包仍未就緒，停止本輪且不重送', t => {
-    t.hooks.noReturn = true;
-    return { verify: (c, result, err) => c.tabClicks === 2 && !result && Boolean(err) };
-  }, 1, 'transition'));
-  r.push(await scenario('S11 領取已提交、返回背包途中切角，不把結果交給新角色', t => {
-    t.hooks.onReturnBag = () => t.switchRole(2);
-    return { verify: (c, result, err) => c.tabClicks === 2 && !result && Boolean(err) };
-  }, 1, 'transition'));
-  console.log(r.every(Boolean) ? 'ALL PASS' : 'SOME FAIL'); if (!r.every(Boolean)) process.exitCode = 1;
-})();
+  await check('不換頁並帶上角色修訂版本，使用原生 sid/qty 領取', async () => {
+    const f = fixture();
+    const result = await f.run();
+    assert.equal(result[0].quantity, 20);
+    onlyPost(f, [{ sid: 7, qty: 20 }]);
+  });
+  await check('每批領取量受實際庫存與背包可承受重量限制', async () => {
+    const weight = fixture({ weight: 95 });
+    await weight.run();
+    onlyPost(weight, [{ sid: 7, qty: 2 }]);
+    const stock = fixture({ items: [{ sid: 7, itemId: 984, qty: 1 }] });
+    await stock.run();
+    onlyPost(stock, [{ sid: 7, qty: 1 }]);
+  });
+  await check('背包滿時只允許可合疊材料，並略過不同綁定狀態的堆疊', async () => {
+    const inventory = [{ uid: 42, itemId: 984, qty: 4 }, ...Array.from({ length: 98 }, () => ({}))];
+    const f = fixture({ inventory, items: [{ sid: 6, itemId: 984, qty: 50, bound: true }, { sid: 7, itemId: 984, qty: 50 }] });
+    await f.run();
+    onlyPost(f, [{ sid: 7, qty: 20 }]);
+  });
+  await check('背景領裝依安全上限與容量，跳過上鎖及已達目標的裝備', async () => {
+    const f = fixture({ equipment: true, items: [
+      { sid: 1, itemId: 1201, qty: 1, refine: 4 },
+      { sid: 2, itemId: 1201, qty: 1, refine: 1, locked: true },
+      { sid: 3, itemId: 1201, qty: 1, refine: 2 },
+      { sid: 4, itemId: 1201, qty: 1, refine: 3 }
+    ] });
+    await f.run(undefined, new Map([[1201, 4]]));
+    onlyPost(f, [{ sid: 3, qty: 1 }, { sid: 4, qty: 1 }]);
+  });
+  await check('庫存不足、太重、無倉庫服務或支付不起時不送出領取', async () => {
+    const none = fixture({ items: [] });
+    assert.equal((await none.run()).length, 0);
+    for (const options of [{ weight: 100 }, { mapId: 'pay_fild01' }, { zeny: 39 }]) {
+      const f = fixture(options);
+      await assert.rejects(f.run(), /負重不足|城鎮倉庫|支付倉庫費/);
+      assert.equal(f.posts().length, 0);
+    }
+  });
+  await check('讀庫存或讀角色期間切角、目標變動時不送出領取', async () => {
+    for (const options of [{ switchOnStock: true }, { switchOnSnapshot: true }, { serverTargetChanged: true }]) {
+      const f = fixture(options);
+      await assert.rejects(f.run(), /角色已切換|精煉目標已變動/);
+      assert.equal(f.posts().length, 0);
+    }
+  });
+  await check('伺服器拒絕或請求結果不明時，都只送出一次', async () => {
+    const network = fixture({ network: true });
+    await assert.rejects(network.run(), /結果不明/);
+    onlyPost(network, [{ sid: 7, qty: 20 }]);
+    const conflict = fixture({ rejection: true });
+    await assert.rejects(conflict.run(), /角色狀態已更新/);
+    onlyPost(conflict, [{ sid: 7, qty: 20 }]);
+  });
+})().catch(error => { console.error(error); process.exitCode = 1; });

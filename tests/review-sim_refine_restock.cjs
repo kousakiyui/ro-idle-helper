@@ -78,7 +78,7 @@ async function simulate({
     async tryWithdrawFromWarehouse(ids, _limit, _status, _rules, _max, session, amount) {
       assertSession(session);
       if (amount === undefined) return [];
-      assert.equal(session.targetUid, null);
+      assert.equal(session.targetUid, 1);
       const [id] = ids;
       trace.push('withdraw:' + id);
       const qty = Math.min(amount, stock[id] || 0);

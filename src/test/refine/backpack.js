@@ -24,19 +24,8 @@
   let refPanel = null, refOpen = false, refBusy = false, refStop = false, refTargetPlus = 6, refMode = 'round_robin', refSkipConfirm = true, refAutoWh = true;
   let refMaterialBatch = readValidatedSetting('roi-refine-material-batch-v1', validateMaterialBatch, 20);
 
-  function materialWithdrawalAmount(requested, stock, nativeMax = '') {
-    if (!validMaterialBatch(requested) || !Number.isSafeInteger(stock) || stock < 1) throw Error('無法確認材料庫存或領取數量');
-    let count = Math.min(requested, stock);
-    if (nativeMax !== '') {
-      const max = Number(nativeMax);
-      if (!Number.isSafeInteger(max) || max < 1) throw Error('原生領料數量上限不可用');
-      count = Math.min(count, max);
-    }
-    return count;
-  }
   let bagMemo = null;
   const bagFastMiss = new WeakMap();
-  let visitingWarehouse = false;
 
   function findModernBackpack(input) {
     const panel = input.closest('[role="tabpanel"][aria-label="道具"]');

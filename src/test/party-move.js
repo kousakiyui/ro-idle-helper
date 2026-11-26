@@ -505,7 +505,7 @@
     const cancel = () => { cancelled = true; runner?.cancel(); };
     const onLeave = () => { pageLeft = true; cancel(); };
     const checkActor = () => {
-      if (pageLeft || Number(state.activeCharId) !== me || refineIdentityEpoch !== epoch || refBusy || cartShortcutBusy || visitingWarehouse) {
+      if (pageLeft || Number(state.activeCharId) !== me || refineIdentityEpoch !== epoch || refBusy || cartShortcutBusy) {
         throw new PartyMoveError('角色已切換或頁面已離開，已停止移動', 0, 'ACTOR_CHANGED');
       }
     };

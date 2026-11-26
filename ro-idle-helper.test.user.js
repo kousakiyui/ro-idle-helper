@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.5.8.6
+// @version      3.5.8.7
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -1604,7 +1604,6 @@
 
   const warehouseCustomViews = new WeakMap();
   const warehouseBulkLabel = /^(?:全選(?:目前顯示的)?|勾選這頁可以賣的\s*\(整疊\))$/;
-  let refineWarehouseSubmitButton = null;
 
   function setWarehouseQuery(input, value) {
     if (!input?.isConnected || input.value === value) return;
@@ -1928,7 +1927,7 @@
     const btn = e.target.closest('button');
     if (btn) {
       const cap = clean(btn.textContent);
-      if (f.hasAttribute('data-roi-wh-custom-view') && btn !== refineWarehouseSubmitButton) {
+      if (f.hasAttribute('data-roi-wh-custom-view')) {
         const action = cap.match(/^(直接賣掉|取出|領出)\s*\d+\s*項/)?.[1];
         const selected = [...f.querySelectorAll(':scope > ul > li input[type="checkbox"]:checked')];
         const hiddenSelection = action && (selected.length !== warehouseTotal(f, action) ||
@@ -2720,19 +2719,8 @@
   let refPanel = null, refOpen = false, refBusy = false, refStop = false, refTargetPlus = 6, refMode = 'round_robin', refSkipConfirm = true, refAutoWh = true;
   let refMaterialBatch = readValidatedSetting('roi-refine-material-batch-v1', validateMaterialBatch, 20);
 
-  function materialWithdrawalAmount(requested, stock, nativeMax = '') {
-    if (!validMaterialBatch(requested) || !Number.isSafeInteger(stock) || stock < 1) throw Error('無法確認材料庫存或領取數量');
-    let count = Math.min(requested, stock);
-    if (nativeMax !== '') {
-      const max = Number(nativeMax);
-      if (!Number.isSafeInteger(max) || max < 1) throw Error('原生領料數量上限不可用');
-      count = Math.min(count, max);
-    }
-    return count;
-  }
   let bagMemo = null;
   const bagFastMiss = new WeakMap();
-  let visitingWarehouse = false;
 
   function findModernBackpack(input) {
     const panel = input.closest('[role="tabpanel"][aria-label="道具"]');
@@ -3098,9 +3086,6 @@
   }
 
   const refineItemSignature = (item) => JSON.stringify([item.itemId, item.cards ?? [], item.forged ?? null]);
-  class RefineIdentityPending extends Error {
-    constructor() { super('無法確認仍是起始角色，已停止'); }
-  }
   function assertRefineSession(session, allowStopped = false) {
     if (!session || session.epoch !== refineIdentityEpoch || document.hidden || (!allowStopped && refStop)) {
       throw Error('角色已變更或流程已停止');
@@ -3110,11 +3095,11 @@
       throw Error('背包介面已切換，已停止');
     }
     const actor = refineActor(context);
-    if ((actor != null && actor !== session.characterId) ||
+    if (actor !== session.characterId ||
         (state.activeCharId != null && Number(state.activeCharId) !== session.characterId)) {
       throw Error('無法確認仍是起始角色，已停止');
     }
-    if (actor == null) throw new RefineIdentityPending();
+    return context;
   }
 
   function assertRefineTarget(session, uid, allowMissing = false) {
@@ -3162,15 +3147,9 @@
   }
 
   function waitForRefineUi(session, check, options = {}) {
-    const { root, timeout, allowStopped = false, allowViewTransition = false } = options;
+    const { root, timeout, allowStopped = false } = options;
     return waitForUi(expired => {
-      try { assertRefineSession(session, allowStopped || session.restoring === true); }
-      catch (error) {
-        // 只在自動換背包／倉庫的過場等待新畫面。角色已變更仍立即停止。
-        if (allowViewTransition && !expired &&
-            (error instanceof RefineIdentityPending || error instanceof FiberTraversalTimeout)) return null;
-        throw error;
-      }
+      assertRefineSession(session, allowStopped || session.restoring === true);
       return check(expired);
     }, {
       root, timeout,
@@ -3211,125 +3190,92 @@
     return equipped;
   }
 
-  async function tryWithdrawFromWarehouse(wantedItemIds, targetPlusLimit, setStatus, limitsById, maxItems = 15, session, materialQuantity = null) {
-    assertRefineSession(session);
-    const findWhField = () => [...document.querySelectorAll('fieldset')].find((f) => /^倉庫(?:\s*[（(]|$)/.test(clean([...f.children].find((c) => c.tagName === 'LEGEND')?.textContent)) && visible(f));
-    let switchedTab = null;
-    let field = null;
-    const selected = new Map();
-    let submitted = false, completed = false;
-    visitingWarehouse = true;
-    try {
-      field = findWhField();
-      if (!field) {
-        const tabs = [...document.querySelectorAll('.xp-menu-item, button, a')].filter(visible);
-        const whTab = tabs.find((el) => clean(el.textContent) === '倉庫');
-        switchedTab = tabs.find((el) => clean(el.textContent) === '背包');
-        if (!whTab || !switchedTab) return [];
-        clickRefineControl(session, whTab);
-        field = await waitForRefineUi(session, findWhField, { timeout: 2500, allowViewTransition: true });
-        if (!field) throw Error('開啟倉庫逾時');
-      }
-      const checked = () => [...field.querySelectorAll(':scope > ul > li input[type="checkbox"]:checked')];
-      if (checked().length || [...field.querySelectorAll('button')].some((b) => clean(b.textContent) === '結束賣出')) {
-        throw Error('倉庫已有勾選或正在賣出，請先完成原本的操作');
-      }
-      for (const li of field.querySelectorAll('li')) {
-        const cb = li.querySelector('input[type="checkbox"]');
-        const id = Number(li.querySelector('img[src*="/client/item/"]')?.getAttribute('src')?.match(/\/(\d+)\.png/)?.[1]);
-        if (!wantedItemIds.has(id) || !cb || cb.disabled || cb.checked || !/^(取出|領出)/.test(clean(cb.getAttribute('aria-label')))) continue;
-        const name = clean(li.querySelector('button[aria-label$="的物品資訊"]')?.textContent || '');
-        const refine = Number(name.match(/^\+\s*(\d+)/)?.[1] || 0);
-        if (!name || refine >= (limitsById ? limitsById.get(id) || 0 : targetPlusLimit)) continue;
-        if (refStop || document.hidden) throw Error('已中止領倉');
-        clickRefineControl(session, cb);
-        selected.set(cb, { id, refine, name });
-        const confirmed = await waitForRefineUi(session, () => {
-          if (!field.contains(cb) || !cb.checked) return false;
-          return [...field.querySelectorAll('button')].some(b =>
-            !b.disabled && Number(clean(b.textContent).match(/^(?:領出|取出)\s*(\d+)\s*項/)?.[1]) === selected.size);
-        }, { root: field });
-        if (!confirmed) throw Error('倉庫勾選已變動或無法領取，已中止領倉');
-        if (materialQuantity !== null) {
-          const amount = li.querySelector('input[type="number"]');
-          const stackText = clean(li.textContent).match(/×\s*([\d,]+)/)?.[1];
-          const stack = stackText ? Number(stackText.replace(/,/g, '')) : amount ? NaN : 1;
-          const quantity = materialWithdrawalAmount(materialQuantity, stack, amount?.max ?? '');
-          if (amount && Number(amount.value) !== quantity) {
-            assertRefineSession(session);
-            if (!li.contains(amount) || Number(warehouseItemId(li)) !== id) throw Error('領料項目已變動');
-            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-            if (!setter) throw Error('無法設定領料數量，已停止');
-            setter.call(amount, String(quantity));
-            amount.dispatchEvent(new Event('input', { bubbles: true }));
-            amount.dispatchEvent(new Event('change', { bubbles: true }));
-            const accepted = await waitForRefineUi(session, () => {
-              const current = cb.closest('li')?.querySelector('input[type="number"]');
-              if (!current?.isConnected || Number(current.value) !== quantity) return false;
-              // The manual setter changes the DOM immediately; React must also accept the controlled value.
-              return Boolean(getCommittedProps(current, props => props.value != null && Number(props.value) === quantity));
-            }, { root: li });
-            if (!accepted) throw Error('遊戲未接受領料數量，已停止');
-          } else if (!amount && (stack !== 1 || quantity !== 1)) {
-            throw Error('無法確認領料數量，已停止以避免取出整疊');
-          }
-          selected.get(cb).quantity = quantity;
-        }
-        if (selected.size >= maxItems) break;
-      }
-      if (!selected.size) { completed = true; return []; }
-      await waitForRefineCommandSlot(session);
-      const boxes = checked();
-      for (const [cb, expected] of selected) {
-        const row = cb.closest('li');
-        if (!field.contains(cb) || Number(warehouseItemId(row)) !== expected.id ||
-            clean(row?.querySelector('button[aria-label$="的物品資訊"]')?.textContent) !== expected.name) {
-          throw Error('領取物品已變動，已停止');
-        }
-        if (expected.quantity !== undefined) {
-          const amount = row.querySelector('input[type="number"]');
-          if (amount ? Number(amount.value) !== expected.quantity : expected.quantity !== 1) throw Error('領料數量已變動，已停止');
-        }
-      }
-      const btn = [...field.querySelectorAll('button')].find((b) => Number(clean(b.textContent).match(/^(?:領出|取出)\s*(\d+)\s*項/)?.[1]) === selected.size);
-      if (refStop || document.hidden || !field.isConnected || boxes.length !== selected.size || boxes.some((cb) => !selected.has(cb)) || !btn || btn.disabled) {
-        throw Error('倉庫勾選已變動或無法領取，已中止領倉');
-      }
-      setStatus(`📦 領取 ${selected.size} 項` + (materialQuantity !== null ? `（${[...selected.values()].reduce((sum, item) => sum + item.quantity, 0)} 個材料）` : ''));
-      // The batch above is verified against the native selection, including rows hidden by the custom tab.
-      refineWarehouseSubmitButton = btn;
-      try { clickRefineCommand(session, btn); }
-      finally { refineWarehouseSubmitButton = null; }
-      submitted = true;
-      const acknowledged = await waitForRefineUi(session, () =>
-        [...selected.keys()].every(cb => !cb.isConnected || !cb.checked),
-      { root: field.parentElement, timeout: 4000 });
-      if (!acknowledged) throw Error('已送出領倉，但未確認提交結果。請確認背包與倉庫。');
-      completed = true;
-      return [...selected.values()];
-    } finally {
-      try {
-        const canClean = () => session.epoch === refineIdentityEpoch && !document.hidden &&
-          (state.activeCharId == null || Number(state.activeCharId) === session.characterId) &&
-          refineActor(null) === session.characterId && field?.isConnected && findWhField() === field;
-        if (!submitted) {
-          for (const cb of selected.keys()) {
-            if (canClean() && field.contains(cb) && cb.isConnected && cb.checked && !cb.disabled) cb.click();
-          }
-        }
-        if (switchedTab) {
-          if (!canClean() || !switchedTab.isConnected || switchedTab.disabled) throw Error('無法安全返回背包，請確認角色與領取結果');
-          switchedTab.click();
-          const backpack = await waitForRefineUi(session, () => readBackpackContext(true), {
-            timeout: 2500, allowStopped: true, allowViewTransition: true
-          });
-          if (!backpack) throw Error('返回背包逾時，請確認背包與領取結果');
-        }
-      } catch (error) {
-        // 主流程已失敗時保留原錯誤。領取完成則須確定背包可用，才能繼續精煉。
-        if (completed) throw error;
-      } finally { visitingWarehouse = false; }
+  function planRefineWithdrawal(storage, snapshot, wantedItemIds, targetPlusLimit, limitsById, maxItems, materialQuantity) {
+    if (!Array.isArray(storage?.items) || !isPlainRecord(storage.fees)) throw Error('無法確認倉庫庫存');
+    if (materialQuantity !== null && !validMaterialBatch(materialQuantity)) throw Error('領料數量不正確');
+    const sids = new Set();
+    const candidates = storage.items.filter((item) => {
+      if (!item || !wantedItemIds.has(item.itemId)) return false;
+      if (!Number.isSafeInteger(item.sid) || item.sid <= 0 || sids.has(item.sid) ||
+          !Number.isSafeInteger(item.qty) || item.qty <= 0) throw Error('無法確認倉庫物品或數量');
+      sids.add(item.sid);
+      if (materialQuantity !== null) return refinePack.items.get(item.itemId)?.category === 'material';
+      return item.qty === 1 && canRefine(item) && (item.refine ?? 0) < (limitsById ? limitsById.get(item.itemId) ?? 0 : targetPlusLimit);
+    }).sort((a, b) => a.itemId - b.itemId || (a.refine ?? 0) - (b.refine ?? 0) || a.sid - b.sid);
+    if (!candidates.length) return [];
+
+    const fee = Object.hasOwn(storage.fees, snapshot.mapId) ? storage.fees[snapshot.mapId] : null;
+    if (!Number.isSafeInteger(fee) || fee < 0 || snapshot.activity === 'dead') throw Error('目前無法使用城鎮倉庫');
+    if (!(snapshot.character.zeny >= fee)) throw Error('Zeny 不足以支付倉庫費');
+    const maxWeight = snapshot.derived?.weightMax;
+    if (!Number.isFinite(snapshot.weight) || snapshot.weight < 0 ||
+        !Number.isFinite(maxWeight) || maxWeight <= 0 || !Array.isArray(snapshot.inventory)) throw Error('無法確認背包剩餘容量');
+    let freeUnits = Math.round(maxWeight * 10) - Math.round(snapshot.weight * 10);
+    let freeSlots = 100 - snapshot.inventory.length;
+    const picked = [];
+    for (const item of candidates) {
+      const weight = refinePack.items.get(item.itemId)?.weight;
+      if (!Number.isFinite(weight) || weight < 0) throw Error('無法確認物品重量');
+      const units = Math.round(weight * 10);
+      const merge = materialQuantity !== null && snapshot.inventory.some(stack => stack.itemId === item.itemId &&
+        Boolean(stack.locked) === Boolean(item.locked) && Boolean(stack.bound) === Boolean(item.bound) &&
+        (stack.expiresWallMs ?? 0) === (item.expiresWallMs ?? 0));
+      if (freeSlots <= 0 && !merge) continue;
+      if (freeUnits < 0) break;
+      const capacity = units ? Math.floor(freeUnits / units) : item.qty;
+      const quantity = Math.min(materialQuantity ?? 1, item.qty, capacity);
+      if (quantity < 1) continue;
+      picked.push({ sid: item.sid, id: item.itemId, refine: item.refine ?? 0, quantity });
+      freeUnits -= quantity * units;
+      if (!merge) freeSlots--;
+      if (picked.length >= maxItems || materialQuantity !== null) break;
     }
+    if (!picked.length) throw Error('背包空間或負重不足，無法領倉');
+    return picked;
+  }
+
+  async function tryWithdrawFromWarehouse(wantedItemIds, targetPlusLimit, setStatus, limitsById, maxItems = 15, session, materialQuantity = null) {
+    const readBackpack = () => {
+      const b = session.targetUid != null ? assertRefineTarget(session, session.targetUid) : assertRefineSession(session);
+      if (!b) throw Error('請保持原角色的背包頁開啟');
+      return b;
+    };
+    const start = readBackpack();
+    const uid = session.targetUid;
+    const targetRefine = uid == null ? null : start.s.inventory.find(item => item.uid === uid).refine ?? 0;
+    await waitForRefineCommandSlot(session);
+    const { storage } = await partyApiJson('/api/storage');
+    readBackpack();
+    const id = session.characterId;
+    const server = await partyApiJson(`/api/characters/${id}?deferCatchup=1`);
+    const live = readBackpack();
+    const snapshot = server?.snapshot;
+    if (Number(server?.characterId) !== id || !snapshot?.character || !Number.isSafeInteger(server.commandRevision) ||
+        live.s.mapId !== snapshot.mapId || (uid != null &&
+          (live.s.inventory.find(item => item.uid === uid)?.refine ?? 0) !== targetRefine)) {
+      throw Error('角色狀態或目標已變動，已停止領倉');
+    }
+    if (uid != null) {
+      const item = snapshot.inventory?.find?.(stack => stack.uid === uid);
+      if (!item || refineItemSignature(item) !== session.items.get(uid) || (item.refine ?? 0) !== targetRefine) {
+        throw Error('伺服器上的精煉目標已變動，已停止領倉');
+      }
+    }
+    const picked = planRefineWithdrawal(storage, snapshot, wantedItemIds, targetPlusLimit, limitsById, maxItems, materialQuantity);
+    if (!picked.length) return [];
+    const quantity = picked.reduce((total, item) => total + item.quantity, 0);
+    setStatus(materialQuantity === null ? `📦 背景領取 ${picked.length} 件裝備` : `📦 背景領取 ${quantity} 個材料`);
+    const items = picked.map(({ sid, quantity: qty }) => ({ sid, qty }));
+    readBackpack();
+    lastRefineCommandAt = performance.now();
+    try {
+      await partyCommand(id, { type: 'storageWithdraw', items }, server.commandRevision);
+    } catch (error) {
+      if (error.status >= 400 && error.status < 500 && error.status !== 408 && error.code !== 'INVALID_RESPONSE') throw error;
+      throw Error('領倉結果不明，請確認背包與倉庫。此批不會重送。');
+    }
+    // 送出後的入帳驗證由呼叫端依材料數量或新增裝備 UID 進行。
+    return picked;
   }
 
   const isWeaponRefineButton = (text) => /^武器精[練煉]\s*\(\s*技能(?:[,\s)]|$)/.test(text);
@@ -3385,11 +3331,9 @@
     for (const [id, required] of materials) {
       let quantity = materialCount(readInventory(), id);
       while (quantity < required) {
-        session.targetUid = null;
         const picked = await tryWithdrawFromWarehouse(new Set([id]), 10, setStatus, null, 1, session, refMaterialBatch);
         const expected = quantity + (picked[0]?.quantity ?? 0);
         if (picked.length) await waitForRefineMaterial(session, id, expected);
-        session.targetUid = uid;
         const received = materialCount(readInventory(), id);
         if (!picked.length) return id;
         if (expected <= quantity || received < expected) throw Error('補料後無法確認背包材料增加，已停止');
@@ -3772,7 +3716,7 @@
     const b = readFiberForUi(() => readBackpackContext());
     if (b === undefined) return;
     if (!b) {
-      if (refBusy && !visitingWarehouse) stopRefine();
+      if (refBusy) stopRefine();
       refPanel?.remove(); refPanel = null; return;
     }
     if (refPanel?.isConnected && refPanel.parentElement !== b.host) refPanel.remove();
@@ -4908,7 +4852,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:var(--roi-title);border:2px solid var(--roi-frame);color:var(--roi-info);align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px var(--roi-shadow);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:var(--roi-title);border-bottom:1px solid var(--roi-edge);font-weight:bold;color:var(--roi-title-text);cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.6 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.7 測試版</span>
           <button id="ro-min-btn" style="background:var(--roi-selected);color:var(--roi-text);border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:var(--roi-inset);border-bottom:1px solid var(--roi-edge);">
@@ -6018,7 +5962,7 @@
     const cancel = () => { cancelled = true; runner?.cancel(); };
     const onLeave = () => { pageLeft = true; cancel(); };
     const checkActor = () => {
-      if (pageLeft || Number(state.activeCharId) !== me || refineIdentityEpoch !== epoch || refBusy || cartShortcutBusy || visitingWarehouse) {
+      if (pageLeft || Number(state.activeCharId) !== me || refineIdentityEpoch !== epoch || refBusy || cartShortcutBusy) {
         throw new PartyMoveError('角色已切換或頁面已離開，已停止移動', 0, 'ACTOR_CHANGED');
       }
     };
@@ -6132,7 +6076,7 @@
     if (group.nextElementSibling !== bar) group.after(bar);
   }
 
-  const hasActiveOperation = () => refBusy || cartShortcutBusy || visitingWarehouse || partyMoveActive !== null;
+  const hasActiveOperation = () => refBusy || cartShortcutBusy || partyMoveActive !== null;
   const isActiveWindow = () => hasActiveOperation() ||
     (!document.hidden && (document.hasFocus() || performance.now() - lastInteractionAt <= TIMING.recentInteraction));
 
