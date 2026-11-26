@@ -14,7 +14,8 @@ const names = ['tryWithdrawFromWarehouse','assertRefineSession','assertRefineTar
   'readBackpackContext','findModernBackpack','getCommittedProps','currentFiberRoot','getReactFiber','nativeStoreActor','findRefineNativeStore',
   'warehouseItemId','materialWithdrawalAmount','validMaterialBatch','waitForUi','waitForRefineUi','waitForRefineCommandSlot','clickRefineCommand'];
 if (!stale) names.push('createFiberScanBudget');
-const parts = names.map(slice).filter(Boolean);
+const identityError = src.match(/  class RefineIdentityPending extends Error \{[\s\S]*?\r?\n  \}/)?.[0];
+const parts = [...names.map(slice), identityError].filter(Boolean);
 const v351 = /createFiberScanBudget/.test(src);
 const prelude = `
   let refineIdentityEpoch = 0, refineNativeStore = null, cachedFiberKey = null, bagMemo = null, fiberRetryScheduled = false;
@@ -38,11 +39,20 @@ function build(withBag = false) {
   const { document } = dom.window;
   const field = document.getElementById('wh'), submit = document.getElementById('submit');
   const counters = { submit: 0, tabClicks: 0 };
-  const hooks = { onCheck: null, onSubmit: null };
+  const hooks = { onCheck: null, onSubmit: null, onLeaveBag: null, onReturnBag: null };
   const sync = () => { const n = field.querySelectorAll('ul input:checked').length; submit.textContent = `取出 ${n} 項`; submit.disabled = n === 0; };
   for (const cb of field.querySelectorAll('ul input')) cb.addEventListener('click', () => { sync(); hooks.onCheck?.(); });
   submit.addEventListener('click', () => { counters.submit++; hooks.onSubmit?.(); for (const cb of field.querySelectorAll("ul input")) cb.checked = false; sync(); });
-  for (const b of document.querySelectorAll('nav button')) b.addEventListener('click', () => counters.tabClicks++);
+  const bag = document.getElementById('bag');
+  if (withBag === 'transition') field.hidden = true;
+  for (const b of document.querySelectorAll('nav button')) b.addEventListener('click', () => {
+    counters.tabClicks++;
+    if (withBag !== 'transition') return;
+    const back = b.textContent === '背包';
+    field.hidden = bag.hidden = true;
+    (back ? hooks.onReturnBag : hooks.onLeaveBag)?.();
+    if (!back || !hooks.noReturn) setTimeout(() => { (back ? bag : field).hidden = false; }, 25);
+  });
   // 假 React：HostRoot -> fieldset（props.snap 帶角色）
   const snap = { character: { id: 1, name: '甲', zeny: 100 }, inventory: [], mapId: 'prontera' };
   const root = { return: null, memoizedProps: null }; root.stateNode = { current: root };
@@ -63,14 +73,15 @@ function build(withBag = false) {
   const api = new Function(...Object.keys(env), prelude + parts.join('\n') +
     '\nreturn { tryWithdrawFromWarehouse, bumpEpoch(){ refineIdentityEpoch++; }, epoch(){ return refineIdentityEpoch; } };')(...Object.values(env));
   const switchRole = (id) => { const next = { ...snap, character: { ...snap.character, id } }; fsFiber.memoizedProps = { snap: next }; if (tableFiber) tableFiber.memoizedProps = { s: next }; env.state.activeCharId = id; api.bumpEpoch(); };
-  return { api, counters, hooks, switchRole, env };
+  return { api, counters, hooks, switchRole, env, close: () => dom.window.close() };
 }
 async function scenario(label, setup, expectSubmit, withBag = false) {
   const t = build(withBag); const s = setup(t);
   let err = null, res;
   try { res = await t.api.tryWithdrawFromWarehouse(new Set([984]), 10, () => {}, null, 15, s.session ?? { characterId: 1, epoch: t.api.epoch(), targetUid: null, items: new Map() }); }
   catch (e) { err = e.message; }
-  const ok = t.counters.submit === expectSubmit;
+  const ok = t.counters.submit === expectSubmit && (s.verify?.(t.counters, res, err) ?? true);
+  t.close();
   console.log(`${ok ? 'PASS' : 'FAIL'} ${label}: submit=${t.counters.submit} (期望 ${expectSubmit}) tab點擊=${t.counters.tabClicks} 回傳=${res ? res.length : '-'} 錯誤=${err ?? '無'}`);
   return ok;
 }
@@ -85,5 +96,20 @@ async function scenario(label, setup, expectSubmit, withBag = false) {
   r.push(await scenario('S5 背包同時可見（refineActor 走背包快照）同角色領倉', () => ({}), 1, true));
   r.push(await scenario('S6 背包可見、提交後切角', t => { t.hooks.onSubmit = () => t.switchRole(2); return {}; }, 1, true));
   r.push(await scenario('S7 背包可見、切到角色2後新 session', t => { t.switchRole(2); return { session: { characterId: 2, epoch: t.api.epoch(), targetUid: null, items: new Map() } }; }, 1, true));
+  r.push(await scenario('S8 倉庫與背包之間暫時沒有角色資料，驗證後完成一次領取並回背包', () => ({
+    verify: (c, result, err) => c.tabClicks === 2 && result?.length === 1 && !err,
+  }), 1, 'transition'));
+  r.push(await scenario('S9 背包到倉庫的過場切角，不提交也不切回新角色背包', t => {
+    t.hooks.onLeaveBag = () => t.switchRole(2);
+    return { verify: (c, result, err) => c.tabClicks === 1 && !result && Boolean(err) };
+  }, 0, 'transition'));
+  r.push(await scenario('S10 領取已提交但背包仍未就緒，停止本輪且不重送', t => {
+    t.hooks.noReturn = true;
+    return { verify: (c, result, err) => c.tabClicks === 2 && !result && Boolean(err) };
+  }, 1, 'transition'));
+  r.push(await scenario('S11 領取已提交、返回背包途中切角，不把結果交給新角色', t => {
+    t.hooks.onReturnBag = () => t.switchRole(2);
+    return { verify: (c, result, err) => c.tabClicks === 2 && !result && Boolean(err) };
+  }, 1, 'transition'));
   console.log(r.every(Boolean) ? 'ALL PASS' : 'SOME FAIL'); if (!r.every(Boolean)) process.exitCode = 1;
 })();

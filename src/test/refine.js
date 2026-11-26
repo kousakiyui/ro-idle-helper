@@ -124,6 +124,9 @@
   }
 
   const refineItemSignature = (item) => JSON.stringify([item.itemId, item.cards ?? [], item.forged ?? null]);
+  class RefineIdentityPending extends Error {
+    constructor() { super('無法確認仍是起始角色，已停止'); }
+  }
   function assertRefineSession(session, allowStopped = false) {
     if (!session || session.epoch !== refineIdentityEpoch || document.hidden || (!allowStopped && refStop)) {
       throw Error('角色已變更或流程已停止');
@@ -133,9 +136,11 @@
       throw Error('背包介面已切換，已停止');
     }
     const actor = refineActor(context);
-    if (actor !== session.characterId || (state.activeCharId != null && Number(state.activeCharId) !== actor)) {
+    if ((actor != null && actor !== session.characterId) ||
+        (state.activeCharId != null && Number(state.activeCharId) !== session.characterId)) {
       throw Error('無法確認仍是起始角色，已停止');
     }
+    if (actor == null) throw new RefineIdentityPending();
   }
 
   function assertRefineTarget(session, uid, allowMissing = false) {
@@ -183,9 +188,15 @@
   }
 
   function waitForRefineUi(session, check, options = {}) {
-    const { root, timeout, allowStopped = false } = options;
+    const { root, timeout, allowStopped = false, allowViewTransition = false } = options;
     return waitForUi(expired => {
-      assertRefineSession(session, allowStopped || session.restoring === true);
+      try { assertRefineSession(session, allowStopped || session.restoring === true); }
+      catch (error) {
+        // 只在自動換背包／倉庫的過場等待新畫面。角色已變更仍立即停止。
+        if (allowViewTransition && !expired &&
+            (error instanceof RefineIdentityPending || error instanceof FiberTraversalTimeout)) return null;
+        throw error;
+      }
       return check(expired);
     }, {
       root, timeout,
@@ -232,7 +243,7 @@
     let switchedTab = null;
     let field = null;
     const selected = new Map();
-    let submitted = false;
+    let submitted = false, completed = false;
     visitingWarehouse = true;
     try {
       field = findWhField();
@@ -242,7 +253,7 @@
         switchedTab = tabs.find((el) => clean(el.textContent) === '背包');
         if (!whTab || !switchedTab) return [];
         clickRefineControl(session, whTab);
-        field = await waitForRefineUi(session, findWhField, { timeout: 2500 });
+        field = await waitForRefineUi(session, findWhField, { timeout: 2500, allowViewTransition: true });
         if (!field) throw Error('開啟倉庫逾時');
       }
       const checked = () => [...field.querySelectorAll(':scope > ul > li input[type="checkbox"]:checked')];
@@ -292,7 +303,7 @@
         }
         if (selected.size >= maxItems) break;
       }
-      if (!selected.size) return [];
+      if (!selected.size) { completed = true; return []; }
       await waitForRefineCommandSlot(session);
       const boxes = checked();
       for (const [cb, expected] of selected) {
@@ -320,6 +331,7 @@
         [...selected.keys()].every(cb => !cb.isConnected || !cb.checked),
       { root: field.parentElement, timeout: 4000 });
       if (!acknowledged) throw Error('已送出領倉，但未確認提交結果。請確認背包與倉庫。');
+      completed = true;
       return [...selected.values()];
     } finally {
       try {
@@ -331,12 +343,17 @@
             if (canClean() && field.contains(cb) && cb.isConnected && cb.checked && !cb.disabled) cb.click();
           }
         }
-        if (canClean() && switchedTab?.isConnected && !switchedTab.disabled) {
+        if (switchedTab) {
+          if (!canClean() || !switchedTab.isConnected || switchedTab.disabled) throw Error('無法安全返回背包，請確認角色與領取結果');
           switchedTab.click();
-          await waitForRefineUi(session, () => readBackpackContext(true), { timeout: 2500, allowStopped: true });
+          const backpack = await waitForRefineUi(session, () => readBackpackContext(true), {
+            timeout: 2500, allowStopped: true, allowViewTransition: true
+          });
+          if (!backpack) throw Error('返回背包逾時，請確認背包與領取結果');
         }
-      } catch {
-        // 清理中斷時，保留原始領倉錯誤，不再點擊。
+      } catch (error) {
+        // 主流程已失敗時保留原錯誤。領取完成則須確定背包可用，才能繼續精煉。
+        if (completed) throw error;
       } finally { visitingWarehouse = false; }
     }
   }
