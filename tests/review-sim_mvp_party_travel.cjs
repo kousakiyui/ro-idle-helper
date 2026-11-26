@@ -70,6 +70,11 @@ function fixture(options) {
     checks.push(inFlight === 1);
     try {
       sent.push([player.id, command.type, command.mapId]);
+      if (options.cancel && command.type === 'updateConfig') {
+        const cancel = [...d.querySelectorAll('#roi-helper-mvp-panel button')].find(b => b.textContent === '取消同帳號移動');
+        assert.ok(cancel && !cancel.hidden);
+        cancel.click();
+      }
       await pause(1);
       if (options.switchActor && sent.length === 1) w.roiTestTravel.setActor(2);
       if (command.type === 'stop') {
@@ -116,10 +121,6 @@ function fixture(options) {
     async clickAndWait() {
       button.click();
       button.click();
-      if (options.cancel) {
-        for (let i = 0; i < 60 && !sent.some(([, type]) => type === 'updateConfig'); i++) await pause(2);
-        travel.querySelector('button').click();
-      }
       const status = travel.querySelector('[role="status"]');
       for (let i = 0; i < 140 && !/^(同帳號隊員已抵達|同帳號移動未完成|無法移動同帳號隊員)/.test(status.textContent); i++) await pause(5);
       assert.match(status.textContent, /^(同帳號隊員已抵達|同帳號移動未完成|無法移動同帳號隊員)/);

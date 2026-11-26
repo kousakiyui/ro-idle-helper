@@ -1,5 +1,5 @@
 
-  const hasActiveOperation = () => refBusy || cartShortcutBusy || visitingWarehouse || partyMoveActive !== null;
+  const hasActiveOperation = () => refBusy || cartShortcutBusy || partyMoveActive !== null;
   const isActiveWindow = () => hasActiveOperation() ||
     (!document.hidden && (document.hasFocus() || performance.now() - lastInteractionAt <= TIMING.recentInteraction));
 

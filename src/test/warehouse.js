@@ -170,7 +170,6 @@
 
   const warehouseCustomViews = new WeakMap();
   const warehouseBulkLabel = /^(?:全選(?:目前顯示的)?|勾選這頁可以賣的\s*\(整疊\))$/;
-  let refineWarehouseSubmitButton = null;
 
   function setWarehouseQuery(input, value) {
     if (!input?.isConnected || input.value === value) return;
@@ -494,7 +493,7 @@
     const btn = e.target.closest('button');
     if (btn) {
       const cap = clean(btn.textContent);
-      if (f.hasAttribute('data-roi-wh-custom-view') && btn !== refineWarehouseSubmitButton) {
+      if (f.hasAttribute('data-roi-wh-custom-view')) {
         const action = cap.match(/^(直接賣掉|取出|領出)\s*\d+\s*項/)?.[1];
         const selected = [...f.querySelectorAll(':scope > ul > li input[type="checkbox"]:checked')];
         const hiddenSelection = action && (selected.length !== warehouseTotal(f, action) ||
