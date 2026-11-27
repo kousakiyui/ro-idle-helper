@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.5.8.10
+// @version      3.5.8.11
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -699,6 +699,23 @@
     };
     const root = currentFiberRoot(el);
     if (!root) return null;
+    // DOM node fibers can point to the previous React tree; only use the committed branch.
+    let direct = getReactFiber(el);
+    let top = direct;
+    while (top?.return) top = top.return;
+    if (top !== root) direct = direct?.alternate;
+    let committed = direct;
+    while (committed?.return) committed = committed.return;
+    if (committed === root && direct?.stateNode === el) {
+      for (let node = direct; node; node = node.return) {
+        if (node.memoizedProps && matcher(node.memoizedProps)) {
+          const route = fiberRouteFrom(root, direct);
+          if (route) fiberRouteMap.set(el, route);
+          return node.memoizedProps;
+        }
+      }
+      return null;
+    }
     const cachedRoute = fiberRouteMap.get(el);
     if (cachedRoute) {
       let node = root, found = null;
@@ -3108,7 +3125,7 @@
 
   // 測試版診斷：預設關閉（localStorage roi-refine-diag=1 或面板開關）。只留最近 30 筆，
   // 只存布林、數字與固定階段名稱，不含玩家名稱、角色識別碼、憑證或 API 回應內容。
-  const refineBuild = '3.5.8.10-test';
+  const refineBuild = '3.5.8.11-test';
   const refineDiagLimit = 30;
   const refineDiagLog = [];
   let refineDiagStart = 0;
@@ -4944,7 +4961,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:var(--roi-title);border:2px solid var(--roi-frame);color:var(--roi-info);align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px var(--roi-shadow);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:var(--roi-title);border-bottom:1px solid var(--roi-edge);font-weight:bold;color:var(--roi-title-text);cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.10 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.11 測試版</span>
           <button id="ro-min-btn" style="background:var(--roi-selected);color:var(--roi-text);border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:var(--roi-inset);border-bottom:1px solid var(--roi-edge);">

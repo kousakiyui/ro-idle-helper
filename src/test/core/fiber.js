@@ -72,6 +72,23 @@
     };
     const root = currentFiberRoot(el);
     if (!root) return null;
+    // DOM node fibers can point to the previous React tree; only use the committed branch.
+    let direct = getReactFiber(el);
+    let top = direct;
+    while (top?.return) top = top.return;
+    if (top !== root) direct = direct?.alternate;
+    let committed = direct;
+    while (committed?.return) committed = committed.return;
+    if (committed === root && direct?.stateNode === el) {
+      for (let node = direct; node; node = node.return) {
+        if (node.memoizedProps && matcher(node.memoizedProps)) {
+          const route = fiberRouteFrom(root, direct);
+          if (route) fiberRouteMap.set(el, route);
+          return node.memoizedProps;
+        }
+      }
+      return null;
+    }
     const cachedRoute = fiberRouteMap.get(el);
     if (cachedRoute) {
       let node = root, found = null;

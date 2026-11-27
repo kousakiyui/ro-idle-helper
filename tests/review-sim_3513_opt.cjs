@@ -12,7 +12,7 @@ const reference = (root, el, matcher) => { const stack = [{ f: root, found: null
     if (f.stateNode === el) return { next, route: next ? route : null };
     if (f.sibling) stack.push({ f: f.sibling, found, route: [...route, 's'] }); if (f.child) stack.push({ f: f.child, found: next, route: [...route, 'c'] }); } return null; };
 const G = new Function(`class FiberTraversalTimeout extends Error {} let fiberRetryScheduled = false; const requestAnimationFrame = () => {}; const runPageRouter = () => {};
-  let ROOT = null; const currentFiberRoot = () => ROOT; const fiberRouteMap = new WeakMap(); const propsScanRetries = new WeakMap();
+  let ROOT = null; const getReactFiber = el => el.fiber || null; const currentFiberRoot = () => ROOT; const fiberRouteMap = new WeakMap(); const propsScanRetries = new WeakMap();
   ${slice('createFiberScanBudget')}${slice('getCommittedProps')} return { set: (r) => { ROOT = r; }, getCommittedProps, fiberRouteMap };`)();
 let seed = 42; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 let same = 0, total = 0;
@@ -34,6 +34,7 @@ check(same === total, `P2 getCommittedProps 與原始演算法一致（${same}/$
   G.set(root); const t0 = performance.now(); let v = null; try { v = G.getCommittedProps(leaf.stateNode, (p) => p.s); } catch (e) { v = e.constructor.name; } const ms = performance.now() - t0;
   check(v === root.memoizedProps && ms < 8, `P2 ${cnt} 節點、路徑長 1.2 萬：${ms.toFixed(2)}ms（< 8ms 預算）${typeof v === 'string' ? '，' + v : ''}`);
 }
+{ const root = { memoizedProps: { s: 1 } }; const el = {}; const leaf = { stateNode: el, return: root, memoizedProps: {} }; el.fiber = leaf; G.set(root); check(G.getCommittedProps(el, p => p.s) === root.memoizedProps, '直接讀取已提交節點的祖先'); }
 // P3
 check(/const tableText = table\?\.textContent \|\| '';/.test(src) && !/table\.textContent\.includes\('回城賣'\) \|\| !table\.textContent/.test(src), 'P3 readBackpackContext 只讀一次 textContent');
 // P4
