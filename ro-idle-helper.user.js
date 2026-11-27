@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜倉庫保護與跨城市場
 // @namespace    local.ro-idle.warehouse-helper
-// @version      3.5.8.9
+// @version      3.5.8.11
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -699,6 +699,23 @@
     };
     const root = currentFiberRoot(el);
     if (!root) return null;
+    // DOM node fibers can point to the previous React tree; only use the committed branch.
+    let direct = getReactFiber(el);
+    let top = direct;
+    while (top?.return) top = top.return;
+    if (top !== root) direct = direct?.alternate;
+    let committed = direct;
+    while (committed?.return) committed = committed.return;
+    if (committed === root && direct?.stateNode === el) {
+      for (let node = direct; node; node = node.return) {
+        if (node.memoizedProps && matcher(node.memoizedProps)) {
+          const route = fiberRouteFrom(root, direct);
+          if (route) fiberRouteMap.set(el, route);
+          return node.memoizedProps;
+        }
+      }
+      return null;
+    }
     const cachedRoute = fiberRouteMap.get(el);
     if (cachedRoute) {
       let node = root, found = null;
@@ -1145,8 +1162,7 @@
         || typeof body !== 'string') return false;
     try {
       const { commandId, command } = JSON.parse(body);
-      if (typeof commandId !== 'string' || !commandId || command?.type !== 'refine'
-          || command.skill !== true || command.uid !== watch.uid
+      if (typeof commandId !== 'string' || !commandId || (watch.type === 'equip' ? command?.type !== 'equip' : command?.type !== 'refine' || command.skill !== true) || command.uid !== watch.uid
           || (watch.commandId && watch.commandId !== commandId)) return false;
       watch.commandId = commandId;
       watch.pending++;
@@ -3109,7 +3125,7 @@
 
   // 測試版診斷：預設關閉（localStorage roi-refine-diag=1 或面板開關）。只留最近 30 筆，
   // 只存布林、數字與固定階段名稱，不含玩家名稱、角色識別碼、憑證或 API 回應內容。
-  const refineBuild = '3.5.8.9';
+  const refineBuild = '3.5.8.11';
   const refineDiagLimit = 30;
   const refineDiagLog = [];
   let refineDiagStart = 0;
@@ -3233,13 +3249,26 @@
     const eqBtn = await readRefineDetail(b.table, uid, (t) => t === '裝備', session);
     if (!eqBtn || eqBtn.disabled) throw Error('此職業無法穿戴該裝備進行忽克連精煉');
     await waitForRefineCommandSlot(session);
-    clickRefineCommand(session, findNativeDetailBtn(b.table, uid, t => t === '裝備'), uid);
-    const equipped = await waitForRefineUi(session, () => {
-      const live = assertRefineTarget(session, uid);
-      return live && Object.values(live.s.equipment || {}).includes(uid) && live;
-    }, { root: b.host?.parentElement, timeout: 4000 });
-    if (!equipped) throw Error('穿戴裝備逾時');
-    return equipped;
+    b = assertRefineTarget(session, uid);
+    if (Object.values(b.s.equipment || {}).includes(uid)) return b;
+    const watch = { type: 'equip', characterId: session.characterId, uid, pending: 0, settled: 0, status: 0 };
+    refineCommandWatch = watch;
+    try {
+      clickRefineCommand(session, findNativeDetailBtn(b.table, uid, t => t === '裝備'), uid);
+      const equipped = await waitForRefineUi(session, () => {
+        const live = assertRefineTarget(session, uid);
+        if (watch.settled && !watch.pending && watch.status >= 400 && watch.status < 500)
+          throw Error('穿戴請求被拒絕（HTTP ' + watch.status + '），請查看遊戲提示');
+        return live && Object.values(live.s.equipment || {}).includes(uid) && live;
+      }, { root: b.host?.parentElement, timeout: 10000 });
+      if (!equipped) throw Error(!watch.commandId ? '未觀察到穿戴請求，請查看遊戲提示'
+        : watch.status >= 200 && watch.status < 300 ? '穿戴已回應，背包尚未確認指定裝備'
+        : '穿戴請求結果不明，請核對裝備欄');
+      return equipped;
+    } finally {
+      refineDiag('equip', 'end', { sent: Boolean(watch.commandId), status: watch.status });
+      refineCommandWatch = null;
+    }
   }
 
   function planRefineWithdrawal(storage, snapshot, wantedItemIds, targetPlusLimit, limitsById, maxItems, materialQuantity) {
@@ -3809,7 +3838,7 @@
           <label><input type="checkbox" data-roi-ref-confirm> 精煉時略過確認窗</label>
           <label><input type="checkbox" data-roi-ref-warehouse> 自動領料及存倉</label>
           <label>每次領料 <input type="number" data-roi-ref-batch class="xp-input" min="1" max="1000" step="1" style="width:64px;"> 個</label>
-          <label title="只記錄最近 30 筆去識別化事件"><input type="checkbox" data-roi-ref-diag> 記錄精煉診斷</label>
+          <label title="測試版：只記錄最近 30 筆去識別化事件"><input type="checkbox" data-roi-ref-diag> 記錄精煉診斷</label>
           <button type="button" class="xp-btn small" data-roi-ref-diag-copy hidden>複製診斷紀錄</button>
         </div>
         <span data-roi-ref-settings-status role="status" style="color:var(--roi-warning);"></span>
@@ -4932,7 +4961,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:var(--roi-title);border:2px solid var(--roi-frame);color:var(--roi-info);align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px var(--roi-shadow);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:var(--roi-title);border-bottom:1px solid var(--roi-edge);font-weight:bold;color:var(--roi-title-text);cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.9</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.11</span>
           <button id="ro-min-btn" style="background:var(--roi-selected);color:var(--roi-text);border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:var(--roi-inset);border-bottom:1px solid var(--roi-edge);">
