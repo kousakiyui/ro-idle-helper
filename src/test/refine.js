@@ -65,13 +65,20 @@
   const snapshotCharacterId = (s) => positiveId(s?.character?.id ?? s?.characterId ?? s?.character?.characterId);
   let refineNativeStore = null;
 
-  function nativeStoreActor(store, snapshot) {
+  // requireExactSnapshot=false：遊戲先寫入 store、React 尚未提交時，背包 Fiber 仍是上一份 snapshot；
+  // 只要兩份 snapshot 沒有身分矛盾（角色 ID／名稱不同），就以 store 的 characterId 為準。
+  function nativeStoreActor(store, snapshot, requireExactSnapshot = true) {
     if (!store || typeof store.getState !== 'function' || typeof store.subscribe !== 'function' ||
         typeof store.getInitialState !== 'function' || typeof store.setState !== 'function') return null;
     try {
       const state = store.getState();
-      if (!state?.snapshot?.character || !Array.isArray(state.snapshot.inventory) ||
-          (snapshot && state.snapshot !== snapshot)) return null;
+      if (!state?.snapshot?.character || !Array.isArray(state.snapshot.inventory)) return null;
+      if (snapshot && state.snapshot !== snapshot) {
+        if (requireExactSnapshot) return null;
+        const knownId = snapshotCharacterId(snapshot), liveId = snapshotCharacterId(state.snapshot);
+        const knownName = snapshot.character?.name, liveName = state.snapshot.character?.name;
+        if ((knownId && liveId && knownId !== liveId) || (knownName && liveName && knownName !== liveName)) return null;
+      }
       return positiveId(state.characterId);
     } catch { return null; }
   }
@@ -111,7 +118,7 @@
   function refineActor(context) {
     const direct = snapshotCharacterId(context?.s);
     if (direct) return direct;
-    const cached = nativeStoreActor(refineNativeStore, context?.s);
+    const cached = nativeStoreActor(refineNativeStore, context?.s, false);
     if (cached) return cached;
     const host = context?.table || [...document.querySelectorAll('fieldset')].find((field) =>
       visible(field) && /^倉庫(?:\s*[（(]|$)/.test(clean(field.querySelector('legend')?.textContent)));
@@ -119,13 +126,38 @@
     const snapshot = context?.s ?? props?.s ?? props?.snap;
     const actor = snapshotCharacterId(snapshot) || positiveId(props?.characterId ?? props?.charId);
     if (actor) return actor;
-    refineNativeStore = host && findRefineNativeStore(host, snapshot);
-    return nativeStoreActor(refineNativeStore, snapshot);
+    // 找不到新的 store 時保留原本已驗證的快取，避免一次落差就清掉身分來源。
+    const found = host && findRefineNativeStore(host, snapshot);
+    if (found) refineNativeStore = found;
+    return nativeStoreActor(found || refineNativeStore, snapshot, false);
   }
+
+  // 測試版診斷：預設關閉（localStorage roi-refine-diag=1 或面板開關）。只留最近 30 筆，
+  // 只存布林、數字與固定階段名稱，不含玩家名稱、角色識別碼、憑證或 API 回應內容。
+  const refineBuild = '3.5.8.9-test';
+  const refineDiagLimit = 30;
+  const refineDiagLog = [];
+  let refineDiagStart = 0;
+  const refineDiagEnabled = () => { try { return localStorage.getItem('roi-refine-diag') === '1'; } catch { return false; } };
+  function refineDiagReset() { refineDiagLog.length = 0; refineDiagStart = performance.now(); }
+  function refineDiag(stage, event, detail = {}) {
+    if (!refineDiagEnabled()) return;
+    const entry = { t: Math.round(performance.now() - refineDiagStart), stage, event };
+    for (const [key, value] of Object.entries(detail)) {
+      if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) entry[key] = value;
+      else if (key === 'reason' && typeof value === 'string') entry.reason = value.replace(/【[^】]*】/g, '【…】').slice(0, 48);
+    }
+    refineDiagLog.push(entry);
+    if (refineDiagLog.length > refineDiagLimit) refineDiagLog.shift();
+  }
+  const refineDiagSummary = () => {
+    const stop = [...refineDiagLog].reverse().find((entry) => entry.stage === 'stop');
+    return JSON.stringify({ build: refineBuild, stopStage: stop?.event ?? null, stopReason: stop?.reason ?? null, events: refineDiagLog }, null, 1);
+  };
 
   const refineItemSignature = (item) => JSON.stringify([item.itemId, item.cards ?? [], item.forged ?? null]);
   function assertRefineRun(session, allowStopped) {
-    if (!allowStopped && refStop) throw Error('已手動停止精煉');
+    if (!allowStopped && refStop) throw Error(refStopReason === 'left_backpack' ? '已離開背包頁面' : '已手動停止精煉');
     if (document.hidden) throw Error('遊戲分頁已切到背景');
     if (!session || session.epoch !== refineIdentityEpoch ||
         (state.activeCharId != null && Number(state.activeCharId) !== session.characterId)) {
@@ -137,10 +169,12 @@
     assertRefineRun(session, allowStopped);
     const context = readBackpackContext(true);
     if ((session.modern && !context) || (context && session.modern !== undefined && Boolean(context.modern) !== session.modern)) {
+      refineDiag('session', 'ui_switched', { hasContext: Boolean(context) });
       throw Error('背包介面已切換，已停止');
     }
     const actor = refineActor(context);
     if (actor !== session.characterId) {
+      refineDiag('session', 'actor_unconfirmed', { actorKnown: actor != null, hasStore: refineNativeStore != null, hasContext: Boolean(context), hidden: document.hidden });
       throw Error('無法確認仍是起始角色，已停止');
     }
     return context;
@@ -185,8 +219,9 @@
     clickRefineControl(session, button, uid);
   }
 
-  function stopRefine() {
+  function stopRefine(reason = 'manual') {
     refStop = true;
+    refStopReason = reason;
     pageNet.events.dispatchEvent(new Event('ui-abort'));
   }
 
@@ -431,7 +466,7 @@
 
   async function runHybridRefine(modeType) {
     if (refBusy) return;
-    refStop = false;
+    refStop = false; refStopReason = null;
     const setStatus = (msg) => { if (!refPanel?.isConnected) refreshRefinePanel(); const el = refPanel?.querySelector('[data-ref-status]'); if (el) el.textContent = msg; };
     let b, characterId;
     try {
@@ -479,7 +514,10 @@
     const safeLimits = new Map(), skipped = new Set();
     let stopReason = null;
     let changedEquip = false, successCnt = 0, brokenCnt = 0, failedCnt = 0;
-    refBusy = true; refStop = false; refreshRefinePanel();
+    refBusy = true; refStop = false; refStopReason = null; refreshRefinePanel();
+    refineDiagReset();
+    let stage = 'prepare';
+    refineDiag('run', 'start', { skipConfirm: refSkipConfirm, autoWarehouse });
 
     try {
       while (!refStop) {
@@ -492,6 +530,7 @@
 
         if (!pool.length && autoWarehouse) {
           session.targetUid = null;
+          stage = 'withdraw_equipment';
           const before = new Set(b.s.inventory.map((x) => x.uid));
           const picked = await tryWithdrawFromWarehouse(trackedItemIds, limitPlus, setStatus, modeType === 'safe_only' ? safeLimits : null, 15, session);
           assertRefineSession(session);
@@ -520,6 +559,7 @@
 
         const target = pool[0], uid = target.uid, curPlus = target.st.refine || 0;
         session.targetUid = uid;
+        stage = 'select';
         b = await refineAwait(session, selectBagItemRow(uid, session));
         if (!b) throw Error('已離開背包頁面');
 
@@ -545,6 +585,7 @@
         if (safeBtn && !safeBtn.disabled) {
           const safeTarget = Number(safeBtn.textContent.match(/\+(\d+)/)?.[1]) || 4;
           if (curPlus < safeTarget && (modeType === 'safe_only' || safeTarget <= refTargetPlus)) {
+            stage = 'safe_refine';
             setStatus(`⚡ 一鍵安全值：【${target.name}】+${curPlus} ➔ +${safeTarget}...`);
             assertRefineRun(session, false);
             await waitForRefineCommandSlot(session);
@@ -598,6 +639,7 @@
         if ((!activeBtn || activeBtn.disabled) && autoWarehouse && material && material !== unavailableMaterial &&
             materialCount(b.s.inventory, material) === 0 &&
             ((skillBtn && b.s.character.sp >= 5) || (npcBtn && b.s.character.zeny >= step.price))) {
+          stage = 'withdraw_material';
           unavailableMaterial = await replenishRefineMaterials(session, uid, curPlus, new Map([[material, 1]]), setStatus);
           b = await refineAwait(session, selectBagItemRow(uid, session));
           skillBtn = await readRefineDetail(b.table, uid, isWeaponRefineButton, session);
@@ -616,6 +658,7 @@
         activeBtn = findNativeDetailBtn(b.table, uid, useSkill ? isWeaponRefineButton : isNpcRefineButton);
         const beforeMatQty = material ? materialCount(b.s.inventory, material) : 0;
         const beforeZeny = b.s.character.zeny, beforeSp = b.s.character.sp;
+        stage = 'refine_await';
         setStatus(`🔨 衝裝中：【${target.name}】+${curPlus} ➔ +${curPlus + 1} (成功:${successCnt} 爆:${brokenCnt})`);
 
         const commandWatch = useSkill ? { characterId: session.characterId, uid, pending: 0, settled: 0, status: 0 } : null;
@@ -652,7 +695,8 @@
           if (result.nowSt.refine >= limitPlus) {
             refSelected.delete(uid);
             if (autoWarehouse && result.nowSt.refine >= refTargetPlus && !refStop && !document.hidden) {
-              const stBtn = await readRefineDetail(b.table, uid, (t) => /^存入倉庫|^存倉$/.test(t), session);
+              stage = 'store';
+                const stBtn = await readRefineDetail(b.table, uid, (t) => /^存入倉庫|^存倉$/.test(t), session);
               if (stBtn && !stBtn.disabled) {
                 await waitForRefineCommandSlot(session);
                 clickRefineCommand(session, findNativeDetailBtn(b.table, uid, t => /^存入倉庫|^存倉$/.test(t)), uid);
@@ -680,6 +724,7 @@
       setStatus(`🎉 精煉完成！累計成功升階 ${successCnt} 次，損壞 ${brokenCnt} 件，未升階 ${failedCnt} 件，略過 ${skipped.size - failedCnt} 件。`);
       alertUser('🎉 背包精煉完成', `成功 ${successCnt} 次 / 損壞 ${brokenCnt} 件 / 未升階 ${failedCnt} 件`, false);
     } catch (e) {
+      refineDiag('stop', stage, { hidden: document.hidden, manual: refStop, reason: e?.status ? `HTTP ${e.status}` : String(e?.message) });
       stopReason = `🛑 已停止：${e.message} (成功:${successCnt} 爆:${brokenCnt})`;
       setStatus(stopReason);
     } finally {
@@ -760,7 +805,7 @@
     const b = readFiberForUi(() => readBackpackContext());
     if (b === undefined) return;
     if (!b) {
-      if (refBusy) stopRefine();
+      if (refBusy) stopRefine('left_backpack');
       refPanel?.remove(); refPanel = null; return;
     }
     if (refPanel?.isConnected && refPanel.parentElement !== b.host) refPanel.remove();
@@ -789,6 +834,8 @@
           <label><input type="checkbox" data-roi-ref-confirm> 精煉時略過確認窗</label>
           <label><input type="checkbox" data-roi-ref-warehouse> 自動領料及存倉</label>
           <label>每次領料 <input type="number" data-roi-ref-batch class="xp-input" min="1" max="1000" step="1" style="width:64px;"> 個</label>
+          <label title="測試版：只記錄最近 30 筆去識別化事件"><input type="checkbox" data-roi-ref-diag> 記錄精煉診斷</label>
+          <button type="button" class="xp-btn small" data-roi-ref-diag-copy hidden>複製診斷紀錄</button>
         </div>
         <span data-roi-ref-settings-status role="status" style="color:var(--roi-warning);"></span>
         <div data-ref-categories role="group" aria-label="精煉裝備分類" style="display:none;gap:6px;flex-wrap:wrap;"></div>
@@ -844,7 +891,18 @@
       refPanel.querySelector('#ref-run-safe').onclick = () => runHybridRefine('safe_only');
       refPanel.querySelector('#ref-run-target').onclick = () => runHybridRefine('to_target');
       refPanel.querySelector('#ref-run-skill').onclick = () => runHybridRefine('skill_only');
-      refPanel.querySelector('#ref-stop').onclick = stopRefine;
+      refPanel.querySelector('#ref-stop').onclick = () => stopRefine('manual');
+      const diagBox = refPanel.querySelector('[data-roi-ref-diag]'), diagCopy = refPanel.querySelector('[data-roi-ref-diag-copy]');
+      diagBox.onchange = () => {
+        try { if (diagBox.checked) localStorage.setItem('roi-refine-diag', '1'); else localStorage.removeItem('roi-refine-diag'); } catch {}
+        refreshRefinePanel();
+      };
+      diagCopy.onclick = async () => {
+        const text = refineDiagSummary();
+        const status = refPanel.querySelector('[data-ref-status]');
+        try { await navigator.clipboard.writeText(text); status.textContent = '已複製精煉診斷紀錄（不含玩家名稱與角色識別碼）。'; }
+        catch { page.prompt('請複製診斷紀錄', text); }
+      };
     }
 
     if (refinePack && refSelected.size) {
@@ -855,6 +913,9 @@
       `${refOpen ? '🔼 收合精煉清單' : '🔨 展開精煉清單'} (共選 ${refSelected.size} 件)`;
     for (const el of refPanel.querySelectorAll('#ref-mode,#ref-target')) el.disabled = refBusy;
     syncRefineSettings(refPanel);
+    const diagOn = refineDiagEnabled();
+    refPanel.querySelector('[data-roi-ref-diag]').checked = diagOn;
+    refPanel.querySelector('[data-roi-ref-diag-copy]').hidden = !diagOn || !refineDiagLog.length;
     const skillButton = refPanel.querySelector('#ref-run-skill');
     const skillLevel = weaponRefineLevel(b.s);
     skillButton.hidden = skillLevel <= 0;

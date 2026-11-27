@@ -9,12 +9,13 @@ const steps = [984, 984, 985].map((material) => ({ material, rate: 100, price: 1
 
 async function simulate({
   mode = 'safe_only', stock = { 984: 2, 985: 1 }, ores = [], zeny = 30, sp = 100,
-  failCredit, extraEquip = false, batch = 1, stopDuringCredit, autoWarehouse = true
+  failCredit, extraEquip = false, batch = 1, stopDuringCredit, autoWarehouse = true,
+  equips, resultNull = false
 } = {}) {
   const equip = { uid: 1, itemId: 100, refine: 0 };
   const other = { uid: 2, itemId: 101, refine: 2 };
-  const inventory = [equip, ...(extraEquip ? [other] : []), ...ores.map(([itemId, qty]) => ({ itemId, qty }))];
-  const trace = [], status = { textContent: '' };
+  const inventory = [...(equips || [equip, ...(extraEquip ? [other] : [])]), ...ores.map(([itemId, qty]) => ({ itemId, qty }))];
+  const trace = [], uidTrace = [], status = { textContent: '' };
   let pending = null, selected = 1, actor = 9, skillUsed = false, step = 0;
   const b = { s: { inventory, character: { zeny, sp, skills: { WS_WEAPONREFINE: 5 } } }, table: {}, host: {} };
   const snapshot = () => {
@@ -47,14 +48,14 @@ async function simulate({
   };
   const env = {
     refPanel: { isConnected: true, querySelector: () => status },
-    refSelected: new Set([1, ...(extraEquip ? [2] : [])]),
+    refSelected: new Set(equips ? equips.map((item) => item.uid) : [1, ...(extraEquip ? [2] : [])]),
     refMaterialBatch: batch, refTargetPlus: 3, refMode: 'round_robin', refAutoWh: autoWarehouse, refSkipConfirm: true,
     refinePack: { items: new Map([100, 101].map((id) => [id, { slots: ['weapon'], weaponLevel: 1, weaponType: 'sword' }])),
       refine: { weapon: { 1: steps } } },
     page: { confirm: () => true }, pageNet: { settled: 0 }, document: { hidden: false },
     positiveId: (value) => typeof value === 'number' && value > 0 ? value : null,
     clean: (value) => String(value ?? ''),
-    refreshRefinePanel() {}, alertUser() {}, readFiberForUi: (read) => read(),
+    refreshRefinePanel() {}, alertUser() {}, refineDiag() {}, refineDiagReset() {}, readFiberForUi: (read) => read(),
     FiberTraversalTimeout: class extends Error {},
     isEligibleEquip: (row) => row.st.refine < 3,
     readBackpackContext: snapshot,
@@ -72,13 +73,14 @@ async function simulate({
       const item = inventory.find((entry) => entry.uid === uid);
       item.refine = mode === 'skill_only' ? item.refine + 1 : 3;
       trace.push('refine:' + item.refine);
+      uidTrace.push(uid);
       step = item.refine;
       skillUsed = mode === 'skill_only';
     },
     async tryWithdrawFromWarehouse(ids, _limit, _status, _rules, _max, session, amount) {
       assertSession(session);
       if (amount === undefined) return [];
-      assert.equal(session.targetUid, 1);
+      assert.ok(session.targetUid != null);
       const [id] = ids;
       trace.push('withdraw:' + id);
       const qty = Math.min(amount, stock[id] || 0);
@@ -105,15 +107,16 @@ async function simulate({
     },
     async waitForRefineResult(session, uid, options) {
       assert.equal(options.useSkill, skillUsed);
+      if (resultNull) return null;
       const current = assertTarget(session, uid);
       return { kind: 'success', b: current, nowSt: inventory.find((item) => item.uid === uid) };
     }
   };
   const run = new Function(...Object.keys(env),
-    'let refBusy = false, refStop = false, refineIdentityEpoch = 0;\n' + production + 'return runHybridRefine;'
+    'let refBusy = false, refStop = false, refStopReason = null, refineIdentityEpoch = 0;\n' + production + 'return runHybridRefine;'
   )(...Object.values(env));
   await run(mode);
-  return { trace, status: status.textContent, step, equip, other };
+  return { trace, uidTrace, status: status.textContent, step, equip, other, inventory };
 }
 
 async function check(label, scenario) {
@@ -154,5 +157,29 @@ async function check(label, scenario) {
     const switched = await simulate({ stopDuringCredit: true });
     assert.deepEqual(switched.trace, ['withdraw:984']);
     assert.match(switched.status, /角色已變更/);
+  });
+  const same = (refines) => refines.map((refine, index) => ({ uid: 101 + index, itemId: 100, refine }));
+  await check('多件同名武器、無補料：輪流精煉仍依指定 UID，且不領倉', async () => {
+    const equips = same([1, 1, 1]);
+    const result = await simulate({ mode: 'skill_only', equips, ores: [[984, 3], [985, 3]], autoWarehouse: false });
+    assert.deepEqual(result.uidTrace, [101, 102, 103, 101, 102, 103]);
+    assert.deepEqual(equips.map((item) => item.refine), [3, 3, 3]);
+    assert.ok(!result.trace.some((entry) => entry.startsWith('withdraw')));
+  });
+  await check('多件同名武器、有補料：每次領料後仍依指定 UID 輪流精煉', async () => {
+    const equips = same([1, 1, 1]);
+    const result = await simulate({ mode: 'skill_only', equips, stock: { 984: 3, 985: 3 } });
+    assert.deepEqual(result.uidTrace, [101, 102, 103, 101, 102, 103]);
+    assert.deepEqual(equips.map((item) => item.refine), [3, 3, 3]);
+    assert.equal(result.trace.filter((entry) => entry.startsWith('withdraw')).length, 6);
+  });
+  await check('精煉已送出但結果未知：停止，不重送也不跳到下一件', async () => {
+    for (const autoWarehouse of [false, true]) {
+      const equips = same([1, 1, 1]);
+      const result = await simulate({ mode: 'skill_only', equips, resultNull: true, autoWarehouse,
+        ores: autoWarehouse ? [] : [[984, 3], [985, 3]], stock: { 984: 3, 985: 3 } });
+      assert.deepEqual(result.uidTrace, [101]);
+      assert.match(result.status, /精煉結果不明/);
+    }
   });
 })().catch((error) => { console.error(error); process.exitCode = 1; });

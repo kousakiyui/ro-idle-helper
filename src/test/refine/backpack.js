@@ -21,7 +21,7 @@
     const plus = stack.refine ?? 0;
     return Boolean(category && plus < 10 && steps?.[plus]);
   }
-  let refPanel = null, refOpen = false, refBusy = false, refStop = false, refTargetPlus = 6, refMode = 'round_robin', refSkipConfirm = true, refAutoWh = true;
+  let refPanel = null, refOpen = false, refBusy = false, refStop = false, refStopReason = null, refTargetPlus = 6, refMode = 'round_robin', refSkipConfirm = true, refAutoWh = true;
   let refMaterialBatch = readValidatedSetting('roi-refine-material-batch-v1', validateMaterialBatch, 20);
 
   let bagMemo = null;

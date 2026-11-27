@@ -13,15 +13,16 @@ const prelude = `
   ${hasConst ? 'const charPollInterval = 45000; const charPollReuseMs = charPollInterval - 5000;' : ''}
 `;
 function make({ roster, refining = false }) {
-  let nativeActor = 1;
+  let nativeActor = 1, storeActor = null, fiberTimeout = false;
   let aborts = 0;
   let now = 1_700_000_000_000; const store = {}; const alerts = []; let fetches = 0;
   const env = {
     state: { chars: [], charAlerts: {}, charZenyMap: {}, initZenyMap: {}, myCharIds: new Set(), activeCharId: 1, hudMin: false, charRosterLoaded: false },
     document: { hidden: false, getElementById: () => null, hasFocus: () => true }, renderChars() {}, updateHUD() {},
-    alertUser: (t, m) => alerts.push(m), refSelected: new Set(), clearQueuedCharacterLogs() {}, location: { origin: '' },
-    refBusy: refining, readFiberForUi: read => read(), readBackpackContext: () => ({}),
+    alertUser: (t, m) => alerts.push(m), refSelected: new Set(), clearQueuedCharacterLogs() {}, location: { origin: '' }, refineNativeStore: {}, refineDiag() {},
+    refBusy: refining, readFiberForUi: read => (fiberTimeout ? undefined : read()), setFiberTimeout: v => { fiberTimeout = v; }, readBackpackContext: () => ({}),
     refineActor: () => nativeActor, combatHitMeter: { reset() {} },
+    nativeStoreActor: () => storeActor, setStoreActor: id => { storeActor = id; },
     pageNet: { events: { dispatchEvent() { aborts++; } } },
     positiveId: v => (Number.isSafeInteger(Number(v)) && Number(v) > 0 ? Number(v) : null),
     isPlainRecord: v => v && typeof v === 'object' && !Array.isArray(v),
@@ -38,6 +39,75 @@ function make({ roster, refining = false }) {
   return { api, env, store, alerts, setActor: id => { nativeActor = id; }, get aborts() { return aborts; }, get fetches() { return fetches; }, advance: ms => { now += ms; }, set: v => { now = v; }, now: () => now };
 }
 let ok = true; const check = (l, c) => { console.log((c ? 'PASS ' : 'FAIL ') + l); ok &&= c; };
+const sliceConst = (start, end) => src.slice(src.indexOf(start), src.indexOf(end));
+// 遊戲以 Zustand 分開保存 characterId 與 snapshot；store.setState 會先於 React 提交，背包 Fiber 仍讀到舊 snapshot。
+function refineActorRace() {
+  const body = sliceConst('  const positiveId =', '  function findRefineNativeStore(') +
+    sliceConst('  function refineActor(', '  const refineItemSignature');
+  const makeStore = (characterId, snapshot) => {
+    const state = { characterId, snapshot };
+    return { getState: () => state, subscribe() {}, getInitialState() {}, setState(next) { Object.assign(state, next); } };
+  };
+  const build = () => {
+    const env = {
+      document: { querySelectorAll: () => [] }, visible: () => true, clean: v => String(v ?? ''),
+      getCommittedProps: () => null, findRefineNativeStore: () => null
+    };
+    return new Function(...Object.keys(env), body + '\nreturn { refineActor, setStore(v) { refineNativeStore = v; }, getStore: () => refineNativeStore };')(...Object.values(env));
+  };
+  const snap = (name) => ({ character: { name }, inventory: [] });
+  const oldSnap = snap('甲');
+  {
+    const api = build(), store = makeStore(9, oldSnap);
+    api.setStore(store);
+    check('基準：Fiber 與 store 同一份 snapshot 時確認起始角色', api.refineActor({ s: oldSnap }) === 9);
+    store.setState({ snapshot: snap('甲') });
+    const actor = api.refineActor({ s: oldSnap });
+    check(`store 的 snapshot 領先 Fiber（同角色）時仍確認起始角色（實得 ${actor}）`, actor === 9);
+    check('store 快取不因一次比對落差被清除', api.getStore() === store);
+  }
+  {
+    const api = build(), store = makeStore(9, oldSnap);
+    api.setStore(store);
+    store.setState({ characterId: 10, snapshot: snap('乙') });
+    const actor = api.refineActor({ s: oldSnap });
+    check(`真切角（store 角色改變、snapshot 名稱不同）不得回報為起始角色（實得 ${actor}）`, actor !== 9);
+    const same = makeStore(10, snap('甲'));
+    api.setStore(same);
+    check(`真切角（characterId 改變、snapshot 同名）回報新角色（實得 ${api.refineActor({ s: oldSnap })}）`, api.refineActor({ s: oldSnap }) === 10);
+  }
+}
+
+function refineStopReasons() {
+  const body = sliceConst('  function assertRefineRun(', '  function assertRefineSession(') +
+    sliceConst('  function stopRefine(', '  function waitForRefineUi(');
+  const build = () => {
+    const events = [];
+    const env = { document: { hidden: false }, state: { activeCharId: 1 }, pageNet: { events: { dispatchEvent: e => events.push(e.type) } }, Event: class { constructor(type) { this.type = type; } } };
+    const api = new Function(...Object.keys(env), 'let refStop = false, refStopReason = null, refineIdentityEpoch = 0;\n' + body +
+      '\nreturn { assertRefineRun, stopRefine, reset() { refStop = false; refStopReason = null; } };')(...Object.values(env));
+    return { api, env, events };
+  };
+  const message = (fn) => { try { fn(); return null; } catch (error) { return error.message; } };
+  const session = { characterId: 1, epoch: 0 };
+  {
+    const t = build(); t.api.stopRefine();
+    check('按停止鈕：回報「已手動停止精煉」', message(() => t.api.assertRefineRun(session, false)) === '已手動停止精煉');
+  }
+  {
+    const t = build(); t.api.stopRefine('left_backpack');
+    const reason = message(() => t.api.assertRefineRun(session, false));
+    check(`離開背包頁：不得誤報為手動停止（實得 ${reason}）`, reason === '已離開背包頁面');
+  }
+  {
+    const t = build(); t.env.document.hidden = true;
+    check('分頁轉背景：回報「遊戲分頁已切到背景」', message(() => t.api.assertRefineRun(session, false)) === '遊戲分頁已切到背景');
+  }
+  {
+    const t = build(); t.env.state.activeCharId = 2;
+    check('實際切角：回報「偵測到角色切換」', /偵測到角色切換/.test(message(() => t.api.assertRefineRun(session, false)) || ''));
+  }
+}
 async function refineEvents() {
   const { JSDOM } = require('jsdom');
   const assert = require('node:assert/strict');
@@ -185,6 +255,24 @@ async function refineEvents() {
     detail(2);
     check('原生背包確認切角時取消精煉工作階段', t.env.state.activeCharId === 2 && t.aborts === 1 && t.env.refSelected.size === 0);
   }
+  { // 精煉途中他角明細晚到，且原生背包讀取逾時（readFiberForUi 回傳 undefined）
+    const t = make({ roster: () => [], refining: true });
+    t.env.setFiberTimeout(true);
+    t.env.setStoreActor(1);
+    t.env.state.activeCharId = 1; t.env.refSelected.add(41);
+    t.api.onApiData('/api/characters/2', JSON.stringify({ characterId: 2, snapshot: { character: { zeny: 102 } } }));
+    check('他角明細晚到＋背包讀取逾時：仍由原生 store 確認原角，不取消精煉', t.env.state.activeCharId === 1 && t.aborts === 0 && t.env.refSelected.has(41) && t.env.state.charZenyMap[2] === 102);
+  }
+  { // 真切角＋背包讀取逾時：原生 store 已是他角，必須照常中止
+    const t = make({ roster: () => [], refining: true });
+    t.env.setFiberTimeout(true);
+    t.env.setStoreActor(2);
+    t.env.state.activeCharId = 1; t.env.refSelected.add(41);
+    t.api.onApiData('/api/characters/2', JSON.stringify({ characterId: 2, snapshot: { character: { zeny: 102 } } }));
+    check('真切角＋背包讀取逾時：仍中止精煉並清除勾選', t.env.state.activeCharId === 2 && t.aborts === 1 && t.env.refSelected.size === 0);
+  }
+  refineActorRace();
+  refineStopReasons();
   await refineEvents();
   console.log(ok ? 'ALL PASS' : 'SOME FAIL');
   if (!ok) process.exitCode = 1;

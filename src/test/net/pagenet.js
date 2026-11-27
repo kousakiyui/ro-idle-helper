@@ -65,9 +65,15 @@
         const cid = Number(d.characterId);
         if (state.charRosterLoaded && !state.myCharIds.has(cid)) return;
         const ch = d.snapshot.character;
-        const refineActorId = foreground && refBusy && state.activeCharId !== cid
-          ? readFiberForUi(() => refineActor(readBackpackContext(true))) : null;
-        // 背包能確認目前角色時，其他角色的明細回應只更新該角色的餘額。
+        let refineActorId = null;
+        if (foreground && refBusy && state.activeCharId !== cid) {
+          // 背包 Fiber 讀不到（逾時或 store 領先一個提交）時，改問遊戲原生 store 目前的角色。
+          const viaBackpack = readFiberForUi(() => refineActor(readBackpackContext(true)));
+          refineActorId = viaBackpack ?? nativeStoreActor(refineNativeStore, null, false);
+          refineDiag('api_detail', refineActorId === cid ? 'treated_as_switch' : 'other_char_ignored',
+            { viaBackpack: viaBackpack != null, confirmed: refineActorId != null, sameActor: refineActorId === cid });
+        }
+        // 背包或原生 store 能確認目前角色時，其他角色的明細回應只更新該角色的餘額。
         foreground = foreground && (refineActorId == null || refineActorId === cid);
         if (foreground) {
           if (state.activeCharId !== cid) {
