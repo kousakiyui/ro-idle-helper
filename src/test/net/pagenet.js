@@ -119,8 +119,7 @@
         || typeof body !== 'string') return false;
     try {
       const { commandId, command } = JSON.parse(body);
-      if (typeof commandId !== 'string' || !commandId || command?.type !== 'refine'
-          || command.skill !== true || command.uid !== watch.uid
+      if (typeof commandId !== 'string' || !commandId || (watch.type === 'equip' ? command?.type !== 'equip' : command?.type !== 'refine' || command.skill !== true) || command.uid !== watch.uid
           || (watch.commandId && watch.commandId !== commandId)) return false;
       watch.commandId = commandId;
       watch.pending++;

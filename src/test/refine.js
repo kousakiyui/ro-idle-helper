@@ -134,7 +134,7 @@
 
   // 測試版診斷：預設關閉（localStorage roi-refine-diag=1 或面板開關）。只留最近 30 筆，
   // 只存布林、數字與固定階段名稱，不含玩家名稱、角色識別碼、憑證或 API 回應內容。
-  const refineBuild = '3.5.8.9-test';
+  const refineBuild = '3.5.8.10-test';
   const refineDiagLimit = 30;
   const refineDiagLog = [];
   let refineDiagStart = 0;
@@ -258,13 +258,26 @@
     const eqBtn = await readRefineDetail(b.table, uid, (t) => t === '裝備', session);
     if (!eqBtn || eqBtn.disabled) throw Error('此職業無法穿戴該裝備進行忽克連精煉');
     await waitForRefineCommandSlot(session);
-    clickRefineCommand(session, findNativeDetailBtn(b.table, uid, t => t === '裝備'), uid);
-    const equipped = await waitForRefineUi(session, () => {
-      const live = assertRefineTarget(session, uid);
-      return live && Object.values(live.s.equipment || {}).includes(uid) && live;
-    }, { root: b.host?.parentElement, timeout: 4000 });
-    if (!equipped) throw Error('穿戴裝備逾時');
-    return equipped;
+    b = assertRefineTarget(session, uid);
+    if (Object.values(b.s.equipment || {}).includes(uid)) return b;
+    const watch = { type: 'equip', characterId: session.characterId, uid, pending: 0, settled: 0, status: 0 };
+    refineCommandWatch = watch;
+    try {
+      clickRefineCommand(session, findNativeDetailBtn(b.table, uid, t => t === '裝備'), uid);
+      const equipped = await waitForRefineUi(session, () => {
+        const live = assertRefineTarget(session, uid);
+        if (watch.settled && !watch.pending && watch.status >= 400 && watch.status < 500)
+          throw Error('穿戴請求被拒絕（HTTP ' + watch.status + '），請查看遊戲提示');
+        return live && Object.values(live.s.equipment || {}).includes(uid) && live;
+      }, { root: b.host?.parentElement, timeout: 10000 });
+      if (!equipped) throw Error(!watch.commandId ? '未觀察到穿戴請求，請查看遊戲提示'
+        : watch.status >= 200 && watch.status < 300 ? '穿戴已回應，背包尚未確認指定裝備'
+        : '穿戴請求結果不明，請核對裝備欄');
+      return equipped;
+    } finally {
+      refineDiag('equip', 'end', { sent: Boolean(watch.commandId), status: watch.status });
+      refineCommandWatch = null;
+    }
   }
 
   function planRefineWithdrawal(storage, snapshot, wantedItemIds, targetPlusLimit, limitsById, maxItems, materialQuantity) {
