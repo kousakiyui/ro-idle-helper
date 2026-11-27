@@ -60,7 +60,7 @@ async function simulate({
     readBackpackContext: snapshot,
     refineActor: () => actor,
     refineItemSignature: (item) => item.itemId,
-    assertRefineSession: assertSession, assertRefineTarget: assertTarget,
+    assertRefineRun: assertSession, assertRefineSession: assertSession, assertRefineTarget: assertTarget,
     async refineAwait(session, promise) { const value = await promise; assertSession(session); return value; },
     async selectBagItemRow(uid, session) { selected = uid; return assertTarget(session, uid); },
     readRefineDetail: nativeButton, findNativeDetailBtn: nativeButton,

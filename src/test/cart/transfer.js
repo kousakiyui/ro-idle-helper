@@ -16,7 +16,7 @@
       function inspect(expired = false) {
         if (done) return;
         try {
-          if (document.hidden || shouldAbort()) throw Error('角色已變更或流程已停止');
+          if (shouldAbort() || document.hidden) throw Error('角色已變更或流程已停止');
           const result = check(expired);
           if (result || expired) finish(null, result || null);
         } catch (error) { finish(error); }

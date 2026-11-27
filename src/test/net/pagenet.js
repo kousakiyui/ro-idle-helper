@@ -65,6 +65,10 @@
         const cid = Number(d.characterId);
         if (state.charRosterLoaded && !state.myCharIds.has(cid)) return;
         const ch = d.snapshot.character;
+        const refineActorId = foreground && refBusy && state.activeCharId !== cid
+          ? readFiberForUi(() => refineActor(readBackpackContext(true))) : null;
+        // 背包能確認目前角色時，其他角色的明細回應只更新該角色的餘額。
+        foreground = foreground && (refineActorId == null || refineActorId === cid);
         if (foreground) {
           if (state.activeCharId !== cid) {
             combatHitMeter.reset();
@@ -73,9 +77,12 @@
               state.dmgSum = state.hits = state.maxDmg = state.damageTaken = 0;
               state.damageStartMs = state.accMs + (state.paused ? 0 : Date.now() - state.lastResumed);
             }
-            refineIdentityEpoch++;
-            pageNet.events.dispatchEvent(new Event('ui-abort'));
-            refSelected.clear();
+            // 初始化助手角色時，精煉工作階段可能已從原生背包認出同一角色。
+            if (state.activeCharId != null || refineActorId !== cid) {
+              refineIdentityEpoch++;
+              pageNet.events.dispatchEvent(new Event('ui-abort'));
+              refSelected.clear();
+            }
           }
           state.activeCharId = cid;
           state.activeCharName = ch.name || d.name;

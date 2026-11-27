@@ -12,12 +12,17 @@ const prelude = `
   const localZenyAt = new Map();
   ${hasConst ? 'const charPollInterval = 45000; const charPollReuseMs = charPollInterval - 5000;' : ''}
 `;
-function make({ roster }) {
+function make({ roster, refining = false }) {
+  let nativeActor = 1;
+  let aborts = 0;
   let now = 1_700_000_000_000; const store = {}; const alerts = []; let fetches = 0;
   const env = {
     state: { chars: [], charAlerts: {}, charZenyMap: {}, initZenyMap: {}, myCharIds: new Set(), activeCharId: 1, hudMin: false, charRosterLoaded: false },
     document: { hidden: false, getElementById: () => null, hasFocus: () => true }, renderChars() {}, updateHUD() {},
     alertUser: (t, m) => alerts.push(m), refSelected: new Set(), clearQueuedCharacterLogs() {}, location: { origin: '' },
+    refBusy: refining, readFiberForUi: read => read(), readBackpackContext: () => ({}),
+    refineActor: () => nativeActor, combatHitMeter: { reset() {} },
+    pageNet: { events: { dispatchEvent() { aborts++; } } },
     positiveId: v => (Number.isSafeInteger(Number(v)) && Number(v) > 0 ? Number(v) : null),
     isPlainRecord: v => v && typeof v === 'object' && !Array.isArray(v),
     GM_getValue: (k, d) => (k in store ? structuredClone(store[k]) : d), GM_setValue: (k, v) => { store[k] = structuredClone(v); },
@@ -30,7 +35,7 @@ function make({ roster }) {
     console
   };
   const api = new Function(...Object.keys(env), prelude + names.map(slice).join('\n') + '\nreturn { onApiData, pollChars };')(...Object.values(env));
-  return { api, env, store, alerts, get fetches() { return fetches; }, advance: ms => { now += ms; }, set: v => { now = v; }, now: () => now };
+  return { api, env, store, alerts, setActor: id => { nativeActor = id; }, get aborts() { return aborts; }, get fetches() { return fetches; }, advance: ms => { now += ms; }, set: v => { now = v; }, now: () => now };
 }
 let ok = true; const check = (l, c) => { console.log((c ? 'PASS ' : 'FAIL ') + l); ok &&= c; };
 async function refineEvents() {
@@ -45,7 +50,7 @@ async function refineEvents() {
   const materials = { uid: 8, itemId: 984, qty: 2 };
   const b = { s: { inventory: [equipment, materials], character: { zeny: 100, sp: 20 } } };
   const materialCount = (inventory, id) => inventory.find(item => item.itemId === id)?.qty || 0;
-  const names = ['waitForUi', 'waitForRefineUi', 'waitForRefineResult', 'refineNoUpgradeSettled'];
+  const names = ['waitForUi', 'waitForRefineUi', 'assertRefineRun', 'waitForRefineResult', 'refineNoUpgradeSettled'];
   const env = {
     pageNet, document, MutationObserver: w.MutationObserver, materialCount,
     setTimeout: (callback, delay) => setTimeout(callback, Math.min(delay, 100)),
@@ -124,8 +129,14 @@ async function refineEvents() {
     result = begin();
     Object.defineProperty(document, 'hidden', { value: true, configurable: true });
     document.dispatchEvent(new w.Event('visibilitychange'));
-    await assert.rejects(result, /停止/);
-    check('精煉中途切背景即中止', true);
+    await assert.rejects(result, /遊戲分頁已切到背景/);
+    check('精煉中途切背景即中止並指出原因', true);
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    result = begin();
+    env.state.activeCharId = 2;
+    pageNet.events.dispatchEvent(new w.Event('ui-abort'));
+    await assert.rejects(result, /偵測到角色切換/);
+    check('實際切角時仍立刻中止並指出原因', true);
   } finally { w.close(); }
 }
 
@@ -159,6 +170,20 @@ async function refineEvents() {
     // setInterval 只會晚不會早（0–2ms），鎖授予延遲 0–3ms（見 navigator.locks 假件）
     for (let n = 0; n < 40; n++) { tick += 45000 + Math.floor(Math.random() * 3); t.set(tick); const before = t.fetches; await t.api.pollChars(); if (t.fetches > before) polls++; }
     check(`D 單頁 45 秒計時器 40 輪 → 實際發出名單請求 ${polls} 輪（應接近 40）`, polls >= 38);
+  }
+  {
+    const t = make({ roster: () => [], refining: true });
+    const detail = id => t.api.onApiData('/api/characters/' + id,
+      JSON.stringify({ characterId: id, snapshot: { character: { zeny: 100 + id } } }));
+    t.env.state.activeCharId = null;
+    t.env.refSelected.add(41);
+    detail(1);
+    check('精煉途中首次收到同角色明細不取消工作階段', t.env.state.activeCharId === 1 && t.aborts === 0 && t.env.refSelected.has(41));
+    detail(2);
+    check('精煉途中收到其他角色明細只更新該角色餘額', t.env.state.activeCharId === 1 && t.env.state.charZenyMap[2] === 102 && t.aborts === 0 && t.env.refSelected.has(41));
+    t.setActor(2);
+    detail(2);
+    check('原生背包確認切角時取消精煉工作階段', t.env.state.activeCharId === 2 && t.aborts === 1 && t.env.refSelected.size === 0);
   }
   await refineEvents();
   console.log(ok ? 'ALL PASS' : 'SOME FAIL');

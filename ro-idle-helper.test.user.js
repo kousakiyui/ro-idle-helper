@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.5.8.7
+// @version      3.5.8.8
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -1091,6 +1091,10 @@
         const cid = Number(d.characterId);
         if (state.charRosterLoaded && !state.myCharIds.has(cid)) return;
         const ch = d.snapshot.character;
+        const refineActorId = foreground && refBusy && state.activeCharId !== cid
+          ? readFiberForUi(() => refineActor(readBackpackContext(true))) : null;
+        // 背包能確認目前角色時，其他角色的明細回應只更新該角色的餘額。
+        foreground = foreground && (refineActorId == null || refineActorId === cid);
         if (foreground) {
           if (state.activeCharId !== cid) {
             combatHitMeter.reset();
@@ -1099,9 +1103,12 @@
               state.dmgSum = state.hits = state.maxDmg = state.damageTaken = 0;
               state.damageStartMs = state.accMs + (state.paused ? 0 : Date.now() - state.lastResumed);
             }
-            refineIdentityEpoch++;
-            pageNet.events.dispatchEvent(new Event('ui-abort'));
-            refSelected.clear();
+            // 初始化助手角色時，精煉工作階段可能已從原生背包認出同一角色。
+            if (state.activeCharId != null || refineActorId !== cid) {
+              refineIdentityEpoch++;
+              pageNet.events.dispatchEvent(new Event('ui-abort'));
+              refSelected.clear();
+            }
           }
           state.activeCharId = cid;
           state.activeCharName = ch.name || d.name;
@@ -2858,7 +2865,7 @@
       function inspect(expired = false) {
         if (done) return;
         try {
-          if (document.hidden || shouldAbort()) throw Error('角色已變更或流程已停止');
+          if (shouldAbort() || document.hidden) throw Error('角色已變更或流程已停止');
           const result = check(expired);
           if (result || expired) finish(null, result || null);
         } catch (error) { finish(error); }
@@ -3086,17 +3093,23 @@
   }
 
   const refineItemSignature = (item) => JSON.stringify([item.itemId, item.cards ?? [], item.forged ?? null]);
-  function assertRefineSession(session, allowStopped = false) {
-    if (!session || session.epoch !== refineIdentityEpoch || document.hidden || (!allowStopped && refStop)) {
-      throw Error('角色已變更或流程已停止');
+  function assertRefineRun(session, allowStopped) {
+    if (!allowStopped && refStop) throw Error('已手動停止精煉');
+    if (document.hidden) throw Error('遊戲分頁已切到背景');
+    if (!session || session.epoch !== refineIdentityEpoch ||
+        (state.activeCharId != null && Number(state.activeCharId) !== session.characterId)) {
+      throw Error('偵測到角色切換，已停止精煉');
     }
+  }
+
+  function assertRefineSession(session, allowStopped = false) {
+    assertRefineRun(session, allowStopped);
     const context = readBackpackContext(true);
     if ((session.modern && !context) || (context && session.modern !== undefined && Boolean(context.modern) !== session.modern)) {
       throw Error('背包介面已切換，已停止');
     }
     const actor = refineActor(context);
-    if (actor !== session.characterId ||
-        (state.activeCharId != null && Number(state.activeCharId) !== session.characterId)) {
+    if (actor !== session.characterId) {
       throw Error('無法確認仍是起始角色，已停止');
     }
     return context;
@@ -3153,9 +3166,7 @@
       return check(expired);
     }, {
       root, timeout,
-      shouldAbort: () => session.epoch !== refineIdentityEpoch ||
-        (state.activeCharId != null && Number(state.activeCharId) !== session.characterId) ||
-        (refStop && !allowStopped && !session.restoring)
+      shouldAbort: () => assertRefineRun(session, allowStopped || session.restoring === true)
     });
   }
 
@@ -3435,6 +3446,7 @@
 
     const origEquip = { ...(b.s.equipment || {}) };
     const safeLimits = new Map(), skipped = new Set();
+    let stopReason = null;
     let changedEquip = false, successCnt = 0, brokenCnt = 0, failedCnt = 0;
     refBusy = true; refStop = false; refreshRefinePanel();
 
@@ -3442,7 +3454,7 @@
       while (!refStop) {
         assertRefineSession(session);
         b = readBackpackContext(true);
-        if (!b || document.hidden) throw Error('已離開背包頁面');
+        if (!b) throw Error('已離開背包頁面');
 
         let pool = b.rows.filter((r) => isEligibleEquip(r) && runUids.has(r.uid) && refSelected.has(r.uid));
         pool = pool.filter((r) => !skipped.has(r.uid) && (r.st.refine || 0) < limitPlus);
@@ -3478,7 +3490,7 @@
         const target = pool[0], uid = target.uid, curPlus = target.st.refine || 0;
         session.targetUid = uid;
         b = await refineAwait(session, selectBagItemRow(uid, session));
-        if (!b || refStop || document.hidden) throw Error('已離開背包或中止精煉');
+        if (!b) throw Error('已離開背包頁面');
 
         const recipeItem = refinePack?.items?.get(target.st.itemId);
         const weaponLevel = Math.min(4, Math.max(1, recipeItem?.weaponLevel ?? 1));
@@ -3503,7 +3515,7 @@
           const safeTarget = Number(safeBtn.textContent.match(/\+(\d+)/)?.[1]) || 4;
           if (curPlus < safeTarget && (modeType === 'safe_only' || safeTarget <= refTargetPlus)) {
             setStatus(`⚡ 一鍵安全值：【${target.name}】+${curPlus} ➔ +${safeTarget}...`);
-            if (refStop || document.hidden) throw Error('已中止精煉');
+            assertRefineRun(session, false);
             await waitForRefineCommandSlot(session);
             const originalConfirm = page.confirm;
             let accepted = true;
@@ -3566,7 +3578,7 @@
           ? `【${target.name}】武器精練不可用，請確認技能等級、材料與 SP（至少 5）`
           : `【${target.name}】精煉按鈕不可用（礦石已用盡、Zeny/SP不足或不在主城）`);
 
-        if (refStop || document.hidden) throw Error('已中止精煉');
+        assertRefineRun(session, false);
         const useSkill = activeBtn === skillBtn;
         await waitForRefineCommandSlot(session);
         b = assertRefineTarget(session, uid);
@@ -3637,7 +3649,8 @@
       setStatus(`🎉 精煉完成！累計成功升階 ${successCnt} 次，損壞 ${brokenCnt} 件，未升階 ${failedCnt} 件，略過 ${skipped.size - failedCnt} 件。`);
       alertUser('🎉 背包精煉完成', `成功 ${successCnt} 次 / 損壞 ${brokenCnt} 件 / 未升階 ${failedCnt} 件`, false);
     } catch (e) {
-      setStatus(`🛑 已停止：${e.message} (成功:${successCnt} 爆:${brokenCnt})`);
+      stopReason = `🛑 已停止：${e.message} (成功:${successCnt} 爆:${brokenCnt})`;
+      setStatus(stopReason);
     } finally {
       if (changedEquip) {
         session.targetUid = null;
@@ -3657,7 +3670,7 @@
                 readFiberForUi(() => refineActor(readBackpackContext(true))) !== session.characterId) break;
           }
         }
-        if (failed.length) setStatus('⚠️ 有裝備未能穿回，請檢查人物裝備欄');
+        if (failed.length) setStatus([stopReason, '⚠️ 有裝備未能穿回，請檢查人物裝備欄'].filter(Boolean).join('｜'));
       }
       refBusy = false;
       refreshRefinePanel();
@@ -4852,7 +4865,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:var(--roi-title);border:2px solid var(--roi-frame);color:var(--roi-info);align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px var(--roi-shadow);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:var(--roi-title);border-bottom:1px solid var(--roi-edge);font-weight:bold;color:var(--roi-title-text);cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.7 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.8 測試版</span>
           <button id="ro-min-btn" style="background:var(--roi-selected);color:var(--roi-text);border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:var(--roi-inset);border-bottom:1px solid var(--roi-edge);">
