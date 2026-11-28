@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.5.8.12
+// @version      3.5.8.13
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -2034,6 +2034,490 @@
     }
   }, true);
 
+  const WAREHOUSE_OPEN_BOXES = new Map([
+    [603, '神秘箱子'],
+    [617, '神秘紫箱'],
+    [616, '老舊收集冊'],
+  ]);
+  const WH_BOX_COMMAND_GAP_MS = 380;
+  let whBoxOpenBusy = false;
+
+  function diffBoxInventoryGains(beforeInv, afterInv) {
+    const beforeMap = new Map();
+    for (const st of beforeInv || []) {
+      if (st && Number.isSafeInteger(st.uid)) beforeMap.set(st.uid, st.qty || 0);
+    }
+    const gains = [];
+    for (const st of afterInv || []) {
+      if (!st || !Number.isSafeInteger(st.uid)) continue;
+      const prev = beforeMap.get(st.uid) ?? 0;
+      const next = st.qty || 0;
+      if (next > prev) {
+        gains.push({
+          uid: st.uid,
+          itemId: st.itemId,
+          qty: next - prev,
+          refine: st.refine || 0,
+          cards: Array.isArray(st.cards) ? st.cards : [],
+          unidentified: Boolean(st.unidentified),
+        });
+      }
+    }
+    return gains;
+  }
+
+  function buildBoxDepositItems(pendingDeposit, inventory, equipment) {
+    const equipped = new Set(Object.values(equipment || {}).filter(Boolean));
+    const invMap = new Map((inventory || []).map((st) => [st.uid, st]));
+    const items = [];
+    for (const [uid, qty] of pendingDeposit) {
+      if (equipped.has(uid)) continue;
+      const live = invMap.get(uid);
+      if (!live || !Number.isSafeInteger(live.qty) || live.qty <= 0) continue;
+      const sendQty = Math.min(qty, live.qty);
+      if (sendQty > 0) items.push({ uid, qty: sendQty });
+    }
+    return items;
+  }
+
+  function planBoxWithdrawBatch(storage, snapshot, itemId, wantedQty, pack, autoDeposit) {
+    if (!Array.isArray(storage?.items) || !isPlainRecord(storage.fees)) throw Error('無法確認倉庫庫存');
+    const stacks = storage.items
+      .filter((it) => it && it.itemId === itemId && Number.isSafeInteger(it.sid) && it.sid > 0 && Number.isSafeInteger(it.qty) && it.qty > 0)
+      .sort((a, b) => Number(Boolean(a.locked)) - Number(Boolean(b.locked)) || Number(Boolean(a.bound)) - Number(Boolean(b.bound)) || a.sid - b.sid);
+    if (!stacks.length) return { items: [], totalQty: 0, fee: 0 };
+
+    const fee = Object.hasOwn(storage.fees, snapshot.mapId) ? storage.fees[snapshot.mapId] : null;
+    if (!Number.isSafeInteger(fee) || fee < 0 || snapshot.activity === 'dead') throw Error('目前不在可使用倉庫的城鎮或角色已死亡');
+    if (!(snapshot.character?.zeny >= fee)) throw Error('Zeny 不足以支付倉庫費');
+
+    const maxWeight = snapshot.derived?.weightMax;
+    if (!Number.isFinite(snapshot.weight) || snapshot.weight < 0 ||
+        !Number.isFinite(maxWeight) || maxWeight <= 0 || !Array.isArray(snapshot.inventory)) {
+      throw Error('無法確認背包剩餘容量');
+    }
+    const freeSlots = 100 - snapshot.inventory.length;
+    const rawWeight = pack?.items?.get(itemId)?.weight;
+    const itemWeight = Number.isFinite(rawWeight) && rawWeight >= 0 ? rawWeight : 20;
+    const itemUnits = Math.round(itemWeight * 10);
+    // 預留 200 負重給開出來的物品，避免領完箱子就超重。
+    const reserveUnits = 2000;
+    let freeUnits = Math.round(maxWeight * 10) - Math.round(snapshot.weight * 10);
+    const usableUnits = Math.max(freeUnits - reserveUnits, itemUnits);
+
+    const canMergeStack = (it) => snapshot.inventory.some((st) =>
+      st.itemId === it.itemId &&
+      Boolean(st.locked) === Boolean(it.locked) &&
+      Boolean(st.bound) === Boolean(it.bound) &&
+      (st.expiresWallMs ?? 0) === (it.expiresWallMs ?? 0));
+
+    // 若啟用自動存倉，每批最多領 20 個且預留至少 2 格（除非只剩 1 格且箱子可合併堆疊）。
+    const batchCap = autoDeposit ? Math.min(wantedQty, 20) : wantedQty;
+    let remaining = batchCap;
+    let slotsLeft = freeSlots;
+    const picked = [];
+    for (const st of stacks) {
+      if (remaining <= 0) break;
+      const merge = canMergeStack(st);
+      // 至少需留 1 格給開出的物品（若箱子本身佔新格，至少需要 2 格；若只開 1 個且開完該格會釋出，1 格亦可）。
+      const minSlotsNeeded = merge ? 1 : (remaining === 1 ? 1 : 2);
+      if (slotsLeft < minSlotsNeeded) continue;
+      if (freeUnits < itemUnits) break;
+      const byWeight = itemUnits > 0 ? Math.max(1, Math.floor(usableUnits / itemUnits)) : st.qty;
+      const byActualWeight = itemUnits > 0 ? Math.floor(freeUnits / itemUnits) : st.qty;
+      const take = Math.min(remaining, st.qty, byWeight, byActualWeight);
+      if (take < 1) continue;
+      picked.push({ sid: st.sid, qty: take });
+      remaining -= take;
+      freeUnits -= take * itemUnits;
+      if (!merge) slotsLeft--;
+    }
+    const totalQty = picked.reduce((sum, x) => sum + x.qty, 0);
+    if (!totalQty) throw Error('背包格數或負重不足，請先整理背包後再試');
+    return { items: picked, totalQty, fee };
+  }
+
+  function resolveBoxItemName(itemId, pack) {
+    return pack?.items?.get(itemId)?.name || ITEM_NAME_CACHE.get(itemId) || WAREHOUSE_OPEN_BOXES.get(itemId) || `道具 #${itemId}`;
+  }
+
+  function resolveWarehouseActor(field) {
+    if (positiveId(state.activeCharId)) return Number(state.activeCharId);
+    if (typeof refineActor === 'function') {
+      const id = readFiberForUi(() => refineActor({ table: field }));
+      if (positiveId(id)) return Number(id);
+    }
+    return null;
+  }
+
+  async function runWarehouseBoxOpener(options) {
+    const {
+      characterId, itemId, targetCount, autoDeposit = true, pack = null,
+      isStopped = () => false, onProgress = () => {},
+      apiJson = partyApiJson, sendCommand = partyCommand, wait = sleep,
+      getEpoch = () => refineIdentityEpoch, getActiveCharId = () => state.activeCharId,
+    } = options;
+
+    if (!positiveId(characterId)) throw Error('無法確認目前角色 ID，請稍候或重新切換角色');
+    if (!Number.isSafeInteger(targetCount) || targetCount < 1) throw Error('開箱數量必須大於 0');
+
+    const startEpoch = getEpoch();
+    const assertActor = () => {
+      if (getEpoch() !== startEpoch || (getActiveCharId() != null && Number(getActiveCharId()) !== characterId)) {
+        throw Error('偵測到角色切換，已停止開箱');
+      }
+    };
+
+    const lootTotals = new Map();
+    const pendingDeposit = new Map();
+    let opened = 0;
+    let deposited = 0;
+    let lastCommandAt = -Infinity;
+
+    const pace = async () => {
+      const gap = WH_BOX_COMMAND_GAP_MS - (performance.now() - lastCommandAt);
+      if (gap > 0) await wait(gap);
+      assertActor();
+    };
+
+    const runCmd = async (command, rev) => {
+      await pace();
+      lastCommandAt = performance.now();
+      const res = await sendCommand(characterId, command, rev);
+      if (!res?.view?.snapshot || !Number.isSafeInteger(res.view.commandRevision)) {
+        throw Error('伺服器未回傳最新角色狀態，已停止以確保安全');
+      }
+      return { snap: res.view.snapshot, rev: res.view.commandRevision };
+    };
+
+    const recordGains = (gains) => {
+      for (const g of gains) {
+        pendingDeposit.set(g.uid, (pendingDeposit.get(g.uid) || 0) + g.qty);
+        const key = `${g.itemId}:${g.refine}:${g.unidentified ? 1 : 0}`;
+        const prev = lootTotals.get(key) || {
+          itemId: g.itemId,
+          name: resolveBoxItemName(g.itemId, pack),
+          qty: 0,
+          refine: g.refine,
+          unidentified: g.unidentified,
+        };
+        prev.qty += g.qty;
+        lootTotals.set(key, prev);
+      }
+    };
+
+    const flushDeposit = async (snap, rev) => {
+      const items = buildBoxDepositItems(pendingDeposit, snap.inventory, snap.equipment);
+      if (!items.length) {
+        pendingDeposit.clear();
+        return { snap, rev };
+      }
+      onProgress({ phase: 'deposit', opened, targetCount, deposited, lootTotals });
+      const next = await runCmd({ type: 'storageDeposit', items }, rev);
+      const count = items.reduce((sum, x) => sum + x.qty, 0);
+      deposited += count;
+      pendingDeposit.clear();
+      onProgress({ phase: 'deposited', opened, targetCount, deposited, lootTotals });
+      return next;
+    };
+
+    assertActor();
+    let { storage } = await apiJson('/api/storage');
+    assertActor();
+    let server = await apiJson(`/api/characters/${characterId}?deferCatchup=1`);
+    assertActor();
+    if (Number(server?.characterId) !== characterId || !server?.snapshot?.character || !Number.isSafeInteger(server.commandRevision)) {
+      throw Error('無法讀取角色狀態，已停止開箱');
+    }
+    let snap = server.snapshot;
+    let rev = server.commandRevision;
+    let stopNote = '';
+
+    try {
+      while (opened < targetCount && !isStopped()) {
+        assertActor();
+        const remaining = targetCount - opened;
+        const plan = planBoxWithdrawBatch(storage, snap, itemId, remaining, pack, autoDeposit);
+        if (!plan.totalQty) {
+          stopNote = '倉庫箱子已全部領完';
+          break;
+        }
+
+        const beforeWithdrawInv = snap.inventory;
+        onProgress({ phase: 'withdraw', opened, targetCount, deposited, batchQty: plan.totalQty, lootTotals });
+        ({ snap, rev } = await runCmd({ type: 'storageWithdraw', items: plan.items }, rev));
+
+        const withdrawnGains = diffBoxInventoryGains(beforeWithdrawInv, snap.inventory).filter((g) => g.itemId === itemId);
+        let boxesLeftInBatch = withdrawnGains.reduce((sum, g) => sum + g.qty, 0);
+        if (boxesLeftInBatch <= 0) {
+          throw Error('領倉後未在背包找到對應箱子，已停止');
+        }
+        // 紀錄每個被領出的箱子堆疊 uid 與數量，確保只開本批領出的箱子。
+        const batchQueue = withdrawnGains.map((g) => ({ uid: g.uid, qty: g.qty }));
+
+        for (const entry of batchQueue) {
+          while (entry.qty > 0 && opened < targetCount && !isStopped()) {
+            assertActor();
+            const liveBox = snap.inventory.find((st) => st.uid === entry.uid && st.itemId === itemId && st.qty > 0);
+            if (!liveBox) break;
+
+            const prevInv = snap.inventory;
+            onProgress({ phase: 'open', opened, targetCount, deposited, lootTotals });
+            ({ snap, rev } = await runCmd({ type: 'useItem', uid: entry.uid }, rev));
+            opened++;
+            entry.qty--;
+            boxesLeftInBatch--;
+
+            const gains = diffBoxInventoryGains(prevInv, snap.inventory);
+            recordGains(gains);
+            onProgress({ phase: 'opened', opened, targetCount, deposited, lastGains: gains, lootTotals });
+
+            const freeSlots = 100 - snap.inventory.length;
+            const freeWeight = (snap.derived?.weightMax ?? 0) - (snap.weight ?? 0);
+            if (freeSlots <= 1 || freeWeight <= 200) {
+              if (autoDeposit && pendingDeposit.size > 0) {
+                ({ snap, rev } = await flushDeposit(snap, rev));
+              } else if (!autoDeposit && freeSlots <= 0) {
+                stopNote = '背包已滿';
+                break;
+              }
+            }
+          }
+          if (stopNote || isStopped()) break;
+        }
+
+        if (autoDeposit && pendingDeposit.size > 0 && !stopNote) {
+          ({ snap, rev } = await flushDeposit(snap, rev));
+        }
+        if (stopNote || isStopped() || opened >= targetCount) break;
+
+        // 下一批前重新抓取倉庫庫存。
+        assertActor();
+        ({ storage } = await apiJson('/api/storage'));
+      }
+    } finally {
+      if (autoDeposit && pendingDeposit.size > 0) {
+        try {
+          assertActor();
+          ({ snap, rev } = await flushDeposit(snap, rev));
+        } catch {}
+      }
+    }
+
+    return { opened, deposited, stopped: isStopped(), stopNote, lootTotals };
+  }
+
+  function openWarehouseBoxDialog(field, itemId, fallbackName, fallbackStock) {
+    if (whBoxOpenBusy) return;
+    document.querySelector('[data-roi-wh-box-dialog]')?.remove();
+
+    const dlg = document.createElement('dialog');
+    dlg.dataset.roiWhBoxDialog = '';
+    dlg.style.cssText = 'width:min(540px,calc(100vw - 24px));max-height:84vh;padding:16px 18px;background:var(--roi-surface);color:var(--roi-text);border:1.5px solid #f59e0b;border-radius:12px;box-shadow:0 16px 48px var(--roi-shadow);font-size:13px;backdrop-filter:blur(10px);';
+    const boxName = fallbackName || WAREHOUSE_OPEN_BOXES.get(itemId) || `箱子 #${itemId}`;
+    const stock = Number.isSafeInteger(fallbackStock) && fallbackStock > 0 ? fallbackStock : 1;
+
+    dlg.innerHTML = `
+      <div data-box-title style="font-weight:bold;font-size:15px;color:var(--roi-warning);border-bottom:1px solid var(--roi-edge);padding-bottom:8px;margin-bottom:10px;"></div>
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:8px;">
+        <span>倉庫現有 <b data-box-stock>${stock.toLocaleString('zh-TW')}</b> 個｜開啟數量：</span>
+        <input type="number" data-box-qty class="xp-input" min="1" max="${stock}" value="${Math.min(stock, 10)}" style="width:72px;">
+        <button type="button" class="xp-btn small" data-box-preset="1">1</button>
+        <button type="button" class="xp-btn small" data-box-preset="5">5</button>
+        <button type="button" class="xp-btn small" data-box-preset="10">10</button>
+        <button type="button" class="xp-btn small" data-box-preset="50">50</button>
+        <button type="button" class="xp-btn small" data-box-preset="all">全部</button>
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;margin-bottom:10px;cursor:pointer;">
+        <input type="checkbox" data-box-autodeposit checked> 開完自動將獲得物品存回倉庫（不影響背包原有物品）
+      </label>
+      <div data-box-status role="status" style="padding:6px 8px;margin-bottom:10px;background:var(--roi-panel);border:1px solid var(--roi-edge);border-radius:6px;font-size:12px;color:var(--roi-info);">
+        準備就緒：按下「開始開箱」會自動背景領箱、開箱並將開出的物品存回倉庫。
+      </div>
+      <div data-box-loot style="max-height:38vh;overflow:auto;margin-bottom:12px;border:1px solid var(--roi-edge);border-radius:6px;padding:6px 10px;background:var(--roi-inset);font-size:12px;">
+        <span style="color:var(--roi-muted);">尚無開箱紀錄</span>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;">
+        <button type="button" class="xp-btn small" data-box-close>關閉</button>
+        <button type="button" class="xp-btn small" data-box-stop style="background:#dc2626;color:#fff;border:none;display:none;">⏹ 停止</button>
+        <button type="button" class="xp-btn small" data-box-start style="background:linear-gradient(135deg,#a34f05,#854009);color:#fff;font-weight:bold;border:none;">🚀 開始開箱</button>
+      </div>
+    `;
+    document.body.appendChild(dlg);
+    dlg.querySelector('[data-box-title]').textContent = `📦 倉庫直接開箱：${boxName}`;
+
+    const qtyInput = dlg.querySelector('[data-box-qty]');
+    const stockEl = dlg.querySelector('[data-box-stock]');
+    const autoDepBox = dlg.querySelector('[data-box-autodeposit]');
+    const statusEl = dlg.querySelector('[data-box-status]');
+    const lootEl = dlg.querySelector('[data-box-loot]');
+    const closeBtn = dlg.querySelector('[data-box-close]');
+    const stopBtn = dlg.querySelector('[data-box-stop]');
+    const startBtn = dlg.querySelector('[data-box-start]');
+    let currentStock = stock;
+    let stopRequested = false;
+
+    const renderLoot = (lootTotals) => {
+      if (!lootTotals || !lootTotals.size) {
+        lootEl.innerHTML = '<span style="color:var(--roi-muted);">尚無開箱紀錄</span>';
+        return;
+      }
+      const rows = [...lootTotals.values()].sort((a, b) => {
+        const aCard = /卡片$/.test(a.name) ? 1 : 0;
+        const bCard = /卡片$/.test(b.name) ? 1 : 0;
+        return bCard - aCard || b.qty - a.qty || a.itemId - b.itemId;
+      });
+      lootEl.replaceChildren();
+      for (const item of rows) {
+        const row = element('div', null, 'display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px dashed var(--roi-edge);');
+        const isCard = /卡片$/.test(item.name);
+        const label = `${item.refine ? '+' + item.refine + ' ' : ''}${item.name}${item.unidentified ? ' (未鑑定)' : ''}`;
+        const nameSpan = element('span', isCard ? `✨ ${label}` : label, isCard ? 'color:var(--roi-warning);font-weight:bold;' : '');
+        const qtySpan = element('b', `×${item.qty.toLocaleString('zh-TW')}`, 'color:var(--roi-success);');
+        row.append(nameSpan, qtySpan);
+        lootEl.append(row);
+      }
+    };
+
+    for (const btn of dlg.querySelectorAll('[data-box-preset]')) {
+      btn.onclick = () => {
+        if (whBoxOpenBusy) return;
+        const val = btn.dataset.boxPreset === 'all' ? currentStock : Math.min(currentStock, Number(btn.dataset.boxPreset));
+        qtyInput.value = String(Math.max(1, val));
+      };
+    }
+
+    const setRunning = (running) => {
+      whBoxOpenBusy = running;
+      qtyInput.disabled = running;
+      autoDepBox.disabled = running;
+      for (const btn of dlg.querySelectorAll('[data-box-preset]')) btn.disabled = running;
+      startBtn.style.display = running ? 'none' : 'inline-block';
+      stopBtn.style.display = running ? 'inline-block' : 'none';
+      closeBtn.disabled = running;
+    };
+
+    stopBtn.onclick = () => {
+      stopRequested = true;
+      statusEl.textContent = '⏹ 正在停止開箱並收尾…';
+    };
+    closeBtn.onclick = () => {
+      if (whBoxOpenBusy) return;
+      dlg.close();
+    };
+    dlg.addEventListener('cancel', (e) => {
+      if (whBoxOpenBusy) e.preventDefault();
+    });
+    dlg.addEventListener('close', () => dlg.remove());
+
+    startBtn.onclick = async () => {
+      if (whBoxOpenBusy) return;
+      const targetCount = Math.floor(Number(qtyInput.value));
+      if (!Number.isSafeInteger(targetCount) || targetCount < 1) {
+        statusEl.textContent = '⚠️ 請輸入有效的開箱數量';
+        return;
+      }
+      const characterId = resolveWarehouseActor(field);
+      if (!characterId) {
+        statusEl.textContent = '⚠️ 無法確認目前角色 ID，請稍候再試';
+        return;
+      }
+
+      stopRequested = false;
+      setRunning(true);
+      statusEl.style.color = 'var(--roi-info)';
+      statusEl.textContent = '⏳ 正在載入道具資料並準備領箱…';
+
+      let pack = refinePack || null;
+      if (!pack && typeof loadLootPack === 'function') {
+        try {
+          pack = await loadLootPack();
+          if (pack && !refinePack) refinePack = pack;
+        } catch {}
+      }
+
+      try {
+        const result = await runWarehouseBoxOpener({
+          characterId,
+          itemId,
+          targetCount,
+          autoDeposit: autoDepBox.checked,
+          pack,
+          isStopped: () => stopRequested,
+          onProgress: (p) => {
+            const label = p.phase === 'withdraw' ? `領取 ${p.batchQty} 個箱子中…`
+              : p.phase === 'deposit' ? '將開出的物品存回倉庫中…'
+              : `開箱中（${p.opened} / ${p.targetCount}）`;
+            statusEl.textContent = `📦 ${label}${p.deposited ? `｜已自動存倉 ${p.deposited} 件` : ''}`;
+            renderLoot(p.lootTotals);
+          },
+        });
+        currentStock = Math.max(0, currentStock - result.opened);
+        stockEl.textContent = currentStock.toLocaleString('zh-TW');
+        qtyInput.max = String(Math.max(1, currentStock));
+        if (Number(qtyInput.value) > currentStock && currentStock > 0) qtyInput.value = String(currentStock);
+        renderLoot(result.lootTotals);
+        statusEl.style.color = result.stopped || result.stopNote ? 'var(--roi-warning)' : 'var(--roi-success)';
+        const suffix = result.stopNote ? `（${result.stopNote}）` : result.stopped ? '（已手動停止）' : '';
+        statusEl.textContent = `🎉 完成！共開啟 ${result.opened} 個【${boxName}】${result.deposited ? `，已自動存倉 ${result.deposited} 件` : ''}${suffix}`;
+        if (!result.stopped && result.opened > 0) {
+          alertUser('📦 倉庫開箱完成', `共開啟 ${result.opened} 個 ${boxName}${result.deposited ? `，已自動存倉 ${result.deposited} 件` : ''}`, false);
+        }
+      } catch (error) {
+        statusEl.style.color = '#ef4444';
+        statusEl.textContent = `🛑 已停止：${error.message}`;
+      } finally {
+        setRunning(false);
+      }
+    };
+
+    dlg.showModal();
+  }
+
+  function refreshWarehouseBoxOpener() {
+    const fields = [...document.querySelectorAll('fieldset')].filter((f) => {
+      const leg = [...f.children].find((c) => c.tagName === 'LEGEND');
+      return leg && /^倉庫(?:\s*[（(]|$)/.test(clean(leg.textContent)) && visible(f);
+    });
+    for (const f of fields) {
+      const list = f.querySelector(':scope > ul');
+      if (!list) continue;
+      for (const li of list.children) {
+        const rawId = warehouseItemId(li);
+        const itemId = rawId ? Number(rawId) : 0;
+        const existing = li.querySelector('[data-roi-wh-open-box]');
+        if (!WAREHOUSE_OPEN_BOXES.has(itemId)) {
+          if (existing) existing.remove();
+          continue;
+        }
+        let btn = existing;
+        if (!btn) {
+          btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'xp-btn small';
+          btn.dataset.roiWhOpenBox = String(itemId);
+          btn.textContent = '📦 開箱';
+          btn.title = '直接在倉庫領出、開箱並自動存回倉庫';
+          btn.style.cssText = 'margin-left:4px;padding:1px 6px;font-size:11px;background:linear-gradient(135deg,#a34f05,#854009);color:#fff;border:none;border-radius:4px;cursor:pointer;';
+          btn.onclick = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const currentId = Number(warehouseItemId(li)) || itemId;
+            const nameBtn = li.querySelector('button[aria-label$="的物品資訊"]');
+            const name = clean(nameBtn?.textContent) || WAREHOUSE_OPEN_BOXES.get(currentId);
+            const qtyMatch = clean(li.textContent).match(/×\s*([\d,]+)/);
+            const stock = qtyMatch ? Number(qtyMatch[1].replace(/,/g, '')) : 1;
+            openWarehouseBoxDialog(f, currentId, name, stock);
+          };
+          const anchor = li.querySelector('button[aria-label$="的物品資訊"]');
+          if (anchor) anchor.after(btn);
+          else li.append(btn);
+        }
+        btn.disabled = whBoxOpenBusy;
+      }
+    }
+  }
+
   // Match by inventory item ID so this works with classic icons hidden and unidentified items.
   document.addEventListener('click', (event) => {
     const source = event.target;
@@ -3105,7 +3589,7 @@
 
   // 測試版診斷：預設關閉（localStorage roi-refine-diag=1 或面板開關）。只留最近 30 筆，
   // 只存布林、數字與固定階段名稱，不含玩家名稱、角色識別碼、憑證或 API 回應內容。
-  const refineBuild = '3.5.8.12-test';
+  const refineBuild = '3.5.8.13-test';
   const refineDiagLimit = 30;
   const refineDiagLog = [];
   let refineDiagStart = 0;
@@ -4941,7 +5425,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:var(--roi-title);border:2px solid var(--roi-frame);color:var(--roi-info);align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px var(--roi-shadow);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:var(--roi-title);border-bottom:1px solid var(--roi-edge);font-weight:bold;color:var(--roi-title-text);cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.12 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.13 測試版</span>
           <button id="ro-min-btn" style="background:var(--roi-selected);color:var(--roi-text);border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:var(--roi-inset);border-bottom:1px solid var(--roi-edge);">
@@ -5975,7 +6459,7 @@
     if (group.nextElementSibling !== bar) group.after(bar);
   }
 
-  const hasActiveOperation = () => refBusy || cartShortcutBusy || partyMoveActive !== null;
+  const hasActiveOperation = () => refBusy || cartShortcutBusy || whBoxOpenBusy || partyMoveActive !== null;
   const isActiveWindow = () => hasActiveOperation() ||
     (!document.hidden && (document.hasFocus() || performance.now() - lastInteractionAt <= TIMING.recentInteraction));
 
@@ -6074,7 +6558,7 @@
       legends.some((t) => /^必撿稀有掉落/.test(t))
     ) mountSettingsTools();
     syncPartyMoveBar();
-    if (legends.some((t) => /^倉庫/.test(t))) refreshWarehouse();
+    if (legends.some((t) => /^倉庫/.test(t))) { refreshWarehouse(); refreshWarehouseBoxOpener(); }
     if (legends.some((t) => /的攤位/.test(t)) || mktPanel.isConnected || townResultsTable) syncMktMount();
     if (refreshAnnotations) annotateAllRefinedEquipment();
     syncHudSettings();
@@ -6097,7 +6581,7 @@
     let domChanged = false, slowChanged = false, sawLog = false;
     for (const r of records) {
       const el = r.target.nodeType === 1 ? r.target : r.target.parentElement;
-      if (!el || !el.isConnected || el.closest('#ro-helper-hud,#roi-helper-mvp-panel,#roi-item-hover-tooltip,[data-roi-market-browser],[data-ro-wh-bar],[data-ro-rare-helper],[data-roi-settings-tools],[data-roi-refine-helper],[data-roi-price-search],[data-roi-upper-fold],[data-roi-party-move-bar],[data-roi-party-move-dialog]')) continue;
+      if (!el || !el.isConnected || el.closest('#ro-helper-hud,#roi-helper-mvp-panel,#roi-item-hover-tooltip,[data-roi-market-browser],[data-ro-wh-bar],[data-roi-wh-open-box],[data-roi-wh-box-dialog],[data-ro-rare-helper],[data-roi-settings-tools],[data-roi-refine-helper],[data-roi-price-search],[data-roi-upper-fold],[data-roi-party-move-bar],[data-roi-party-move-dialog]')) continue;
       if (r.type === 'attributes' && !el.matches('fieldset') && !el.querySelector('fieldset') &&
           !el.matches(hudSkillControls) && !el.querySelector(hudSkillControls) &&
           !el.matches('[role="tabpanel"][aria-label="道具"]') && !el.querySelector('[role="tabpanel"][aria-label="道具"]')) continue;

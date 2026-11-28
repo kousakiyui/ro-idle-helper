@@ -1,5 +1,5 @@
 
-  const hasActiveOperation = () => refBusy || cartShortcutBusy || partyMoveActive !== null;
+  const hasActiveOperation = () => refBusy || cartShortcutBusy || whBoxOpenBusy || partyMoveActive !== null;
   const isActiveWindow = () => hasActiveOperation() ||
     (!document.hidden && (document.hasFocus() || performance.now() - lastInteractionAt <= TIMING.recentInteraction));
 
@@ -98,7 +98,7 @@
       legends.some((t) => /^必撿稀有掉落/.test(t))
     ) mountSettingsTools();
     syncPartyMoveBar();
-    if (legends.some((t) => /^倉庫/.test(t))) refreshWarehouse();
+    if (legends.some((t) => /^倉庫/.test(t))) { refreshWarehouse(); refreshWarehouseBoxOpener(); }
     if (legends.some((t) => /的攤位/.test(t)) || mktPanel.isConnected || townResultsTable) syncMktMount();
     if (refreshAnnotations) annotateAllRefinedEquipment();
     syncHudSettings();
@@ -121,7 +121,7 @@
     let domChanged = false, slowChanged = false, sawLog = false;
     for (const r of records) {
       const el = r.target.nodeType === 1 ? r.target : r.target.parentElement;
-      if (!el || !el.isConnected || el.closest('#ro-helper-hud,#roi-helper-mvp-panel,#roi-item-hover-tooltip,[data-roi-market-browser],[data-ro-wh-bar],[data-ro-rare-helper],[data-roi-settings-tools],[data-roi-refine-helper],[data-roi-price-search],[data-roi-upper-fold],[data-roi-party-move-bar],[data-roi-party-move-dialog]')) continue;
+      if (!el || !el.isConnected || el.closest('#ro-helper-hud,#roi-helper-mvp-panel,#roi-item-hover-tooltip,[data-roi-market-browser],[data-ro-wh-bar],[data-roi-wh-open-box],[data-roi-wh-box-dialog],[data-ro-rare-helper],[data-roi-settings-tools],[data-roi-refine-helper],[data-roi-price-search],[data-roi-upper-fold],[data-roi-party-move-bar],[data-roi-party-move-dialog]')) continue;
       if (r.type === 'attributes' && !el.matches('fieldset') && !el.querySelector('fieldset') &&
           !el.matches(hudSkillControls) && !el.querySelector(hudSkillControls) &&
           !el.matches('[role="tabpanel"][aria-label="道具"]') && !el.querySelector('[role="tabpanel"][aria-label="道具"]')) continue;
