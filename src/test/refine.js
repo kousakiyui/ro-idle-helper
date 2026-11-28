@@ -134,7 +134,7 @@
 
   // 測試版診斷：預設關閉（localStorage roi-refine-diag=1 或面板開關）。只留最近 30 筆，
   // 只存布林、數字與固定階段名稱，不含玩家名稱、角色識別碼、憑證或 API 回應內容。
-  const refineBuild = '3.5.8.13-test';
+  const refineBuild = '3.5.8.14-test';
   const refineDiagLimit = 30;
   const refineDiagLog = [];
   let refineDiagStart = 0;

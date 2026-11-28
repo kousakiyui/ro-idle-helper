@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.5.8.13
+// @version      3.5.8.14
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -2036,6 +2036,7 @@
 
   const WAREHOUSE_OPEN_BOXES = new Map([
     [603, '神秘箱子'],
+    [644, '禮物箱'],
     [617, '神秘紫箱'],
     [616, '老舊收集冊'],
   ]);
@@ -2173,6 +2174,7 @@
     let opened = 0;
     let deposited = 0;
     let lastCommandAt = -Infinity;
+    let depositInFlight = false;
 
     const pace = async () => {
       const gap = WH_BOX_COMMAND_GAP_MS - (performance.now() - lastCommandAt);
@@ -2184,6 +2186,7 @@
       await pace();
       lastCommandAt = performance.now();
       const res = await sendCommand(characterId, command, rev);
+      assertActor();
       if (!res?.view?.snapshot || !Number.isSafeInteger(res.view.commandRevision)) {
         throw Error('伺服器未回傳最新角色狀態，已停止以確保安全');
       }
@@ -2213,7 +2216,9 @@
         return { snap, rev };
       }
       onProgress({ phase: 'deposit', opened, targetCount, deposited, lootTotals });
+      depositInFlight = true;
       const next = await runCmd({ type: 'storageDeposit', items }, rev);
+      depositInFlight = false;
       const count = items.reduce((sum, x) => sum + x.qty, 0);
       deposited += count;
       pendingDeposit.clear();
@@ -2261,6 +2266,25 @@
             const liveBox = snap.inventory.find((st) => st.uid === entry.uid && st.itemId === itemId && st.qty > 0);
             if (!liveBox) break;
 
+            // 開箱可能新增一格物品，達到門檻時先存放本輪所得。
+            const capacityReached = () => {
+              const max = snap.derived?.weightMax;
+              if (!Array.isArray(snap.inventory) || !Number.isFinite(snap.weight) ||
+                  snap.weight < 0 || !Number.isFinite(max) || max <= 0) {
+                throw Error('無法確認背包格數或負重，已停止開箱');
+              }
+              return snap.inventory.length >= 99 || snap.weight >= max * 0.9;
+            };
+            if (capacityReached()) {
+              if (autoDeposit && pendingDeposit.size) {
+                ({ snap, rev } = await flushDeposit(snap, rev));
+              }
+              if (capacityReached()) {
+                stopNote = '背包格數或負重已達開箱上限，請整理背包';
+                break;
+              }
+            }
+
             const prevInv = snap.inventory;
             onProgress({ phase: 'open', opened, targetCount, deposited, lootTotals });
             ({ snap, rev } = await runCmd({ type: 'useItem', uid: entry.uid }, rev));
@@ -2271,17 +2295,6 @@
             const gains = diffBoxInventoryGains(prevInv, snap.inventory);
             recordGains(gains);
             onProgress({ phase: 'opened', opened, targetCount, deposited, lastGains: gains, lootTotals });
-
-            const freeSlots = 100 - snap.inventory.length;
-            const freeWeight = (snap.derived?.weightMax ?? 0) - (snap.weight ?? 0);
-            if (freeSlots <= 1 || freeWeight <= 200) {
-              if (autoDeposit && pendingDeposit.size > 0) {
-                ({ snap, rev } = await flushDeposit(snap, rev));
-              } else if (!autoDeposit && freeSlots <= 0) {
-                stopNote = '背包已滿';
-                break;
-              }
-            }
           }
           if (stopNote || isStopped()) break;
         }
@@ -2296,7 +2309,7 @@
         ({ storage } = await apiJson('/api/storage'));
       }
     } finally {
-      if (autoDeposit && pendingDeposit.size > 0) {
+      if (autoDeposit && pendingDeposit.size > 0 && !depositInFlight) {
         try {
           assertActor();
           ({ snap, rev } = await flushDeposit(snap, rev));
@@ -3589,7 +3602,7 @@
 
   // 測試版診斷：預設關閉（localStorage roi-refine-diag=1 或面板開關）。只留最近 30 筆，
   // 只存布林、數字與固定階段名稱，不含玩家名稱、角色識別碼、憑證或 API 回應內容。
-  const refineBuild = '3.5.8.13-test';
+  const refineBuild = '3.5.8.14-test';
   const refineDiagLimit = 30;
   const refineDiagLog = [];
   let refineDiagStart = 0;
@@ -5425,7 +5438,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:var(--roi-title);border:2px solid var(--roi-frame);color:var(--roi-info);align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px var(--roi-shadow);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:var(--roi-title);border-bottom:1px solid var(--roi-edge);font-weight:bold;color:var(--roi-title-text);cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.13 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.14 測試版</span>
           <button id="ro-min-btn" style="background:var(--roi-selected);color:var(--roi-text);border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:var(--roi-inset);border-bottom:1px solid var(--roi-edge);">

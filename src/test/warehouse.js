@@ -573,6 +573,7 @@
 
   const WAREHOUSE_OPEN_BOXES = new Map([
     [603, '神秘箱子'],
+    [644, '禮物箱'],
     [617, '神秘紫箱'],
     [616, '老舊收集冊'],
   ]);
@@ -710,6 +711,7 @@
     let opened = 0;
     let deposited = 0;
     let lastCommandAt = -Infinity;
+    let depositInFlight = false;
 
     const pace = async () => {
       const gap = WH_BOX_COMMAND_GAP_MS - (performance.now() - lastCommandAt);
@@ -721,6 +723,7 @@
       await pace();
       lastCommandAt = performance.now();
       const res = await sendCommand(characterId, command, rev);
+      assertActor();
       if (!res?.view?.snapshot || !Number.isSafeInteger(res.view.commandRevision)) {
         throw Error('伺服器未回傳最新角色狀態，已停止以確保安全');
       }
@@ -750,7 +753,9 @@
         return { snap, rev };
       }
       onProgress({ phase: 'deposit', opened, targetCount, deposited, lootTotals });
+      depositInFlight = true;
       const next = await runCmd({ type: 'storageDeposit', items }, rev);
+      depositInFlight = false;
       const count = items.reduce((sum, x) => sum + x.qty, 0);
       deposited += count;
       pendingDeposit.clear();
@@ -798,6 +803,25 @@
             const liveBox = snap.inventory.find((st) => st.uid === entry.uid && st.itemId === itemId && st.qty > 0);
             if (!liveBox) break;
 
+            // 開箱可能新增一格物品，達到門檻時先存放本輪所得。
+            const capacityReached = () => {
+              const max = snap.derived?.weightMax;
+              if (!Array.isArray(snap.inventory) || !Number.isFinite(snap.weight) ||
+                  snap.weight < 0 || !Number.isFinite(max) || max <= 0) {
+                throw Error('無法確認背包格數或負重，已停止開箱');
+              }
+              return snap.inventory.length >= 99 || snap.weight >= max * 0.9;
+            };
+            if (capacityReached()) {
+              if (autoDeposit && pendingDeposit.size) {
+                ({ snap, rev } = await flushDeposit(snap, rev));
+              }
+              if (capacityReached()) {
+                stopNote = '背包格數或負重已達開箱上限，請整理背包';
+                break;
+              }
+            }
+
             const prevInv = snap.inventory;
             onProgress({ phase: 'open', opened, targetCount, deposited, lootTotals });
             ({ snap, rev } = await runCmd({ type: 'useItem', uid: entry.uid }, rev));
@@ -808,17 +832,6 @@
             const gains = diffBoxInventoryGains(prevInv, snap.inventory);
             recordGains(gains);
             onProgress({ phase: 'opened', opened, targetCount, deposited, lastGains: gains, lootTotals });
-
-            const freeSlots = 100 - snap.inventory.length;
-            const freeWeight = (snap.derived?.weightMax ?? 0) - (snap.weight ?? 0);
-            if (freeSlots <= 1 || freeWeight <= 200) {
-              if (autoDeposit && pendingDeposit.size > 0) {
-                ({ snap, rev } = await flushDeposit(snap, rev));
-              } else if (!autoDeposit && freeSlots <= 0) {
-                stopNote = '背包已滿';
-                break;
-              }
-            }
           }
           if (stopNote || isStopped()) break;
         }
@@ -833,7 +846,7 @@
         ({ storage } = await apiJson('/api/storage'));
       }
     } finally {
-      if (autoDeposit && pendingDeposit.size > 0) {
+      if (autoDeposit && pendingDeposit.size > 0 && !depositInFlight) {
         try {
           assertActor();
           ({ snap, rev } = await flushDeposit(snap, rev));
