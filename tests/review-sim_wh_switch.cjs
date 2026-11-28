@@ -9,7 +9,7 @@ function extract(from, to) {
   return source.slice(start, end);
 }
 const production = extract('  function planRefineWithdrawal(', '  const isWeaponRefineButton')
-  + extract('  async function partyApiJson(', '  async function partyReadConfig(');
+  + extract('  async function partyApiJson(', '  function partySelectedMap(');
 
 function fixture(options = {}) {
   const equipment = { uid: 41, itemId: 1201, qty: 1, refine: 4 };

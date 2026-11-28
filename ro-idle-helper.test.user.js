@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RO Idle 便利助手｜測試版
 // @namespace    local.ro-idle.warehouse-helper.test
-// @version      3.5.8.11
+// @version      3.5.8.12
 // @description  整合倉庫保護、跨城查價、掛機設定、背包精煉、全裝備精煉傷害標記、露天懸浮完整數值與插卡檢視及角色收支統計與個人 MVP 時刻表。
 // @match        https://ro-idle.app/*
 // @run-at       document-idle
@@ -2073,18 +2073,6 @@
   }, true);
 
   const rarePanels = new WeakMap(), rareKnownRoots = new Set(), rareLastMap = new WeakMap();
-  // 同步造成的草稿淨變動：itemId → true（勾）／false（取消）。面板回到乾淨（套用鈕停用）或換角色時清空。
-  const rareSyncDelta = { charId: null, lockMap: null, net: new Map(), tainted: false };
-  function resetRareSyncDelta() { rareSyncDelta.charId = null; rareSyncDelta.lockMap = null; rareSyncDelta.net.clear(); rareSyncDelta.tainted = false; }
-  function noteRareSync(lockMap, id, checked) {
-    const charId = Number(state.activeCharId) || null;
-    if (rareSyncDelta.charId !== charId) { resetRareSyncDelta(); rareSyncDelta.charId = charId; }
-    rareSyncDelta.lockMap = typeof lockMap === 'string' ? lockMap : null;
-    if (!Number.isSafeInteger(id)) { rareSyncDelta.tainted = true; return; }
-    if (rareSyncDelta.net.has(id) && rareSyncDelta.net.get(id) !== checked) rareSyncDelta.net.delete(id);
-    else rareSyncDelta.net.set(id, checked);
-  }
-  const settingsApplyDirty = () => [...document.querySelectorAll('button')].some((b) => !b.disabled && clean(b.textContent) === '套用設定' && visible(b));
   function validateRareAutoMap(value) {
     if (typeof value !== 'boolean') throw Error('稀有掉落開關格式不符');
     return value;
@@ -2183,7 +2171,7 @@
     return null;
   }
 
-  function fastSelectRare(root, group, next, sync = null) {
+  function fastSelectRare(root, group, next) {
     const rs = scanRareItems(root);
     const statusSpan = rarePanels.get(root)?.querySelector('[data-ro-rare-status]');
     if (!rs) { if (statusSpan) statusSpan.textContent = '⚠️ 無法辨識本圖與其他地圖的掉落'; return false; }
@@ -2203,13 +2191,7 @@
         if (statusSpan) statusSpan.textContent = '⚠️ 有無法勾選的道具，請檢查清單';
         return false;
       }
-      let syncId = null;
-      if (sync) {
-        syncId = sync.ids.get(current.box);
-        if (syncId == null) { for (const e of getRareContext(root)?.entries || []) sync.ids.set(e.box, e.id); syncId = sync.ids.get(current.box); }
-      }
       current.box.click();
-      if (sync) noteRareSync(sync.lockMap, syncId, desired);
       if (current.box.isConnected && current.box.checked !== desired) {
         if (statusSpan) statusSpan.textContent = '⚠️ 遊戲未接受勾選，請檢查清單';
         return false;
@@ -2247,14 +2229,12 @@
         else root.prepend(panel);
         rarePanels.set(root, panel);
       }
-      if (rareSyncDelta.net.size && !settingsApplyDirty()) resetRareSyncDelta();
       if (rareAutoMap) {
         const context = getRareContext(root);
         if (context) {
           const mapSig = JSON.stringify([context.p.draft.lockMap, context.p.monsterIds]);
           if (rareLastMap.get(root) !== mapSig) {
-            const sync = { lockMap: context.p.draft.lockMap, ids: new Map(context.entries.map((e) => [e.box, e.id])) };
-            if (fastSelectRare(root, 'sync', true, sync)) rareLastMap.set(root, mapSig);
+            if (fastSelectRare(root, 'sync', true)) rareLastMap.set(root, mapSig);
           }
         }
       }
@@ -3125,7 +3105,7 @@
 
   // 測試版診斷：預設關閉（localStorage roi-refine-diag=1 或面板開關）。只留最近 30 筆，
   // 只存布林、數字與固定階段名稱，不含玩家名稱、角色識別碼、憑證或 API 回應內容。
-  const refineBuild = '3.5.8.11-test';
+  const refineBuild = '3.5.8.12-test';
   const refineDiagLimit = 30;
   const refineDiagLog = [];
   let refineDiagStart = 0;
@@ -4961,7 +4941,7 @@
       <div id="ro-fab" style="display:${state.hudMin ? 'flex' : 'none'};width:46px;height:46px;border-radius:50%;background:var(--roi-title);border:2px solid var(--roi-frame);color:var(--roi-info);align-items:center;justify-content:center;font-size:21px;cursor:move;box-shadow:0 8px 24px var(--roi-shadow);" title="可拖曳移動｜點擊展開">⚡</div>
       <div id="ro-hud-card" style="display:${state.hudMin ? 'none' : 'block'};">
         <div id="ro-drag" style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:8px 10px;background:var(--roi-title);border-bottom:1px solid var(--roi-edge);font-weight:bold;color:var(--roi-title-text);cursor:move;" title="按住可拖曳移動視窗">
-          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.11 測試版</span>
+          <span style="white-space:nowrap;">⚡ RO Idle v3.5.8.12 測試版</span>
           <button id="ro-min-btn" style="background:var(--roi-selected);color:var(--roi-text);border:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-weight:bold;">━</button>
         </div>
         <div style="display:flex;background:var(--roi-inset);border-bottom:1px solid var(--roi-edge);">
@@ -5588,29 +5568,22 @@
       isPlainRecord(o) && id(o.id) && (o.partyId === null || id(o.partyId)) ? [{ id: o.id, partyId: o.partyId, vending: o.vending === true }] : []));
     return { party: { id: party.id, leaderId: id(party.leaderId) ? party.leaderId : null, members }, own };
   }
-  function planPartyMove(view, me, target, rosterIds, { strict = false } = {}) {
+  function planPartyMove(view, me, target) {
     if (!partyMapIdRx.test(target || '')) throw Error('沒有選擇有效的地圖');
     if (!view.party) throw Error('目前角色沒有隊伍');
-    const mine = new Set([...rosterIds].map(Number));
-    if (!strict && !mine.has(me)) throw Error('目前角色不在本帳號名單內');
     const own = new Map(view.own.filter((o) => o.partyId === view.party.id).map((o) => [o.id, o]));
     const meMember = view.party.members.find((m) => m.id === me);
     if (!meMember) throw Error('隊伍資料裡找不到目前角色');
     const rows = view.party.members.map((m) => {
       const self = m.id === me;
-      const ours = self || (own.has(m.id) && (strict || mine.has(m.id)));
+      const ours = self || own.has(m.id);
       const vending = ours && own.get(m.id)?.vending === true;
       return { ...m, self, ours, vending, move: ours && !vending };
     });
     const movers = rows.filter((r) => r.move);
-    if (strict) {
-      if (!movers.some((r) => r.self)) throw Error('目前角色擺攤中，無法移動');
-      if (new Set(movers.map((r) => r.id)).size !== movers.length) throw Error('本帳號隊員名單有重複角色');
-    } else if (movers.length < 2) {
-      throw Error('隊伍裡沒有其他可移動的同帳號角色');
-    }
-    if (!strict && movers.every((r) => r.running && r.mapId === target)) throw Error('大家已經都在這張地圖掛機');
-    return { me, target, rows, movers, partyId: view.party.id, strict, stopIds: movers.filter((r) => r.running).map((r) => r.id) };
+    if (!movers.some((r) => r.self)) throw Error('目前角色擺攤中，無法移動');
+    if (new Set(movers.map((r) => r.id)).size !== movers.length) throw Error('本帳號隊員名單有重複角色');
+    return { me, target, rows, movers, partyId: view.party.id };
   }
   // deps：getParty()、command(id, cmd)、applyOwnMap(target)、kicks（EventTarget，遊戲有請求完成或戰鬥日誌時發 'settled'／'kick'）
   //       onStatus(text)、limits {stopWaitMs, verifyMs, minGapMs, heartbeatMs}
@@ -5674,9 +5647,11 @@
       });
     }
     let cancelHook = null;
-    async function runMvpMove(plan) {
+    async function run(plan) {
+      for (const r of plan.rows) names.set(r.id, r.self ? `${r.name}（你）` : r.name);
       const ids = plan.movers.map((r) => r.id);
       const expected = new Set(ids);
+      allowedIds = expected;
       const stopped = [];
       let moved = false, last = null;
       const byId = (view, id) => view?.party?.members.find((r) => r.id === id);
@@ -5790,76 +5765,6 @@
       }
     }
 
-    async function run(plan, { startAfter = true } = {}) {
-      for (const r of plan.rows) names.set(r.id, r.self ? `${r.name}（你）` : r.name);
-      allowedIds = plan.strict ? new Set(plan.movers.map((r) => r.id)) : null;
-      if (plan.strict) return runMvpMove(plan);
-      const stopped = [], started = [], lines = [];
-      const byId = (view, id) => view?.party?.members.find((m) => m.id === id);
-      let phase = 'apply';
-      try {
-        deps.onStatus?.('套用你的掛機地圖…');
-        await deps.applyOwnMap(plan.target);
-        phase = 'stop';
-        for (const id of plan.stopIds) {
-          deps.onStatus?.(`停止 ${label(id)}（${stopped.length + 1}/${plan.stopIds.length}）`);
-          await send(id, { type: 'stop' });
-          stopped.push(id);
-        }
-        if (plan.stopIds.length) {
-          await waitParty((v) => plan.stopIds.every((id) => byId(v, id) && !byId(v, id).running), L.stopWaitMs, (v, s) => {
-            const left = plan.stopIds.filter((id) => byId(v, id)?.running !== false).map(label);
-            return `等待 ${left.join('、') || '隊員'} 打完這場（已等 ${s} 秒，可按取消）`;
-          });
-        }
-        if (!startAfter) return { ok: true, lines: plan.movers.map((r) => `⏸️ ${label(r.id)}：已停止`), maxInFlight };
-        phase = 'start';
-        const fresh = await deps.getParty();
-        const ordered = [...plan.movers].sort((a, b) => Number(b.self) - Number(a.self));
-        for (const r of ordered) {
-          const now = byId(fresh, r.id);
-          if (!r.self && now?.mapId !== plan.target) {
-            deps.onStatus?.(`${label(r.id)} 前往 ${plan.target}`);
-            await send(r.id, { type: 'selectMap', mapId: plan.target });
-          }
-          deps.onStatus?.(`開始 ${label(r.id)}（${started.length + 1}/${ordered.length}）`);
-          await send(r.id, { type: 'start' });
-          started.push(r.id);
-        }
-        phase = 'verify';
-        let final = null;
-        try {
-          final = await waitParty((v) => started.every((id) => byId(v, id)?.running && byId(v, id)?.mapId === plan.target), L.verifyMs,
-            (v, s) => `確認大家都在 ${plan.target} 掛機（${s} 秒）`);
-        } catch (e) {
-          if (e.message === '已取消') throw e;
-          final = await deps.getParty().catch(() => null);
-        }
-        for (const id of started) {
-          const m = byId(final, id);
-          const okRow = m?.running && m.mapId === plan.target;
-          lines.push(`${okRow ? '✅' : '⚠️'} ${label(id)}：${m ? `${m.mapId}${m.running ? ' 掛機中' : ' 停止'}` : '讀不到狀態'}`);
-        }
-        for (const r of plan.rows.filter((x) => !x.move)) lines.push(`➖ ${label(r.id)}：${r.vending ? '擺攤中，未變動' : '非本帳號角色，未變動'}`);
-        return { ok: lines.every((l) => !l.startsWith('⚠️')), lines, maxInFlight };
-      } catch (e) {
-        lines.push(`🛑 ${e.message}`);
-        // 回復：被我們停掉、還沒重新開始的角色照原設定重新開始；被限流時不再送任何指令。
-        const restore = stopped.filter((id) => !started.includes(id));
-        if (restore.length && !isRateLimit(e) && phase !== 'apply') {
-          const wasCancelled = cancelled; cancelled = false;
-          for (const id of restore) {
-            try { await send(id, { type: 'start' }); lines.push(`↩️ ${label(id)}：已恢復掛機（原地圖設定）`); }
-            catch (err) { lines.push(`⚠️ ${label(id)}：恢復失敗（${err.message}），請手動開始`); if (isRateLimit(err)) break; }
-          }
-          cancelled = wasCancelled;
-        } else if (restore.length) {
-          for (const id of restore) lines.push(`⚠️ ${label(id)}：已停止，請稍後手動開始`);
-        }
-        for (const id of started) lines.push(`ℹ️ ${label(id)}：已送出開始`);
-        return { ok: false, error: e, lines, maxInFlight };
-      }
-    }
     return { run, cancel() { cancelled = true; cancelHook?.(); }, get maxInFlight() { return maxInFlight; } };
   }
 
@@ -5891,91 +5796,13 @@
     pageNet.events.dispatchEvent(new Event('kick'));
     return body;
   }
-  async function partyReadConfig(me) {
-    const d = await partyApiJson(`/api/characters/${me}?deferCatchup=1`);
-    const config = d?.snapshot?.config;
-    if (Number(d?.characterId) !== me || !isPlainRecord(config) || typeof config.lockMap !== 'string') throw new PartyMoveError('讀不到你目前的掛機設定');
-    return config;
-  }
-  // 掛機設定面板的實際結構（遊戲前端 index-Dxm6ToCt.js）：
-  //   設定元件 props {snap, save, characterId}，草稿在它的 useState（未修改時為 null，畫面用 draft ?? snap.config）
-  //   └ 分頁容器 props {on, draft, advanced}（draft = 目前草稿，沒有 update）
-  //     └ … └ 地圖選單 props {label:'掛機地圖', maps, value: draft.lockMap, onChange} → role=group 的 DOM
-  //   有 {draft, update} 的元件是「藥水與補給」等兄弟區塊，不是地圖選單的祖先，所以不能用它來找。
-  const partyLog = (...args) => { log('party-move', ...args); };
-  function partyReadSettings(group) {
-    const read = (matcher) => readFiberForUi(() => getCommittedProps(group, matcher)) || null;
-    const picker = read((x) => x?.label === '掛機地圖' && Object.hasOwn(x, 'value'));
-    const holder = read((x) => x?.draft && typeof x.draft === 'object' && typeof x.draft.lockMap === 'string');
-    const panel = read((x) => x?.snap?.config && typeof x.snap.config === 'object' && typeof x.save === 'function');
+  function partySelectedMap(group) {
+    const picker = readFiberForUi(() => getCommittedProps(group, (p) =>
+      p.label === '掛機地圖' && typeof p.value === 'string'));
+    if (picker && partyMapIdRx.test(picker.value)) return picker.value;
     const pressed = [...group.querySelectorAll('button[aria-pressed="true"]')].filter(visible);
-    const domTarget = pressed.length === 1 ? String(getReactFiber(pressed[0])?.key ?? '') : '';
-    const applyBtns = [...document.querySelectorAll('button')].filter((b) => visible(b) && clean(b.textContent) === '套用設定');
-    const applyEnabled = applyBtns.length ? applyBtns.some((b) => !b.disabled) : null;
-    const candidates = [picker?.value, holder?.draft?.lockMap, domTarget].filter((v) => typeof v === 'string' && partyMapIdRx.test(v));
-    const target = candidates[0] || '';
-    const info = {
-      target, draft: holder?.draft || null, applied: panel?.snap?.config || null, applyEnabled,
-      diag: {
-        picker: picker ? { value: typeof picker.value === 'string' ? picker.value : typeof picker.value, maps: Array.isArray(picker.maps) ? picker.maps.length : null } : null,
-        draftHolder: holder ? Object.keys(holder).slice(0, 8) : null,
-        panel: panel ? Object.keys(panel).slice(0, 8) : null,
-        domTarget: domTarget || null, pressedButtons: pressed.length,
-        applyButtons: applyBtns.length, applyEnabled,
-        fiber: Boolean(getReactFiber(group)), candidatesAgree: new Set(candidates).size <= 1,
-      },
-    };
-    if (applyEnabled === false) resetRareSyncDelta();
-    partyLog('讀取掛機設定', info.diag);
-    return info;
-  }
-  // 比較用的正規化：物件鍵排序、undefined 當作沒有；必撿稀有掉落當集合比（順序無關，空陣列 = 未設定）。
-  const partyNorm = (v) => v === null || typeof v !== 'object' ? v
-    : Array.isArray(v) ? v.map(partyNorm)
-      : Object.fromEntries(Object.keys(v).sort().filter((k) => v[k] !== undefined).map((k) => [k, partyNorm(v[k])]));
-  const partyIdSet = (v) => new Set(Array.isArray(v) ? v.map(Number).filter(Number.isSafeInteger) : []);
-  function partyDraftDiffKeys(draft, config) {
-    const keys = new Set([...Object.keys(draft), ...Object.keys(config)]);
-    keys.delete('lockMap');
-    return [...keys].filter((k) => {
-      if (k === 'rarePickup') {
-        const a = partyIdSet(draft[k]), b = partyIdSet(config[k]);
-        return a.size !== b.size || [...a].some((x) => !b.has(x));
-      }
-      return JSON.stringify(partyNorm(draft[k])) !== JSON.stringify(partyNorm(config[k]));
-    }).sort();
-  }
-  // 只回報形狀（型別、長度、鍵數），不印內容。
-  const partyShape = (v) => v === undefined ? 'undefined' : v === null ? 'null' : Array.isArray(v) ? `array(${v.length})`
-    : typeof v === 'object' ? `object(${Object.keys(v).length} keys)` : typeof v === 'boolean' ? String(v) : typeof v;
-  // 地圖連動的必撿稀有掉落：差異必須完全是「隨地圖同步」這次自己勾／取消的道具，且同步對象就是目標地圖。
-  function partyRareCoupling(draft, config, me, target) {
-    const a = partyIdSet(draft.rarePickup), b = partyIdSet(config.rarePickup);
-    const added = [...a].filter((x) => !b.has(x)), removed = [...b].filter((x) => !a.has(x));
-    const d = rareSyncDelta;
-    const reasons = [];
-    if (!rareAutoMap) reasons.push('sync-off');
-    if (d.tainted) reasons.push('sync-unknown-id');
-    if (d.charId !== me) reasons.push('sync-other-char');
-    if (d.lockMap !== target) reasons.push('sync-other-map');
-    const manualAdded = added.filter((x) => d.net.get(x) !== true).length;
-    const manualRemoved = removed.filter((x) => d.net.get(x) !== false).length;
-    if (manualAdded || manualRemoved) reasons.push('not-from-sync');
-    return { ok: reasons.length === 0, added: added.length, removed: removed.length, manualAdded, manualRemoved, syncNet: d.net.size, reasons };
-  }
-  // extra：[] 代表除了地圖（與地圖連動的必撿稀有掉落）沒有其他修改；null 代表無法確認。
-  function partyExtraChanges(info, config, me, target) {
-    if (!info.draft) return { extra: info.applyEnabled === false ? [] : null, rare: null };
-    let extra = partyDraftDiffKeys(info.draft, config), rare = null;
-    if (extra.includes('rarePickup')) {
-      rare = partyRareCoupling(info.draft, config, me, target);
-      if (rare.ok) extra = extra.filter((k) => k !== 'rarePickup');
-    }
-    if (extra.length || rare || debugEnabled()) {
-      const diff = partyDraftDiffKeys(info.draft, config).map((k) => ({ key: k, before: partyShape(config[k]), after: partyShape(info.draft[k]) }));
-      partyLog('草稿差異', { target, applied: config.lockMap, diff, rare, blocking: extra });
-    }
-    return { extra, rare };
+    const id = pressed.length === 1 ? getReactFiber(pressed[0])?.key : null;
+    return typeof id === 'string' && partyMapIdRx.test(id) ? id : '';
   }
   function partyMapNames(group) {
     for (let f = getReactFiber(group); f; f = f.return) {
@@ -5986,29 +5813,7 @@
     }
     return new Map();
   }
-  async function partyApplyOwnMap(me, target, group) {
-    const config = await partyReadConfig(me);
-    if (config.lockMap === target) return;
-    const info = partyReadSettings(group);
-    if (info.target !== target) throw new PartyMoveError('掛機設定的地圖已變更，請重新操作');
-    const { extra } = partyExtraChanges(info, config, me, target);
-    if (extra === null) throw new PartyMoveError('讀不到完整草稿，無法確認有沒有其他未套用的修改；請先手動按「套用設定」再按 🚩');
-    if (extra.length) throw new PartyMoveError(`掛機設定還有其他未套用的修改（${extra.slice(0, 5).join('、')}），請先套用或還原`);
-    const btn = [...document.querySelectorAll('button')].find((b) => visible(b) && !b.disabled && clean(b.textContent) === '套用設定');
-    if (!btn) throw new PartyMoveError('找不到「套用設定」按鈕，請保持掛機設定開著');
-    const path = `/api/characters/${me}/commands`;
-    const settled = new Promise((resolve, reject) => {
-      const on = (e) => { if (e.detail?.method === 'POST' && e.detail.path === path) { off(); resolve(e.detail.status); } };
-      const timer = setTimeout(() => { off(); reject(new PartyMoveError('套用設定逾時（20 秒），請檢查掛機設定')); }, 20000);
-      const off = () => { clearTimeout(timer); pageNet.events.removeEventListener('settled', on); };
-      pageNet.events.addEventListener('settled', on);
-    });
-    btn.click();
-    const status = await settled;
-    const after = await partyReadConfig(me);
-    if (after.lockMap !== target) throw new PartyMoveError(`套用後掛機地圖仍是 ${after.lockMap}（HTTP ${status}）`);
-  }
-  function showPartyMoveDialog(plan, mapNames, needApply, rare = null) {
+  function showPartyMoveDialog(plan, mapNames, signal) {
     const mapLabel = (id) => mapNames.get(id) ? `${mapNames.get(id)}（${id}）` : id;
     return new Promise((resolve) => {
       const dlg = document.createElement('dialog');
@@ -6024,30 +5829,31 @@
         list.append(row);
       }
       dlg.append(list);
-      const notes = [
-        needApply ? `會先替你按「套用設定」，把你的掛機地圖改成 ${mapLabel(plan.target)}。` : '',
-        needApply && rare && (rare.added || rare.removed) ? `必撿稀有掉落已隨地圖同步更新（新增 ${rare.added}、取消 ${rare.removed} 項），會和地圖一起套用。` : '',
-        plan.stopIds.length ? '「停止」要等那一場打完才生效，可能要等幾十秒到幾分鐘，過程中可以取消。' : '',
-      ].filter(Boolean).join(' ');
-      if (notes) dlg.append(element('div', notes, 'font-size:12px;color:var(--roi-text);margin-bottom:8px;'));
-      const startLabel = element('label', ' 完成後全部開始掛機', 'display:flex;gap:4px;align-items:center;font-size:12px;margin-bottom:10px;');
-      const startBox = element('input'); startBox.type = 'checkbox'; startBox.checked = true; startLabel.prepend(startBox);
-      dlg.append(startLabel);
+      dlg.append(element('div', '等待本帳號隊員停止掛機後，會切換到目標地圖並重新開始掛機。', 'font-size:12px;margin-bottom:10px;'));
       const btns = element('div', null, 'display:flex;justify-content:flex-end;gap:8px;');
       const cancel = element('button', '取消'); cancel.type = 'button'; cancel.className = 'xp-btn small';
       const ok = element('button', '確定移動'); ok.type = 'button'; ok.className = 'xp-btn small primary';
       btns.append(cancel, ok); dlg.append(btns);
-      let result = null, done = false;
+      let confirmed = false, done = false;
       // Esc 會觸發 close；按鈕直接收尾。任何路徑都只移除一次、只回覆一次。
-      const finish = () => { if (done) return; done = true; if (dlg.open && typeof dlg.close === 'function') dlg.close(); dlg.remove(); resolve(result); };
+      const finish = () => {
+        if (done) return;
+        done = true;
+        signal.removeEventListener('abort', finish);
+        if (dlg.open && typeof dlg.close === 'function') dlg.close();
+        dlg.remove();
+        resolve(confirmed);
+      };
+      if (signal.aborted) return finish();
+      signal.addEventListener('abort', finish, { once: true });
       dlg.addEventListener('close', finish);
       cancel.onclick = finish;
-      ok.onclick = () => { result = { startAfter: startBox.checked }; finish(); };
+      ok.onclick = () => { confirmed = true; finish(); };
       document.body.appendChild(dlg);
       if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
     });
   }
-  async function partyApplyMvpMap(me, target, send) {
+  async function partyApplyTravelMap(me, target, send) {
     const path = `/api/characters/${me}?deferCatchup=1`;
     const read = async () => {
       const view = await partyApiJson(path);
@@ -6062,13 +5868,14 @@
     if ((await read()).snapshot.config.lockMap !== target) throw Error('伺服器尚未確認套用掛機地圖');
   }
 
-  async function startMvpPartyMove(target, onStatus, onActive) {
+  async function startSharedPartyMove(target, onStatus, onActive, confirmMove) {
     if (hasActiveOperation() || document.hidden) throw Error('有其他助手操作進行中，請稍後再試');
-    if (!partyMapIdRx.test(target)) throw Error('MVP 地圖編號無效');
+    if (!partyMapIdRx.test(target)) throw Error('地圖編號無效');
     const me = Number(state.activeCharId), epoch = refineIdentityEpoch;
     if (!Number.isSafeInteger(me) || me <= 0) throw Error('還不知道目前角色，請稍候再試');
     let cancelled = false, pageLeft = false, runner;
-    const cancel = () => { cancelled = true; runner?.cancel(); };
+    const confirmation = confirmMove && new AbortController();
+    const cancel = () => { cancelled = true; confirmation?.abort(); runner?.cancel(); };
     const onLeave = () => { pageLeft = true; cancel(); };
     const checkActor = () => {
       if (pageLeft || Number(state.activeCharId) !== me || refineIdentityEpoch !== epoch || refBusy || cartShortcutBusy) {
@@ -6088,10 +5895,15 @@
         const view = await getParty();
         checkActor();
         if (cancelled) throw Error('已取消');
-        const plan = planPartyMove(view, me, target, nativeRosterIds?.size ? nativeRosterIds : state.myCharIds, { strict: true });
+        const plan = planPartyMove(view, me, target);
+        if (confirmMove && !await confirmMove(plan, confirmation.signal)) {
+          return { ok: false, cancelled: true, lines: [] };
+        }
+        checkActor();
+        if (cancelled) throw Error('已取消');
         runner = createPartyMoveRunner({
           getParty, command: partyCommand, kicks: pageNet.events, onStatus, checkActor,
-          applyOwnMap: (target, send) => partyApplyMvpMap(me, target, send)
+          applyOwnMap: (target, send) => partyApplyTravelMap(me, target, send)
         });
         return runner.run(plan);
       };
@@ -6114,53 +5926,32 @@
     const btn = bar.querySelector('[data-roi-party-move]');
     const stopBtn = bar.querySelector('[data-roi-party-move-cancel]');
     const out = bar.querySelector('[data-roi-party-move-result]');
-    if (partyMoveActive || document.hidden) return;
-    if (hasActiveOperation()) { status.textContent = '⚠️ 精煉／領倉進行中，請稍後再試'; return; }
-    const group = partyMapGroup();
-    const me = Number(state.activeCharId);
-    partyMoveActive = { cancel() {} };
-    btn.disabled = true; out.replaceChildren();
+    if (btn.disabled || partyMoveActive || document.hidden) return;
+    btn.disabled = true;
+    out.replaceChildren();
     try {
+      const group = partyMapGroup();
       if (!group) throw Error('請先開啟掛機設定的地圖選單');
-      if (!Number.isSafeInteger(me) || me <= 0) throw Error('還不知道目前角色，請稍候再試');
-      status.textContent = '讀取隊伍與設定…';
-      const info = partyReadSettings(group);
-      if (!info.target) {
-        console.warn('[ROI party-move] 讀不到掛機設定選的地圖', info.diag);
-        throw Error('讀不到掛機設定選的地圖，請在地圖選單點選一張地圖後再試');
-      }
-      if (!info.diag.candidatesAgree) console.warn('[ROI party-move] 地圖來源不一致，以選單 value 為準', info.diag);
-      const target = info.target;
-      const config = await partyReadConfig(me);
-      const { extra, rare } = partyExtraChanges(info, config, me, target);
-      if (extra === null) {
-        console.warn('[ROI party-move] 讀不到完整草稿且有未套用的修改', info.diag);
-        throw Error('讀不到完整草稿，無法確認有沒有其他未套用的修改；請先手動按「套用設定」再按 🚩');
-      }
-      if (extra.length) throw Error(`掛機設定還有其他未套用的修改（${extra.slice(0, 5).join('、')}），請先套用或還原，再使用全隊移動`);
-      const view = validatePartyView(await partyApiJson(`/api/characters/${me}/party`));
-      const plan = planPartyMove(view, me, target, nativeRosterIds?.size ? nativeRosterIds : state.myCharIds);
-      status.textContent = '請在視窗中確認';
-      const choice = await showPartyMoveDialog(plan, partyMapNames(group), config.lockMap !== target, rare?.ok ? rare : null);
-      if (!choice) { status.textContent = '已取消'; return; }
-      if (Number(state.activeCharId) !== me) throw Error('角色已切換，請重新操作');
-      const runner = createPartyMoveRunner({
-        getParty: async () => validatePartyView(await partyApiJson(`/api/characters/${me}/party`)),
-        command: partyCommand,
-        applyOwnMap: (t) => partyApplyOwnMap(me, t, group),
-        kicks: pageNet.events,
-        onStatus: (text) => { status.textContent = text; },
-      });
-      partyMoveActive = runner;
-      stopBtn.hidden = false;
-      const result = await runner.run(plan, choice);
+      const target = partySelectedMap(group);
+      if (!target) throw Error('讀不到掛機設定選的地圖，請在地圖選單點選一張地圖後再試');
+      const mapNames = partyMapNames(group);
+      const result = await startSharedPartyMove(target,
+        (text) => { status.textContent = text; },
+        (cancel) => {
+          stopBtn.hidden = !cancel;
+          stopBtn.onclick = cancel;
+        },
+        (plan, signal) => {
+          status.textContent = '請在視窗中確認';
+          return showPartyMoveDialog(plan, mapNames, signal);
+        });
+      if (result.cancelled) { status.textContent = '已取消'; return; }
       status.textContent = result.ok ? '🎉 全隊移動完成' : '⚠️ 全隊移動沒有全部完成，請看下方明細';
       for (const line of result.lines) out.append(element('div', line));
       alertUser(result.ok ? '🚩 全隊移動完成' : '⚠️ 全隊移動未完成', result.lines.slice(0, 6).join('\n'), !result.ok);
     } catch (e) {
       status.textContent = '⚠️ ' + (e?.message || e);
     } finally {
-      partyMoveActive = null;
       btn.disabled = false; stopBtn.hidden = true;
     }
   }
@@ -6179,7 +5970,6 @@
       const status = element('span', null, 'color:var(--roi-info)'); status.dataset.roiPartyMoveStatus = '';
       const out = element('div', null, 'flex-basis:100%;font-size:11.5px;line-height:1.5'); out.dataset.roiPartyMoveResult = '';
       btn.onclick = () => { void startPartyMove(bar); };
-      stop.onclick = () => { partyMoveActive?.cancel(); };
       bar.append(btn, stop, status, out);
     }
     if (group.nextElementSibling !== bar) group.after(bar);
@@ -7105,7 +6895,7 @@
       travelResults.replaceChildren();
       travelStatus.textContent = '同帳號前往 ' + map + '…';
       try {
-        const result = await startMvpPartyMove(id, (message) => {
+        const result = await startSharedPartyMove(id, (message) => {
           travelStatus.textContent = map + ' · ' + message;
         }, (cancel) => {
           travelCancel.hidden = !cancel;

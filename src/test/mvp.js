@@ -764,7 +764,7 @@
       travelResults.replaceChildren();
       travelStatus.textContent = '同帳號前往 ' + map + '…';
       try {
-        const result = await startMvpPartyMove(id, (message) => {
+        const result = await startSharedPartyMove(id, (message) => {
           travelStatus.textContent = map + ' · ' + message;
         }, (cancel) => {
           travelCancel.hidden = !cancel;

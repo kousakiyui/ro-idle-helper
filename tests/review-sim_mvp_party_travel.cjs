@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const { JSDOM } = require('jsdom');
 
 const source = fs.readFileSync(process.argv[2], 'utf8');
-const runner = 'applyOwnMap: (target, send) => partyApplyMvpMap(me, target, send)';
+const runner = 'applyOwnMap: (target, send) => partyApplyTravelMap(me, target, send)';
 assert.ok(source.includes(runner), '找不到 MVP 使用的移動流程');
 const script = source.replace(runner, runner + ', limits: { stopWaitMs: 280, verifyMs: 180, minGapMs: 5, heartbeatMs: 12, retryMs: 15, catchupMs: 80 }')
   .replace(/\}\)\(\);\s*$/, 'page.roiTestTravel = { state, setActor(id) { state.activeCharId = id; } };\n})();');

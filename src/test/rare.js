@@ -1,17 +1,5 @@
 
   const rarePanels = new WeakMap(), rareKnownRoots = new Set(), rareLastMap = new WeakMap();
-  // 同步造成的草稿淨變動：itemId → true（勾）／false（取消）。面板回到乾淨（套用鈕停用）或換角色時清空。
-  const rareSyncDelta = { charId: null, lockMap: null, net: new Map(), tainted: false };
-  function resetRareSyncDelta() { rareSyncDelta.charId = null; rareSyncDelta.lockMap = null; rareSyncDelta.net.clear(); rareSyncDelta.tainted = false; }
-  function noteRareSync(lockMap, id, checked) {
-    const charId = Number(state.activeCharId) || null;
-    if (rareSyncDelta.charId !== charId) { resetRareSyncDelta(); rareSyncDelta.charId = charId; }
-    rareSyncDelta.lockMap = typeof lockMap === 'string' ? lockMap : null;
-    if (!Number.isSafeInteger(id)) { rareSyncDelta.tainted = true; return; }
-    if (rareSyncDelta.net.has(id) && rareSyncDelta.net.get(id) !== checked) rareSyncDelta.net.delete(id);
-    else rareSyncDelta.net.set(id, checked);
-  }
-  const settingsApplyDirty = () => [...document.querySelectorAll('button')].some((b) => !b.disabled && clean(b.textContent) === '套用設定' && visible(b));
   function validateRareAutoMap(value) {
     if (typeof value !== 'boolean') throw Error('稀有掉落開關格式不符');
     return value;
@@ -110,7 +98,7 @@
     return null;
   }
 
-  function fastSelectRare(root, group, next, sync = null) {
+  function fastSelectRare(root, group, next) {
     const rs = scanRareItems(root);
     const statusSpan = rarePanels.get(root)?.querySelector('[data-ro-rare-status]');
     if (!rs) { if (statusSpan) statusSpan.textContent = '⚠️ 無法辨識本圖與其他地圖的掉落'; return false; }
@@ -130,13 +118,7 @@
         if (statusSpan) statusSpan.textContent = '⚠️ 有無法勾選的道具，請檢查清單';
         return false;
       }
-      let syncId = null;
-      if (sync) {
-        syncId = sync.ids.get(current.box);
-        if (syncId == null) { for (const e of getRareContext(root)?.entries || []) sync.ids.set(e.box, e.id); syncId = sync.ids.get(current.box); }
-      }
       current.box.click();
-      if (sync) noteRareSync(sync.lockMap, syncId, desired);
       if (current.box.isConnected && current.box.checked !== desired) {
         if (statusSpan) statusSpan.textContent = '⚠️ 遊戲未接受勾選，請檢查清單';
         return false;
@@ -174,14 +156,12 @@
         else root.prepend(panel);
         rarePanels.set(root, panel);
       }
-      if (rareSyncDelta.net.size && !settingsApplyDirty()) resetRareSyncDelta();
       if (rareAutoMap) {
         const context = getRareContext(root);
         if (context) {
           const mapSig = JSON.stringify([context.p.draft.lockMap, context.p.monsterIds]);
           if (rareLastMap.get(root) !== mapSig) {
-            const sync = { lockMap: context.p.draft.lockMap, ids: new Map(context.entries.map((e) => [e.box, e.id])) };
-            if (fastSelectRare(root, 'sync', true, sync)) rareLastMap.set(root, mapSig);
+            if (fastSelectRare(root, 'sync', true)) rareLastMap.set(root, mapSig);
           }
         }
       }
